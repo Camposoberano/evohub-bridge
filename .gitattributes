@@ -1,0 +1,5 @@
+# Normaliza fim de linha para LF (Deno/Docker/SQL não gostam de CRLF).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
