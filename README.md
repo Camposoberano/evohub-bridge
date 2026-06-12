@@ -34,7 +34,7 @@ web/                                # dashboard Next.js (Fase 2+)
 1. Subir este repo num git (GitHub/GitLab) acessível ao Coolify.
 2. Coolify → New Resource → **Dockerfile**, apontando para `bridge/` (build context = `bridge`).
 3. Setar as variáveis de ambiente (do `.env`) no serviço Coolify.
-4. Atribuir domínio público (ex.: `ponte.soberano.pro`) → vira `BRIDGE_PUBLIC_BASE`.
+4. Atribuir domínio público `cofre.soberano.pro` → vira `BRIDGE_PUBLIC_BASE`.
 5. Healthcheck: `GET /health` → `ok`.
 
 ## Pré-requisitos de infra (self-host) — destravar antes de aplicar
@@ -70,8 +70,13 @@ npm run db:apply                  # aplica supabase/migrations/*.sql
 
 - [x] Schema `0001_init.sql`
 - [x] Scaffold + `.env.example` + script de migration (`npm run db:apply`)
-- [x] Código das 4 functions (`hub-webhook`, `chatwoot-webhook`, `connect-channel`, `metrics-rollup`) — WhatsApp texto
-- [ ] **Credenciais self-host + aplicar migration + deploy das functions (Fase 0 — BLOQUEADO em infra)**
+- [x] Código da ponte (`bridge/`): hub-webhook, chatwoot-webhook, connect-channel, metrics-rollup
+- [x] Repo GitHub privado `Camposoberano/evohub-bridge` (push feito)
+- [x] Credencial EVO Hub validada (api.evohub.ai, plano Pro Lançamento)
+- [x] Credencial Chatwoot validada (gerenciador.soberano.pro, account 2)
+- [ ] Supabase `SERVICE_ROLE_KEY` + `ANON_KEY` no `.env`  ← falta
+- [ ] Aplicar `0001_init.sql` (Studio SQL Editor do bancortovital)  ← falta
+- [ ] Deploy da ponte no Coolify (GitHub App, base dir `/bridge`, port 8000)
 - [ ] Testar loop WhatsApp texto ponta a ponta (Fase 1)
 - [ ] Página Conexões + FB/IG (Fase 2)
 - [ ] Mídia/templates (Fase 3)

@@ -8,6 +8,7 @@ import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import { createConversation, createIncomingMessage, ensureContact } from "../shared/chatwoot.ts";
+import { getChannelDetail } from "../shared/hub.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -49,9 +50,10 @@ export async function handle(req: Request): Promise<Response> {
       await handleLifecycle(db, payload);
     } else if (payload.object === "whatsapp_business_account") {
       await handleWhatsApp(db, payload);
+    } else if (payload.object === "page" || payload.object === "instagram") {
+      await handleMessenger(db, payload);
     } else {
-      // TODO Fase 2/3: object === "page" (Messenger) / "instagram"
-      console.log("passthrough não tratado ainda:", payload.object);
+      console.log("passthrough não tratado:", payload.object);
     }
   } catch (e) {
     console.error("hub-webhook erro:", e);
@@ -64,32 +66,44 @@ export async function handle(req: Request): Promise<Response> {
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 async function handleLifecycle(db: Db, p: Json) {
   const externalId = p.external_id as string;
-  const meta = (p.meta_connection ?? {}) as Json;
+  const hubChannelId = p.channel_id as string;
   const eventType = p.event_type as string;
 
-  const patch: Json = { hub_channel_id: p.channel_id ?? null };
+  const patch: Json = { hub_channel_id: hubChannelId ?? null };
+
   if (eventType === "channel_connected" || eventType === "channel_auto_imported") {
     patch.status = "active";
     patch.connected_at = new Date().toISOString();
-    patch.phone_number_id = meta.phone_number_id ?? null;
-    patch.waba_id = meta.waba_id ?? null;
-    patch.phone_number = meta.phone_number ?? null;
-    patch.display_name = meta.display_name ?? null;
-    patch.page_id = meta.page_id ?? null;
-    patch.ig_id = meta.ig_id ?? null;
+
+    // O webhook channel_connected é magro (sem meta_connection). Buscamos o detalhe no Hub
+    // pra extrair page_id (FB) / phone_number_id+waba_id (WA) / ig_id (IG).
+    const detail = await getChannelDetail(hubChannelId);
+    if (detail) {
+      const fb = (detail.facebook_connection ?? {}) as Json;
+      const wa = (detail.whatsapp_connection ?? detail.meta_connection ?? {}) as Json;
+      const ig = (detail.instagram_connection ?? {}) as Json;
+      if (fb.page_id) { patch.page_id = fb.page_id; patch.display_name = fb.page_name ?? null; }
+      if (wa.phone_number_id) {
+        patch.phone_number_id = wa.phone_number_id;
+        patch.waba_id = wa.waba_id ?? null;
+        patch.phone_number = wa.phone_number ?? null;
+        patch.display_name = (patch.display_name as string | undefined) ?? wa.display_name ?? null;
+      }
+      const igId = ig.ig_id ?? ig.instagram_id ?? ig.id;
+      if (igId) {
+        patch.ig_id = igId;
+        patch.display_name = (patch.display_name as string | undefined) ?? ig.username ?? null;
+      }
+      // channel_token vem no detalhe — guarda/atualiza (idempotente).
+      if (detail.token) {
+        await db.from("channel_secrets").upsert({ channel_id: externalId, channel_token: detail.token as string });
+      }
+    }
   } else if (eventType === "channel_disconnected") {
     patch.status = "inactive";
   }
 
-  // NOTA: ignoramos meta.access_token de propósito — no modo Hub o Bearer é o channel_token.
   await db.from("channels").update(patch).eq("id", externalId);
-
-  if (p.channel_token) {
-    await db.from("channel_secrets").upsert({
-      channel_id: externalId,
-      channel_token: p.channel_token as string,
-    });
-  }
 }
 
 // ── WhatsApp passthrough (entrada) ───────────────────────────────────────────
@@ -131,12 +145,45 @@ async function handleWhatsApp(db: Db, p: Json) {
   }
 }
 
+// ── Messenger / Instagram passthrough (entrada) ──────────────────────────────
+async function handleMessenger(db: Db, p: Json) {
+  const entries = (p.entry ?? []) as Json[];
+  for (const entry of entries) {
+    const pageId = entry.id as string | undefined; // page_id (FB) ou ig id
+    if (!pageId) continue;
+
+    const { data: channel } = await db.from("channels").select("*")
+      .or(`page_id.eq.${pageId},ig_id.eq.${pageId}`).maybeSingle();
+    if (!channel?.chatwoot_inbox_identifier) {
+      console.warn("sem canal p/ page/ig id", pageId);
+      continue;
+    }
+
+    for (const m of ((entry.messaging ?? []) as Json[])) {
+      const sender = (m.sender as Json)?.id as string | undefined;
+      const message = m.message as Json | undefined;
+      if (!sender || !message) continue; // ignora delivery/read/postback sem texto
+      if (message.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
+      const text = (message.text as string) ?? "[anexo]"; // TODO Fase 3: mídia/attachments
+
+      await ingestInbound(db, channel as Json, {
+        from: sender,
+        name: undefined,
+        metaMessageId: (message.mid as string) ?? "",
+        msgType: "text",
+        content: text,
+      });
+    }
+  }
+}
+
 async function ingestInbound(
   db: Db,
   channel: Json,
   msg: { from: string; name?: string; metaMessageId: string; msgType: string; content: string },
 ) {
   const inboxId = channel.chatwoot_inbox_identifier as string;
+  const phone = channel.type === "whatsapp" ? `+${msg.from}` : null;
 
   // 1) contato local (upsert por channel+external)
   const { data: existing } = await db
@@ -147,13 +194,13 @@ async function ingestInbound(
   let sourceId = (existing?.attributes as Json)?.source_id as string | undefined;
 
   if (!contact || !sourceId) {
-    const cw = await ensureContact(inboxId, { name: msg.name, phone: `+${msg.from}`, identifier: msg.from });
+    const cw = await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from });
     sourceId = cw.source_id;
     const up = await db.from("contacts").upsert({
       channel_id: channel.id,
       external_contact_id: msg.from,
       name: msg.name ?? null,
-      phone: `+${msg.from}`,
+      phone: phone,
       chatwoot_contact_id: cw.contact_id ?? null,
       attributes: { source_id: sourceId },
       last_seen_at: new Date().toISOString(),

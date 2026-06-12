@@ -7,7 +7,7 @@
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
-import { sendMetaMessage } from "../shared/hub.ts";
+import { sendMeta } from "../shared/hub.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -57,7 +57,7 @@ async function handleOutgoing(db: Db, p: Json) {
   if (!cwConversationId || !content) return;
 
   const { data: channel } = await db.from("channels").select("*").eq("chatwoot_inbox_id", cwInboxId!).maybeSingle();
-  if (!channel?.phone_number_id) { console.warn("canal sem phone_number_id p/ inbox", cwInboxId); return; }
+  if (!channel) { console.warn("sem canal p/ inbox", cwInboxId); return; }
 
   const { data: conv } = await db.from("conversations").select("*, contacts(*)")
     .eq("channel_id", channel.id).eq("chatwoot_conversation_id", cwConversationId).maybeSingle();
@@ -65,17 +65,25 @@ async function handleOutgoing(db: Db, p: Json) {
   if (!to) { console.warn("sem destinatário p/ conversa", cwConversationId); return; }
 
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).single();
+  const token = secret!.channel_token;
 
-  const res = await sendMetaMessage(secret!.channel_token, channel.phone_number_id, {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: { body: content },
-  });
+  // Envio por tipo de canal.
+  let res;
+  if (channel.type === "whatsapp") {
+    if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
+    res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
+      messaging_product: "whatsapp", to, type: "text", text: { body: content },
+    });
+  } else {
+    // facebook / instagram (Messenger): envia pela página (me), destinatário = PSID/IGSID.
+    res = await sendMeta(token, "me/messages", {
+      recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE",
+    });
+  }
 
-  const metaId = (res.data as Json)?.messages
-    ? (((res.data as Json).messages as Json[])[0]?.id as string)
-    : null;
+  const d = res.data as Json;
+  const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
+    ((d?.message_id as string) ?? null);
 
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null,

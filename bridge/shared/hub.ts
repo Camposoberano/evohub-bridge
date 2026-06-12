@@ -5,12 +5,13 @@ const HUB = () => env("EVOLUTION_HUB_URL").replace(/\/+$/, "");
 
 // Envio Meta via proxy /meta/* — Bearer = channel_token.
 // ATENÇÃO: caminho SEM versão (/v23.0). O Hub abstrai; versão duplicada = 404.
-export async function sendMetaMessage(
+// path ex.: "<phone_number_id>/messages" (WhatsApp) ou "me/messages" (Messenger/IG).
+export async function sendMeta(
   channelToken: string,
-  phoneNumberId: string,
+  path: string,
   body: unknown,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const res = await fetch(`${HUB()}/meta/${phoneNumberId}/messages`, {
+  const res = await fetch(`${HUB()}/meta/${path}`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${channelToken}`,
@@ -20,6 +21,21 @@ export async function sendMetaMessage(
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };
+}
+
+// Atalho WhatsApp.
+export function sendMetaMessage(channelToken: string, phoneNumberId: string, body: unknown) {
+  return sendMeta(channelToken, `${phoneNumberId}/messages`, body);
+}
+
+// Detalhe do canal no Hub. O webhook channel_connected é magro (sem meta_connection),
+// então buscamos a conexão aqui: facebook_connection / whatsapp_connection / instagram_connection.
+export async function getChannelDetail(hubChannelId: string): Promise<Record<string, unknown> | null> {
+  const res = await fetch(`${HUB()}/api/v1/channels/${hubChannelId}`, {
+    headers: { "Authorization": `Bearer ${env("EVOLUTION_HUB_API_KEY")}` },
+  });
+  if (!res.ok) return null;
+  return await res.json().catch(() => null);
 }
 
 // Criação single-shot de canal (cria canal + webhook numa chamada). Bearer = API Key (evh_pk_).
