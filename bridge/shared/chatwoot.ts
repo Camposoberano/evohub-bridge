@@ -86,3 +86,12 @@ export async function createIncomingMessage(
   if (!res.ok) throw new Error(`Chatwoot createIncomingMessage ${res.status}: ${await res.text()}`);
   return await res.json();
 }
+
+export async function listConversationMessages(conversationId: number): Promise<Record<string, unknown>[]> {
+  const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
+    headers: appHeaders(),
+  });
+  if (!res.ok) throw new Error(`Chatwoot listConversationMessages ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  return (json.payload ?? []) as Record<string, unknown>[];
+}
