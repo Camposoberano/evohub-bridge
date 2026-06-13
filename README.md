@@ -82,6 +82,20 @@ npm install                       # instala 'pg'
 npm run db:apply                  # aplica supabase/migrations/*.sql
 ```
 
+## Projeto 1: rotacao de multiagentes (3+ LLMs)
+
+Base inicial ja versionada para evoluir a orquestracao:
+
+- Contrato tecnico: `docs/projeto-1-multiagentes-contrato.md`
+- Roteador e handoff (TS): `bridge/shared/llm-orchestrator.ts`
+- Persistencia e auditoria (SQL): `supabase/migrations/0002_llm_orchestration.sql`
+
+Objetivo operacional:
+
+1. Rotear tarefas pelo melhor modelo por especialidade.
+2. Trocar automaticamente quando houver quota/timeout.
+3. Registrar handoff obrigatorio para nao perder contexto.
+4. Aplicar revisao cruzada para tarefas de maior risco.
 ## Status
 
 - [x] Schema `0001_init.sql`
@@ -99,3 +113,4 @@ npm run db:apply                  # aplica supabase/migrations/*.sql
 - [ ] Analytics + rollups (Fase 4)
 - [ ] Hardening (Fase 5)
 ```
+

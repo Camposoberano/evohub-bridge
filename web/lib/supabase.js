@@ -9,6 +9,13 @@ const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
 
 export const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || "https://cofre.camposoberano.com.br";
 export const HUB_FRONTEND = process.env.NEXT_PUBLIC_HUB_FRONTEND || "https://app.evohub.evolutionfoundation.com.br";
+export const CHATWOOT_URL = process.env.NEXT_PUBLIC_CHATWOOT_URL || "https://gerenciador.soberano.pro";
+export const CHATWOOT_ACCOUNT_ID = process.env.NEXT_PUBLIC_CHATWOOT_ACCOUNT_ID || "2";
+
+export function chatwootConversationUrl(chatwootConversationId) {
+  if (!chatwootConversationId) return null;
+  return `${CHATWOOT_URL}/app/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${chatwootConversationId}`;
+}
 
 export const supabase = createClient(URL, ANON, {
   auth: { persistSession: true, autoRefreshToken: true },

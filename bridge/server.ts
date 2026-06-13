@@ -5,12 +5,15 @@
 //   POST /connect-channel    botão do dashboard (cria canal + inbox + mapa)
 //   GET  /sync-facebook      fallback por pull para Messenger/Instagram (cron)
 //   POST /metrics-rollup     rollup diário (agendado)
+//   POST /llm-orchestrate    roteamento e persistência de tentativas multi-LLM
 //   GET  /health             health-check
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
+import { handle as conversationOutcome } from "./handlers/conversation-outcome.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
+import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 
 const CORS: Record<string, string> = {
@@ -23,15 +26,25 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/hub-webhook": hubWebhook,
   "/chatwoot-webhook": chatwootWebhook,
   "/connect-channel": connectChannel,
+  "/conversation-outcome": conversationOutcome,
   "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
+  "/llm-orchestrate": llmOrchestrate,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
-  features: ["sync-facebook", "sync-instagram", "auto-sync-loop", "whatsapp-media", "wa-media-graph-direct"],
-  build: "2026-06-13-wa-media-graph-direct",
+  features: [
+    "sync-facebook",
+    "sync-instagram",
+    "auto-sync-loop",
+    "whatsapp-media",
+    "wa-media-graph-direct",
+    "llm-orchestrate-v1",
+    "conversation-outcome",
+  ],
+  build: "2026-06-13-conversation-outcome",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

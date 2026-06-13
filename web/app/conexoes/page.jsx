@@ -1,7 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL, HUB_FRONTEND } from "@/lib/supabase";
+import Nav from "@/components/Nav";
 
 const PLAT = {
   whatsapp: { label: "WhatsApp", color: "#1fbf75" },
@@ -105,11 +107,6 @@ export default function Conexoes() {
     window.open(`${HUB_FRONTEND}/connect/${token}`, "_blank", "noopener");
   }
 
-  async function sair() {
-    await supabase.auth.signOut();
-    router.replace("/login");
-  }
-
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
 
   const filtrados = canais.filter((c) =>
@@ -117,6 +114,8 @@ export default function Conexoes() {
   );
 
   return (
+    <>
+    <Nav />
     <div className="shell">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22 }}>
         <div>
@@ -126,7 +125,7 @@ export default function Conexoes() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <button className="btn-ghost" onClick={sair}>Sair</button>
+          <Link href="/orquestracao" className="btn-ghost">Orquestracao</Link>
           <button className="btn-mint" onClick={() => setModal(true)}>+ Novo canal</button>
         </div>
       </div>
@@ -212,5 +211,7 @@ export default function Conexoes() {
         </div>
       )}
     </div>
+    </>
   );
 }
+
