@@ -3,7 +3,7 @@
 //   POST /hub-webhook        webhooks do EVO Hub (Meta -> Chatwoot + Postgres)
 //   POST /chatwoot-webhook   webhooks do Chatwoot (saída -> /meta/*)
 //   POST /connect-channel    botão do dashboard (cria canal + inbox + mapa)
-//   GET  /sync-facebook      fallback por pull para Messenger (cron)
+//   GET  /sync-facebook      fallback por pull para Messenger/Instagram (cron)
 //   POST /metrics-rollup     rollup diário (agendado)
 //   GET  /health             health-check
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
@@ -29,8 +29,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
 const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
-  features: ["sync-facebook"],
-  build: "2026-06-13-sync-facebook-media-repair",
+  features: ["sync-facebook", "sync-instagram"],
+  build: "2026-06-13-sync-instagram",
 };
 
 Deno.serve({ port }, async (req) => {

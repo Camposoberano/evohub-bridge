@@ -1,5 +1,5 @@
-// sync-facebook — fallback por pull para Messenger quando o webhook de mensagens
-// da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
+// sync-facebook — fallback por pull para Messenger/Instagram quando o webhook de
+// mensagens da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -25,14 +25,14 @@ export async function handle(req: Request): Promise<Response> {
 
   const db = admin();
   let query = db.from("channels")
-    .select("id,type,name,status,page_id,display_name,chatwoot_inbox_identifier")
-    .eq("type", "facebook")
-    .eq("status", "active")
-    .not("page_id", "is", null);
+    .select("id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier")
+    .in("type", ["facebook", "instagram"])
+    .eq("status", "active");
   if (channelId) query = query.eq("id", channelId);
 
-  const { data: channels, error: channelError } = await query;
+  const { data: rawChannels, error: channelError } = await query;
   if (channelError) return json({ error: channelError.message }, 500);
+  const channels = (rawChannels ?? []).filter((c) => (c.type === "instagram" ? c.ig_id : c.page_id));
 
   const totals = {
     channels: channels?.length ?? 0,
@@ -92,9 +92,10 @@ async function syncInbound(
   channel: Json,
   opts: { cutoffMs: number; conversationLimit: number; messageLimit: number },
 ) {
-  const pageId = channel.page_id as string | undefined;
+  const isInstagram = channel.type === "instagram";
+  const nodeId = (isInstagram ? channel.ig_id : channel.page_id) as string | undefined;
   const inboxIdentifier = channel.chatwoot_inbox_identifier as string | undefined;
-  if (!pageId) throw new Error("canal sem page_id");
+  if (!nodeId) throw new Error("canal sem page_id/ig_id");
   if (!inboxIdentifier) throw new Error("canal sem inbox Chatwoot");
 
   const { data: secret, error: secretError } = await db.from("channel_secrets")
@@ -104,8 +105,9 @@ async function syncInbound(
   if (secretError) throw secretError;
   if (!secret?.channel_token) throw new Error("canal sem token");
 
+  const platformSuffix = isInstagram ? "&platform=instagram" : "";
   const conversationsPath =
-    `${pageId}/conversations?fields=id,updated_time,message_count,participants&limit=${opts.conversationLimit}`;
+    `${nodeId}/conversations?fields=id,updated_time,message_count,participants&limit=${opts.conversationLimit}${platformSuffix}`;
   const convRes = await getMeta(secret.channel_token as string, conversationsPath);
   if (!convRes.ok) throw new Error(`Meta conversations ${convRes.status}: ${JSON.stringify(convRes.data)}`);
 
@@ -140,7 +142,7 @@ async function syncInbound(
       const from = (message.from ?? {}) as Json;
       const senderId = from.id as string | undefined;
       if (!senderId) continue;
-      if (senderId === pageId) {
+      if (senderId === nodeId) {
         result.skipped_self++;
         continue;
       }

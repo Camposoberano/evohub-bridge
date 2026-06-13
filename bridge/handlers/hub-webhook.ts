@@ -89,7 +89,7 @@ async function handleLifecycle(db: Db, p: Json) {
         patch.phone_number = wa.phone_number ?? null;
         patch.display_name = (patch.display_name as string | undefined) ?? wa.display_name ?? null;
       }
-      const igId = ig.ig_id ?? ig.instagram_id ?? ig.id;
+      const igId = ig.instagram_user_id ?? ig.ig_id ?? ig.instagram_id ?? ig.id;
       if (igId) {
         patch.ig_id = igId;
         patch.display_name = (patch.display_name as string | undefined) ?? ig.username ?? null;
