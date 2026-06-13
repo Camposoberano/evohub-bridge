@@ -27,12 +27,22 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
+const version = {
+  app: "evohub-bridge",
+  features: ["sync-facebook"],
+  build: "2026-06-12-sync-facebook",
+};
 
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (pathname === "/health") return new Response("ok");
+  if (pathname === "/version") {
+    return new Response(JSON.stringify(version), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const h = routes[pathname];
   if (!h) return new Response("not found", { status: 404 });
