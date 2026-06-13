@@ -37,6 +37,22 @@ web/                                # dashboard Next.js (Fase 2+)
 4. Atribuir domínio público `cofre.camposoberano.com.br` → vira `BRIDGE_PUBLIC_BASE`.
 5. Healthcheck: `GET /health` → `ok`.
 
+## Sync Facebook Messenger (fallback)
+
+O webhook de lifecycle do EVO Hub funciona, mas o evento de mensagem do Messenger pode não ser entregue pela Meta/EVO Hub. Para fechar a entrada de mensagens, a ponte expõe um fallback por pull:
+
+```bash
+GET /sync-facebook?token=<SYNC_SECRET>&since_minutes=10
+```
+
+No Coolify, crie um cron a cada 30-60 segundos apontando para:
+
+```text
+https://cofre.camposoberano.com.br/sync-facebook?token=<SYNC_SECRET>&since_minutes=10
+```
+
+`SYNC_SECRET` é opcional; se não for definido, o endpoint usa `CHATWOOT_WEBHOOK_SECRET`.
+
 ## Pré-requisitos de infra (self-host) — destravar antes de aplicar
 
 Alvo: **Supabase self-host `https://bancortovital.soberano.pro`**.

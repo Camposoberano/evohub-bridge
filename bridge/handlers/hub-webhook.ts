@@ -7,8 +7,8 @@
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
-import { createConversation, createIncomingMessage, ensureContact } from "../shared/chatwoot.ts";
 import { getChannelDetail } from "../shared/hub.ts";
+import { ingestInbound } from "../shared/inbound.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -175,69 +175,4 @@ async function handleMessenger(db: Db, p: Json) {
       });
     }
   }
-}
-
-async function ingestInbound(
-  db: Db,
-  channel: Json,
-  msg: { from: string; name?: string; metaMessageId: string; msgType: string; content: string },
-) {
-  const inboxId = channel.chatwoot_inbox_identifier as string;
-  const phone = channel.type === "whatsapp" ? `+${msg.from}` : null;
-
-  // 1) contato local (upsert por channel+external)
-  const { data: existing } = await db
-    .from("contacts").select("*")
-    .eq("channel_id", channel.id).eq("external_contact_id", msg.from).maybeSingle();
-
-  let contact = existing;
-  let sourceId = (existing?.attributes as Json)?.source_id as string | undefined;
-
-  if (!contact || !sourceId) {
-    const cw = await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from });
-    sourceId = cw.source_id;
-    const up = await db.from("contacts").upsert({
-      channel_id: channel.id,
-      external_contact_id: msg.from,
-      name: msg.name ?? null,
-      phone: phone,
-      chatwoot_contact_id: cw.contact_id ?? null,
-      attributes: { source_id: sourceId },
-      last_seen_at: new Date().toISOString(),
-    }, { onConflict: "channel_id,external_contact_id" }).select().single();
-    contact = up.data;
-  } else {
-    await db.from("contacts").update({ last_seen_at: new Date().toISOString() }).eq("id", contact.id);
-  }
-
-  // 2) conversa aberta (reusa; senão cria nova no Chatwoot)
-  const { data: openConv } = await db
-    .from("conversations").select("*")
-    .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).maybeSingle();
-
-  let conv = openConv;
-  if (!conv) {
-    const cwConv = await createConversation(inboxId, sourceId!);
-    const ins = await db.from("conversations").insert({
-      channel_id: channel.id,
-      contact_id: contact.id,
-      chatwoot_conversation_id: cwConv.id,
-      status: "open",
-    }).select().single();
-    conv = ins.data;
-  }
-
-  // 3) mensagem no Chatwoot + Postgres
-  const cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id, msg.content);
-  await db.from("messages").insert({
-    conversation_id: conv.id,
-    channel_id: channel.id,
-    direction: "in",
-    msg_type: msg.msgType === "text" ? "text" : "unknown",
-    content: msg.content,
-    meta_message_id: msg.metaMessageId,
-    chatwoot_message_id: cwMsg?.id ?? null,
-    status: "received",
-  });
 }

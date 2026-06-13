@@ -23,6 +23,17 @@ export async function sendMeta(
   return { ok: res.ok, status: res.status, data };
 }
 
+export async function getMeta(
+  channelToken: string,
+  path: string,
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await fetch(`${HUB()}/meta/${path.replace(/^\/+/, "")}`, {
+    headers: { "Authorization": `Bearer ${channelToken}` },
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
 // Atalho WhatsApp.
 export function sendMetaMessage(channelToken: string, phoneNumberId: string, body: unknown) {
   return sendMeta(channelToken, `${phoneNumberId}/messages`, body);

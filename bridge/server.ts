@@ -3,23 +3,26 @@
 //   POST /hub-webhook        webhooks do EVO Hub (Meta -> Chatwoot + Postgres)
 //   POST /chatwoot-webhook   webhooks do Chatwoot (saída -> /meta/*)
 //   POST /connect-channel    botão do dashboard (cria canal + inbox + mapa)
+//   GET  /sync-facebook      fallback por pull para Messenger (cron)
 //   POST /metrics-rollup     rollup diário (agendado)
 //   GET  /health             health-check
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
+import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
 const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/hub-webhook": hubWebhook,
   "/chatwoot-webhook": chatwootWebhook,
   "/connect-channel": connectChannel,
+  "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
 };
 
