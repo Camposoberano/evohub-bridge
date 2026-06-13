@@ -7,11 +7,13 @@
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
-import { getChannelDetail } from "../shared/hub.ts";
-import { ingestInbound } from "../shared/inbound.ts";
+import { getChannelDetail, getMeta } from "../shared/hub.ts";
+import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const WA_MEDIA_TYPES = new Set(["image", "audio", "video", "document", "sticker"]);
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -123,6 +125,13 @@ async function handleWhatsApp(db: Db, p: Json) {
 
       const contactsMeta = (value.contacts ?? []) as Json[];
       const messages = (value.messages ?? []) as Json[];
+      if (messages.length === 0) continue;
+
+      let token: string | undefined;
+      if (messages.some((m) => WA_MEDIA_TYPES.has(m.type as string))) {
+        const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+        token = secret?.channel_token as string | undefined;
+      }
 
       for (const m of messages) {
         const from = m.from as string;
@@ -130,8 +139,25 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         const type = m.type as string;
         let content: string;
-        if (type === "text") content = ((m.text as Json)?.body as string) ?? "";
-        else content = `[${type}]`; // placeholder até a tradução de mídia (Fase 3)
+        let attachments: InboundAttachment[] | undefined;
+
+        if (type === "text") {
+          content = ((m.text as Json)?.body as string) ?? "";
+        } else if (WA_MEDIA_TYPES.has(type) && token) {
+          const media = (m[type] ?? {}) as Json;
+          const mediaId = stringValue(media.id);
+          const caption = stringValue(media.caption);
+          const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
+          const downloaded = mediaId ? await downloadWhatsAppMedia(token, mediaId, filenameHint) : null;
+          if (downloaded) {
+            attachments = [downloaded];
+            content = caption ?? fallbackContent(type);
+          } else {
+            content = fallbackContent(type);
+          }
+        } else {
+          content = `[${type}]`; // tipo sem tradução (location/contacts/interactive/etc.)
+        }
 
         await ingestInbound(db, channel as Json, {
           from,
@@ -139,6 +165,7 @@ async function handleWhatsApp(db: Db, p: Json) {
           metaMessageId: m.id as string,
           msgType: type,
           content,
+          attachments,
         });
       }
     }
@@ -181,4 +208,69 @@ async function handleMessenger(db: Db, p: Json) {
 function hasMessengerAttachments(message: Json): boolean {
   const attachments = message.attachments;
   return Array.isArray(attachments) && attachments.length > 0;
+}
+
+// ── Mídia WhatsApp (entrada) ──────────────────────────────────────────────────
+// Diferente do FB/IG (URL pública direta), mídia WA exige 2 passos:
+// 1) GET /meta/<media_id> (Hub) -> { url, mime_type, file_size }
+// 2) fetch(url) com Authorization: Bearer <channel_token> -> bytes
+async function downloadWhatsAppMedia(token: string, mediaId: string, filenameHint?: string): Promise<InboundAttachment | null> {
+  const info = await getMeta(token, mediaId);
+  if (!info.ok) return null;
+  const d = info.data as Json;
+  const url = stringValue(d.url);
+  if (!url) return null;
+
+  const declaredSize = typeof d.file_size === "number" ? d.file_size : null;
+  if (declaredSize && declaredSize > MAX_ATTACHMENT_BYTES) return null;
+
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) return null;
+
+  const length = Number(res.headers.get("content-length") ?? 0);
+  if (Number.isFinite(length) && length > MAX_ATTACHMENT_BYTES) return null;
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > MAX_ATTACHMENT_BYTES) return null;
+
+  const contentType = cleanContentType(res.headers.get("content-type")) ??
+    cleanContentType(d.mime_type as string | undefined) ??
+    "application/octet-stream";
+
+  return {
+    filename: filenameHint ?? `${mediaId}${extensionForMime(contentType)}`,
+    contentType,
+    bytes,
+    sourceUrl: url,
+  };
+}
+
+function fallbackContent(type: string): string {
+  if (type === "image") return "[imagem]";
+  if (type === "audio") return "[audio]";
+  if (type === "video") return "[video]";
+  if (type === "document") return "[documento]";
+  if (type === "sticker") return "[sticker]";
+  return "[anexo]";
+}
+
+function cleanContentType(value: string | null | undefined): string | null {
+  const clean = value?.split(";")[0]?.trim().toLowerCase();
+  return clean || null;
+}
+
+function extensionForMime(mime: string): string {
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/png") return ".png";
+  if (mime === "image/gif") return ".gif";
+  if (mime === "image/webp") return ".webp";
+  if (mime === "audio/mpeg") return ".mp3";
+  if (mime === "audio/mp4" || mime === "video/mp4") return ".mp4";
+  if (mime === "audio/ogg") return ".ogg";
+  if (mime === "application/pdf") return ".pdf";
+  return "";
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }

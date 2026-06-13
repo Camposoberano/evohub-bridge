@@ -75,10 +75,24 @@ async function handleOutgoing(db: Db, p: Json) {
   let mediaUrl: string | null = null;
   if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
-    if (!content) { console.warn("WA: envio de anexo sem texto ainda não suportado", channel.id); return; }
-    res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
-      messaging_product: "whatsapp", to, type: "text", text: { body: content },
-    });
+    if (content) {
+      res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
+        messaging_product: "whatsapp", to, type: "text", text: { body: content },
+      });
+    } else {
+      // anexo sem texto: usa o data_url público do Chatwoot como link de mídia.
+      mediaUrl = (attachment!.data_url as string) ?? null;
+      if (!mediaUrl) { console.warn("anexo sem data_url", channel.id); return; }
+      const attachType = metaAttachmentType(attachment!.file_type as string | undefined);
+      msgType = attachType === "file" ? "document" : attachType;
+      const mediaPayload: Json = { link: mediaUrl };
+      if (msgType === "document") {
+        mediaPayload.filename = (attachment!.fallback_title as string) ?? "arquivo";
+      }
+      res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
+        messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload,
+      });
+    }
   } else if (content) {
     // facebook / instagram (Messenger): envia pela página (me), destinatário = PSID/IGSID.
     res = await sendMeta(token, "me/messages", {
