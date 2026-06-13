@@ -53,8 +53,10 @@ async function handleOutgoing(db: Db, p: Json) {
   const cwConversationId = (conversation.id ?? p.conversation_id) as number | undefined;
   const cwInboxId = (inbox.id ?? p.inbox_id) as number | undefined;
   const content = (p.content as string) ?? "";
+  const attachments = (p.attachments ?? []) as Json[];
+  const attachment = attachments[0];
 
-  if (!cwConversationId || !content) return;
+  if (!cwConversationId || (!content && !attachment)) return;
 
   const { data: channel } = await db.from("channels").select("*").eq("chatwoot_inbox_id", cwInboxId!).maybeSingle();
   if (!channel) { console.warn("sem canal p/ inbox", cwInboxId); return; }
@@ -69,15 +71,29 @@ async function handleOutgoing(db: Db, p: Json) {
 
   // Envio por tipo de canal.
   let res;
+  let msgType = "text";
+  let mediaUrl: string | null = null;
   if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
+    if (!content) { console.warn("WA: envio de anexo sem texto ainda não suportado", channel.id); return; }
     res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
       messaging_product: "whatsapp", to, type: "text", text: { body: content },
     });
-  } else {
+  } else if (content) {
     // facebook / instagram (Messenger): envia pela página (me), destinatário = PSID/IGSID.
     res = await sendMeta(token, "me/messages", {
       recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE",
+    });
+  } else {
+    // anexo sem texto: usa o data_url público do Chatwoot (Active Storage) como payload.
+    mediaUrl = (attachment!.data_url as string) ?? null;
+    if (!mediaUrl) { console.warn("anexo sem data_url", channel.id); return; }
+    const attachType = metaAttachmentType(attachment!.file_type as string | undefined);
+    msgType = attachType === "file" ? "document" : attachType;
+    res = await sendMeta(token, "me/messages", {
+      recipient: { id: to },
+      message: { attachment: { type: attachType, payload: { url: mediaUrl, is_reusable: true } } },
+      messaging_type: "RESPONSE",
     });
   }
 
@@ -89,8 +105,9 @@ async function handleOutgoing(db: Db, p: Json) {
     conversation_id: conv?.id ?? null,
     channel_id: channel.id,
     direction: "out",
-    msg_type: "text",
+    msg_type: msgType,
     content,
+    media_url: mediaUrl,
     meta_message_id: metaId,
     chatwoot_message_id: (p.id as number) ?? null,
     status: res.ok ? "sent" : "failed",
@@ -99,4 +116,10 @@ async function handleOutgoing(db: Db, p: Json) {
   if (conv && !conv.first_response_at) {
     await db.from("conversations").update({ first_response_at: new Date().toISOString() }).eq("id", conv.id);
   }
+}
+
+// Mapeia file_type do Chatwoot pro tipo de attachment da Messenger Send API.
+function metaAttachmentType(fileType?: string): "image" | "audio" | "video" | "file" {
+  if (fileType === "image" || fileType === "audio" || fileType === "video") return fileType;
+  return "file";
 }
