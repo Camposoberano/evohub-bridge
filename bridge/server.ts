@@ -30,7 +30,7 @@ const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
   features: ["sync-facebook"],
-  build: "2026-06-12-sync-facebook",
+  build: "2026-06-13-sync-facebook-media",
 };
 
 Deno.serve({ port }, async (req) => {
