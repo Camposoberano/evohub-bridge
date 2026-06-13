@@ -7,7 +7,7 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://bancortovital.sober
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
   "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJzdXBhYmFzZSIsImlhdCI6MTc4MDc4ODA2MCwiZXhwIjo0OTM2NDYxNjYwLCJyb2xlIjoiYW5vbiJ9.kEp1VTNRbo94J-WMsMtYXJm2qBbrLgq2eB7qCOsVfw8";
 
-export const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || "https://cofre.soberano.pro";
+export const BRIDGE_URL = process.env.NEXT_PUBLIC_BRIDGE_URL || "https://cofre.camposoberano.com.br";
 export const HUB_FRONTEND = process.env.NEXT_PUBLIC_HUB_FRONTEND || "https://app.evohub.evolutionfoundation.com.br";
 
 export const supabase = createClient(URL, ANON, {

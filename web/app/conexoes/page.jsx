@@ -32,6 +32,7 @@ export default function Conexoes() {
   const [novoNome, setNovoNome] = useState("");
   const [novoTipo, setNovoTipo] = useState("whatsapp");
   const [criando, setCriando] = useState(false);
+  const [conectandoId, setConectandoId] = useState(null);
 
   const carregar = useCallback(async () => {
     const [chs, ct, cv, ms] = await Promise.all([
@@ -76,6 +77,26 @@ export default function Conexoes() {
       alert("Falha: " + err.message);
     } finally {
       setCriando(false);
+    }
+  }
+
+  async function conectarCanal(canal) {
+    setConectandoId(canal.id);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${BRIDGE_URL}/connect-channel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ channel_id: canal.id }),
+      });
+      const j = await res.json();
+      if (!res.ok) { alert(j.error || "Erro ao conectar canal"); return; }
+      abrirConexao(j.connect_url);
+      carregar();
+    } catch (err) {
+      alert("Falha: " + err.message);
+    } finally {
+      setConectandoId(null);
     }
   }
 
@@ -150,9 +171,9 @@ export default function Conexoes() {
 
                 {c.status !== "active" && (
                   <button className="btn-ghost" style={{ width: "100%", marginTop: 14 }}
-                    onClick={() => router.push(`/conexoes`) || carregar()}
-                    disabled>
-                    Aguardando conexão Meta
+                    onClick={() => conectarCanal(c)}
+                    disabled={conectandoId === c.id}>
+                    {conectandoId === c.id ? "Abrindo Meta..." : "Conectar Meta"}
                   </button>
                 )}
               </div>

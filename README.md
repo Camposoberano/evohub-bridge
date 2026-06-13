@@ -34,7 +34,7 @@ web/                                # dashboard Next.js (Fase 2+)
 1. Subir este repo num git (GitHub/GitLab) acessível ao Coolify.
 2. Coolify → New Resource → **Dockerfile**, apontando para `bridge/` (build context = `bridge`).
 3. Setar as variáveis de ambiente (do `.env`) no serviço Coolify.
-4. Atribuir domínio público `cofre.soberano.pro` → vira `BRIDGE_PUBLIC_BASE`.
+4. Atribuir domínio público `cofre.camposoberano.com.br` → vira `BRIDGE_PUBLIC_BASE`.
 5. Healthcheck: `GET /health` → `ok`.
 
 ## Pré-requisitos de infra (self-host) — destravar antes de aplicar

@@ -1,6 +1,6 @@
-// connect-channel — chamado pelo botão do dashboard.
-// Orquestra: cria canal local -> canal no Hub (single-shot) -> inbox no Chatwoot
-//            -> grava mapa/segredo -> devolve a URL pública de conexão.
+// connect-channel — chamado pelo dashboard.
+// Criação: cria canal local -> canal no Hub -> inbox no Chatwoot -> grava mapa/segredo.
+// Reconexão: devolve a URL pública de conexão para um canal já existente.
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { createApiInbox } from "../shared/chatwoot.ts";
@@ -22,13 +22,36 @@ export async function handle(req: Request): Promise<Response> {
   if (!userData?.user) return json({ error: "unauthorized" }, 401);
 
   const body = await req.json().catch(() => ({}));
+  const db = admin();
+
+  const existingChannelId = (body.channel_id as string | undefined)?.trim();
+  if (existingChannelId) {
+    const { data: channel, error: channelError } = await db.from("channels")
+      .select("id, hub_channel_id")
+      .eq("id", existingChannelId)
+      .maybeSingle();
+    if (channelError) return json({ error: channelError.message }, 500);
+    if (!channel) return json({ error: "canal não encontrado" }, 404);
+
+    const { data: secret, error: secretError } = await db.from("channel_secrets")
+      .select("channel_token")
+      .eq("channel_id", existingChannelId)
+      .maybeSingle();
+    if (secretError) return json({ error: secretError.message }, 500);
+    if (!secret?.channel_token) return json({ error: "canal sem token de conexão" }, 404);
+
+    return json({
+      channel_id: channel.id,
+      hub_channel_id: channel.hub_channel_id,
+      connect_url: publicConnectUrl(secret.channel_token),
+    });
+  }
+
   const type = body.type as ChannelType;
   const name = (body.name as string)?.trim();
   if (!["whatsapp", "facebook", "instagram"].includes(type) || !name) {
     return json({ error: "type (whatsapp|facebook|instagram) e name são obrigatórios" }, 400);
   }
-
-  const db = admin();
 
   // 1) canal local (external_id = id local)
   const { data: channel, error } = await db.from("channels")
