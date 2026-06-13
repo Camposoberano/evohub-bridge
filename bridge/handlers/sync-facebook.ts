@@ -4,7 +4,7 @@ import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { getMeta, sendMeta } from "../shared/hub.ts";
-import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
+import { ingestInbound, type InboundAttachment, repairInboundMedia } from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 
 type Json = Record<string, unknown>;
@@ -43,6 +43,7 @@ export async function handle(req: Request): Promise<Response> {
     skipped_self: 0,
     media_found: 0,
     media_attached: 0,
+    media_repaired: 0,
     media_failed: 0,
     outgoing_found: 0,
     outgoing_sent: 0,
@@ -61,6 +62,7 @@ export async function handle(req: Request): Promise<Response> {
       totals.skipped_self += inbound.skipped_self;
       totals.media_found += inbound.media_found;
       totals.media_attached += inbound.media_attached;
+      totals.media_repaired += inbound.media_repaired;
       totals.media_failed += inbound.media_failed;
 
       const outgoing = await syncOutgoing(db, channel as Json, { cutoffMs, messageLimit });
@@ -116,6 +118,7 @@ async function syncInbound(
     skipped_self: 0,
     media_found: 0,
     media_attached: 0,
+    media_repaired: 0,
     media_failed: 0,
   };
 
@@ -146,11 +149,24 @@ async function syncInbound(
       const metaMessageId = message.id as string | undefined;
       if (metaMessageId) {
         const { data: existingMessages, error: existingError } = await db.from("messages")
-          .select("id")
+          .select("id,content,media_url")
           .eq("meta_message_id", metaMessageId)
           .limit(1);
         if (existingError) throw existingError;
-        if (existingMessages?.[0]?.id) {
+        const existingMessage = existingMessages?.[0] as Json | undefined;
+        if (existingMessage?.id) {
+          const metaAttachments = extractAttachments(message);
+          if (!existingMessage.media_url && metaAttachments.length > 0) {
+            const attachments = await downloadAttachments(metaAttachments, result);
+            const msgType = inboundMsgType(message, attachments);
+            const content = (message.message as string | undefined)?.trim() || fallbackContent(msgType);
+            const repair = await repairInboundMedia(db, existingMessage.id as string, {
+              msgType,
+              content,
+              attachments,
+            });
+            if (repair.repaired) result.media_repaired++;
+          }
           result.duplicates++;
           continue;
         }

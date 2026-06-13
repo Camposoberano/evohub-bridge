@@ -164,6 +164,7 @@ async function handleMessenger(db: Db, p: Json) {
       const message = m.message as Json | undefined;
       if (!sender || !message) continue; // ignora delivery/read/postback sem texto
       if (message.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
+      if (hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
       const text = (message.text as string) ?? "[anexo]"; // TODO Fase 3: mídia/attachments
 
       await ingestInbound(db, channel as Json, {
@@ -175,4 +176,9 @@ async function handleMessenger(db: Db, p: Json) {
       });
     }
   }
+}
+
+function hasMessengerAttachments(message: Json): boolean {
+  const attachments = message.attachments;
+  return Array.isArray(attachments) && attachments.length > 0;
 }

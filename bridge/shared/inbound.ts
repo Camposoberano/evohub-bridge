@@ -119,6 +119,52 @@ export async function ingestInbound(
   return { inserted: true, message_id: insertedMessage.id as string };
 }
 
+export async function repairInboundMedia(
+  db: SupabaseClient,
+  messageId: string,
+  input: {
+    msgType: string;
+    content: string;
+    attachments: InboundAttachment[];
+  },
+): Promise<{ repaired: boolean; reason?: string }> {
+  if (input.attachments.length === 0) return { repaired: false, reason: "sem anexos" };
+
+  const { data: message, error: messageError } = await db.from("messages")
+    .select("id,conversation_id,media_url,chatwoot_message_id")
+    .eq("id", messageId)
+    .single();
+  if (messageError) throw messageError;
+  if (message?.media_url) return { repaired: false, reason: "ja reparado" };
+
+  const { data: conversation, error: convError } = await db.from("conversations")
+    .select("chatwoot_conversation_id")
+    .eq("id", message.conversation_id)
+    .single();
+  if (convError) throw convError;
+
+  const cwConversationId = conversation?.chatwoot_conversation_id as number | undefined;
+  if (!cwConversationId) return { repaired: false, reason: "sem conversa Chatwoot" };
+
+  const cwMsg = await createConversationMessage(cwConversationId, {
+    content: input.content,
+    messageType: "incoming",
+    attachments: input.attachments,
+  });
+  const chatwootMediaUrl = firstAttachmentUrl(cwMsg) ?? input.attachments[0]?.sourceUrl ?? null;
+
+  const { error: updateError } = await db.from("messages").update({
+    msg_type: normalizeMsgType(input.msgType),
+    content: input.content,
+    media_url: chatwootMediaUrl,
+    chatwoot_message_id: cwMsg?.id ?? message.chatwoot_message_id ?? null,
+    status: "received",
+  }).eq("id", messageId);
+  if (updateError) throw updateError;
+
+  return { repaired: true };
+}
+
 function normalizeMsgType(value: string): MsgType {
   if (
     value === "text" || value === "image" || value === "audio" || value === "video" ||
