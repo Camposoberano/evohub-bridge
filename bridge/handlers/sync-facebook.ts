@@ -4,11 +4,12 @@ import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { getMeta, sendMeta } from "../shared/hub.ts";
-import { ingestInbound } from "../shared/inbound.ts";
+import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) return json({ error: "method not allowed" }, 405);
@@ -40,6 +41,9 @@ export async function handle(req: Request): Promise<Response> {
     inserted: 0,
     duplicates: 0,
     skipped_self: 0,
+    media_found: 0,
+    media_attached: 0,
+    media_failed: 0,
     outgoing_found: 0,
     outgoing_sent: 0,
     outgoing_duplicates: 0,
@@ -55,6 +59,9 @@ export async function handle(req: Request): Promise<Response> {
       totals.inserted += inbound.inserted;
       totals.duplicates += inbound.duplicates;
       totals.skipped_self += inbound.skipped_self;
+      totals.media_found += inbound.media_found;
+      totals.media_attached += inbound.media_attached;
+      totals.media_failed += inbound.media_failed;
 
       const outgoing = await syncOutgoing(db, channel as Json, { cutoffMs, messageLimit });
       totals.outgoing_found += outgoing.outgoing_found;
@@ -63,7 +70,7 @@ export async function handle(req: Request): Promise<Response> {
       totals.outgoing_failed += outgoing.outgoing_failed;
       await db.from("channels").update({ last_error: null }).eq("id", channel.id);
     } catch (e) {
-      const message = String(e);
+      const message = errorMessage(e);
       totals.errors.push(`${channel.name ?? channel.id}: ${message}`);
       await db.from("channels").update({ last_error: message }).eq("id", channel.id);
     }
@@ -101,7 +108,16 @@ async function syncInbound(
   if (!convRes.ok) throw new Error(`Meta conversations ${convRes.status}: ${JSON.stringify(convRes.data)}`);
 
   const conversations = ((convRes.data as Json).data ?? []) as Json[];
-  const result = { conversations_scanned: 0, inbound_found: 0, inserted: 0, duplicates: 0, skipped_self: 0 };
+  const result = {
+    conversations_scanned: 0,
+    inbound_found: 0,
+    inserted: 0,
+    duplicates: 0,
+    skipped_self: 0,
+    media_found: 0,
+    media_attached: 0,
+    media_failed: 0,
+  };
 
   for (const conversation of conversations) {
     const updatedMs = Date.parse(conversation.updated_time as string);
@@ -127,14 +143,31 @@ async function syncInbound(
       }
 
       result.inbound_found++;
-      const content = (message.message as string | undefined)?.trim() || "[anexo]";
+      const metaMessageId = message.id as string | undefined;
+      if (metaMessageId) {
+        const { data: existingMessages, error: existingError } = await db.from("messages")
+          .select("id")
+          .eq("meta_message_id", metaMessageId)
+          .limit(1);
+        if (existingError) throw existingError;
+        if (existingMessages?.[0]?.id) {
+          result.duplicates++;
+          continue;
+        }
+      }
+
+      const metaAttachments = extractAttachments(message);
+      const attachments = await downloadAttachments(metaAttachments, result);
+      const msgType = inboundMsgType(message, attachments);
+      const content = (message.message as string | undefined)?.trim() || fallbackContent(msgType);
       const ingest = await ingestInbound(db, channel, {
         from: senderId,
         name: from.name as string | undefined,
-        metaMessageId: message.id as string | undefined,
-        msgType: content === "[anexo]" ? "unknown" : "text",
+        metaMessageId,
+        msgType,
         content,
         sentAt: message.created_time as string | undefined,
+        attachments,
       });
 
       if (ingest.inserted) result.inserted++;
@@ -185,12 +218,13 @@ async function syncOutgoing(
 
       result.outgoing_found++;
 
-      const { data: existing, error: existingError } = await db.from("messages")
+      const { data: existingMessages, error: existingError } = await db.from("messages")
         .select("id,status")
         .eq("direction", "out")
         .eq("chatwoot_message_id", cwMessageId)
-        .maybeSingle();
+        .limit(1);
       if (existingError) throw existingError;
+      const existing = existingMessages?.[0];
       if (existing?.status === "sent") {
         result.outgoing_duplicates++;
         continue;
@@ -237,6 +271,154 @@ function chatwootCreatedAtMs(value: unknown): number | null {
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
+}
+
+async function downloadAttachments(
+  metaAttachments: Json[],
+  result: { media_found: number; media_attached: number; media_failed: number },
+): Promise<InboundAttachment[]> {
+  const attachments: InboundAttachment[] = [];
+  for (const metaAttachment of metaAttachments) {
+    result.media_found++;
+    try {
+      const downloaded = await downloadAttachment(metaAttachment);
+      if (downloaded) {
+        attachments.push(downloaded);
+        result.media_attached++;
+      } else {
+        result.media_failed++;
+      }
+    } catch {
+      result.media_failed++;
+    }
+  }
+  return attachments;
+}
+
+async function downloadAttachment(metaAttachment: Json): Promise<InboundAttachment | null> {
+  const sourceUrl = attachmentUrl(metaAttachment);
+  if (!sourceUrl) return null;
+
+  const declaredSize = numberValue(metaAttachment.size);
+  if (declaredSize && declaredSize > MAX_ATTACHMENT_BYTES) {
+    throw new Error("Meta attachment exceeds size limit");
+  }
+
+  const res = await fetch(sourceUrl);
+  if (!res.ok) throw new Error(`Meta attachment download ${res.status}`);
+
+  const length = Number(res.headers.get("content-length") ?? 0);
+  if (Number.isFinite(length) && length > MAX_ATTACHMENT_BYTES) {
+    throw new Error("Meta attachment response exceeds size limit");
+  }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+    throw new Error("Meta attachment body exceeds size limit");
+  }
+
+  const contentType = cleanContentType(res.headers.get("content-type")) ??
+    cleanContentType(metaAttachment.mime_type as string | undefined) ??
+    "application/octet-stream";
+  return {
+    filename: attachmentFilename(metaAttachment, contentType),
+    contentType,
+    bytes,
+    sourceUrl,
+  };
+}
+
+function extractAttachments(message: Json): Json[] {
+  const attachments = message.attachments as Json | undefined;
+  const data = attachments?.data;
+  return Array.isArray(data) ? data as Json[] : [];
+}
+
+function inboundMsgType(message: Json, attachments: InboundAttachment[]): string {
+  const text = (message.message as string | undefined)?.trim();
+  if (text && attachments.length === 0) return "text";
+
+  const firstAttachment = attachments[0];
+  if (firstAttachment) return msgTypeFromMime(firstAttachment.contentType);
+
+  const firstMeta = extractAttachments(message)[0];
+  const mime = cleanContentType(firstMeta?.mime_type as string | undefined);
+  return mime ? msgTypeFromMime(mime) : (text ? "text" : "unknown");
+}
+
+function msgTypeFromMime(mime: string): string {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.includes("pdf") || mime.includes("document") || mime.includes("sheet") || mime.includes("presentation")) {
+    return "document";
+  }
+  return "unknown";
+}
+
+function fallbackContent(msgType: string): string {
+  if (msgType === "image") return "[imagem]";
+  if (msgType === "audio") return "[audio]";
+  if (msgType === "video") return "[video]";
+  if (msgType === "document") return "[documento]";
+  return "[anexo]";
+}
+
+function attachmentUrl(metaAttachment: Json): string | null {
+  const imageData = metaAttachment.image_data as Json | undefined;
+  const videoData = metaAttachment.video_data as Json | undefined;
+  const audioData = metaAttachment.audio_data as Json | undefined;
+  return stringValue(metaAttachment.file_url) ??
+    stringValue(imageData?.url) ??
+    stringValue(videoData?.url) ??
+    stringValue(audioData?.url) ??
+    null;
+}
+
+function attachmentFilename(metaAttachment: Json, contentType: string): string {
+  const base = stringValue(metaAttachment.name) ?? stringValue(metaAttachment.id) ?? "attachment";
+  const clean = base.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "attachment";
+  if (/\.[A-Za-z0-9]{2,5}$/.test(clean)) return clean;
+  return `${clean}${extensionForMime(contentType)}`;
+}
+
+function extensionForMime(mime: string): string {
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/png") return ".png";
+  if (mime === "image/gif") return ".gif";
+  if (mime === "audio/mpeg") return ".mp3";
+  if (mime === "audio/mp4" || mime === "video/mp4") return ".mp4";
+  if (mime === "audio/ogg") return ".ogg";
+  if (mime === "application/pdf") return ".pdf";
+  return "";
+}
+
+function cleanContentType(value: string | null | undefined): string | null {
+  const clean = value?.split(";")[0]?.trim().toLowerCase();
+  return clean || null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 }
 
 async function sendMessenger(channelToken: string, to: string, content: string) {

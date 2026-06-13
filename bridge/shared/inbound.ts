@@ -1,9 +1,20 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { createConversation, createIncomingMessage, ensureContact } from "./chatwoot.ts";
+import {
+  type ChatwootAttachment,
+  createConversation,
+  createConversationMessage,
+  createIncomingMessage,
+  ensureContact,
+} from "./chatwoot.ts";
 
 type Json = Record<string, unknown>;
+type MsgType = "text" | "image" | "audio" | "video" | "document" | "sticker" | "location" | "contact" | "interactive" | "template" | "unknown";
+
+export type InboundAttachment = ChatwootAttachment & {
+  sourceUrl?: string;
+};
 
 export async function ingestInbound(
   db: SupabaseClient,
@@ -15,13 +26,15 @@ export async function ingestInbound(
     msgType: string;
     content: string;
     sentAt?: string;
+    attachments?: InboundAttachment[];
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   if (msg.metaMessageId) {
-    const { data: existingMessage } = await db.from("messages")
+    const { data: existingMessages } = await db.from("messages")
       .select("id")
       .eq("meta_message_id", msg.metaMessageId)
-      .maybeSingle();
+      .limit(1);
+    const existingMessage = existingMessages?.[0];
     if (existingMessage?.id) return { inserted: false, reason: "duplicate", message_id: existingMessage.id as string };
   }
 
@@ -76,13 +89,22 @@ export async function ingestInbound(
     conv = insertedConv as Json;
   }
 
-  const cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
+  const attachments = msg.attachments ?? [];
+  const cwMsg = attachments.length > 0
+    ? await createConversationMessage(conv.chatwoot_conversation_id as number, {
+      content: msg.content,
+      messageType: "incoming",
+      attachments,
+    })
+    : await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
+  const chatwootMediaUrl = firstAttachmentUrl(cwMsg);
   const { data: insertedMessage, error: messageError } = await db.from("messages").insert({
     conversation_id: conv.id,
     channel_id: channel.id,
     direction: "in",
-    msg_type: msg.msgType === "text" ? "text" : "unknown",
+    msg_type: normalizeMsgType(msg.msgType),
     content: msg.content,
+    media_url: chatwootMediaUrl,
     meta_message_id: msg.metaMessageId ?? null,
     chatwoot_message_id: cwMsg?.id ?? null,
     status: "received",
@@ -95,4 +117,24 @@ export async function ingestInbound(
   }
 
   return { inserted: true, message_id: insertedMessage.id as string };
+}
+
+function normalizeMsgType(value: string): MsgType {
+  if (
+    value === "text" || value === "image" || value === "audio" || value === "video" ||
+    value === "document" || value === "sticker" || value === "location" || value === "contact" ||
+    value === "interactive" || value === "template"
+  ) return value;
+  return "unknown";
+}
+
+function firstAttachmentUrl(message: Record<string, unknown>): string | null {
+  const attachments = message.attachments as Json[] | undefined;
+  const first = Array.isArray(attachments) ? attachments[0] : undefined;
+  const attachment = first ?? (message.attachment as Json | undefined);
+  if (!attachment) return null;
+
+  const dataUrl = attachment.data_url as string | undefined;
+  const thumbUrl = attachment.thumb_url as string | undefined;
+  return dataUrl ?? thumbUrl ?? null;
 }

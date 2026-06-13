@@ -6,12 +6,24 @@ import { env } from "./env.ts";
 const BASE = () => env("CHATWOOT_URL").replace(/\/+$/, "");
 const ACC = () => env("CHATWOOT_ACCOUNT_ID");
 
-function appHeaders(): HeadersInit {
+function appAuthHeaders(): HeadersInit {
   return {
     "api_access_token": env("CHATWOOT_API_ACCESS_TOKEN"),
+  };
+}
+
+function appHeaders(): HeadersInit {
+  return {
+    ...appAuthHeaders(),
     "Content-Type": "application/json",
   };
 }
+
+export type ChatwootAttachment = {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+};
 
 // ── Application API ──────────────────────────────────────────────────────────
 
@@ -87,6 +99,52 @@ export async function createIncomingMessage(
   return await res.json();
 }
 
+export async function createConversationMessage(
+  conversationId: number,
+  input: {
+    content: string;
+    messageType: "incoming" | "outgoing";
+    attachments?: ChatwootAttachment[];
+  },
+): Promise<Record<string, unknown> & { id?: number }> {
+  const attachments = input.attachments ?? [];
+
+  if (attachments.length > 0) {
+    const form = new FormData();
+    form.set("content", input.content);
+    form.set("message_type", input.messageType);
+    form.set("private", "false");
+    form.set("content_type", "text");
+
+    for (const attachment of attachments) {
+      const blob = new Blob([arrayBufferFromBytes(attachment.bytes)], { type: attachment.contentType });
+      form.append("attachments[]", blob, attachment.filename);
+    }
+
+    const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
+      method: "POST",
+      headers: appAuthHeaders(),
+      body: form,
+    });
+    if (!res.ok) throw new Error(`Chatwoot createConversationMessage ${res.status}: ${await res.text()}`);
+    return await res.json();
+  }
+
+  const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: appHeaders(),
+    body: JSON.stringify({
+      content: input.content,
+      message_type: input.messageType,
+      private: false,
+      content_type: "text",
+      content_attributes: {},
+    }),
+  });
+  if (!res.ok) throw new Error(`Chatwoot createConversationMessage ${res.status}: ${await res.text()}`);
+  return await res.json();
+}
+
 export async function listConversationMessages(conversationId: number): Promise<Record<string, unknown>[]> {
   const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
     headers: appHeaders(),
@@ -94,4 +152,10 @@ export async function listConversationMessages(conversationId: number): Promise<
   if (!res.ok) throw new Error(`Chatwoot listConversationMessages ${res.status}: ${await res.text()}`);
   const json = await res.json();
   return (json.payload ?? []) as Record<string, unknown>[];
+}
+
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
 }
