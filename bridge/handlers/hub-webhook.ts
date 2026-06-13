@@ -6,14 +6,15 @@
 // FB/IG e mídia: evento é persistido; tradução fica para Fase 2/3 (TODO marcados).
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
-import { env } from "../shared/env.ts";
-import { getChannelDetail, getMeta } from "../shared/hub.ts";
+import { env, optionalEnv } from "../shared/env.ts";
+import { getChannelDetail } from "../shared/hub.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const WA_MEDIA_TYPES = new Set(["image", "audio", "video", "document", "sticker"]);
+const GRAPH_VERSION = optionalEnv("META_GRAPH_VERSION") ?? "v21.0";
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
@@ -127,11 +128,10 @@ async function handleWhatsApp(db: Db, p: Json) {
       const messages = (value.messages ?? []) as Json[];
       if (messages.length === 0) continue;
 
-      let token: string | undefined;
-      if (messages.some((m) => WA_MEDIA_TYPES.has(m.type as string))) {
-        const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
-        token = secret?.channel_token as string | undefined;
-      }
+      // Mídia WhatsApp baixa direto na Graph API com o token Meta (Usuário do Sistema da
+      // WABA). O Hub está em modo "shared" e não expõe download de binário; o channel_token
+      // do Hub não autentica a lookaside. META_ACCESS_TOKEN é o token da sua WABA.
+      const metaToken = optionalEnv("META_ACCESS_TOKEN");
 
       for (const m of messages) {
         const from = m.from as string;
@@ -143,17 +143,18 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         if (type === "text") {
           content = ((m.text as Json)?.body as string) ?? "";
-        } else if (WA_MEDIA_TYPES.has(type) && token) {
+        } else if (WA_MEDIA_TYPES.has(type)) {
           const media = (m[type] ?? {}) as Json;
           const mediaId = stringValue(media.id);
           const caption = stringValue(media.caption);
           const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
-          const downloaded = mediaId ? await downloadWhatsAppMedia(token, mediaId, filenameHint) : null;
+          if (!metaToken) console.warn("WA mídia sem META_ACCESS_TOKEN — usando placeholder", channel.id);
+          const downloaded = metaToken && mediaId ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint) : null;
           if (downloaded) {
             attachments = [downloaded];
             content = caption ?? fallbackContent(type);
           } else {
-            content = fallbackContent(type);
+            content = caption ?? fallbackContent(type);
           }
         } else {
           content = `[${type}]`; // tipo sem tradução (location/contacts/interactive/etc.)
@@ -211,21 +212,25 @@ function hasMessengerAttachments(message: Json): boolean {
 }
 
 // ── Mídia WhatsApp (entrada) ──────────────────────────────────────────────────
-// Diferente do FB/IG (URL pública direta), mídia WA exige 2 passos:
-// 1) GET /meta/<media_id> (Hub) -> { url, mime_type, file_size }
-// 2) fetch(url) com Authorization: Bearer <channel_token> -> bytes
-async function downloadWhatsAppMedia(token: string, mediaId: string, filenameHint?: string): Promise<InboundAttachment | null> {
-  const info = await getMeta(token, mediaId);
-  if (!info.ok) return null;
-  const d = info.data as Json;
+// Baixa direto na Graph API da Meta (o Hub em modo shared não serve o binário):
+// 1) GET graph.facebook.com/<ver>/<media_id> com Bearer <metaToken> -> { url, mime_type, file_size }
+// 2) fetch(url) com Bearer <metaToken> -> bytes (lookaside exige o token Meta)
+async function downloadWhatsAppMedia(metaToken: string, mediaId: string, filenameHint?: string): Promise<InboundAttachment | null> {
+  const auth = { Authorization: `Bearer ${metaToken}` };
+  const infoRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${mediaId}`, { headers: auth });
+  if (!infoRes.ok) {
+    console.warn("WA mídia metadata falhou", infoRes.status, (await infoRes.text()).slice(0, 200));
+    return null;
+  }
+  const d = await infoRes.json().catch(() => ({})) as Json;
   const url = stringValue(d.url);
   if (!url) return null;
 
   const declaredSize = typeof d.file_size === "number" ? d.file_size : null;
   if (declaredSize && declaredSize > MAX_ATTACHMENT_BYTES) return null;
 
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) return null;
+  const res = await fetch(url, { headers: auth });
+  if (!res.ok) { console.warn("WA mídia download falhou", res.status); return null; }
 
   const length = Number(res.headers.get("content-length") ?? 0);
   if (Number.isFinite(length) && length > MAX_ATTACHMENT_BYTES) return null;

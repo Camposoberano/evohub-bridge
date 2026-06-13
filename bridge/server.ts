@@ -30,8 +30,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
 const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
-  features: ["sync-facebook", "sync-instagram", "auto-sync-loop", "whatsapp-media"],
-  build: "2026-06-13-whatsapp-media",
+  features: ["sync-facebook", "sync-instagram", "auto-sync-loop", "whatsapp-media", "wa-media-graph-direct"],
+  build: "2026-06-13-wa-media-graph-direct",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
