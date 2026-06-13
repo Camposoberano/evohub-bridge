@@ -11,6 +11,7 @@ import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
+import { env, optionalEnv } from "./shared/env.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -29,9 +30,31 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
 const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
-  features: ["sync-facebook", "sync-instagram"],
-  build: "2026-06-13-sync-instagram",
+  features: ["sync-facebook", "sync-instagram", "auto-sync-loop"],
+  build: "2026-06-13-auto-sync-loop",
 };
+
+// Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
+// Messenger). /sync-facebook é o único caminho de entrada pro IG, então roda em loop
+// interno aqui — sem depender de cron externo no Coolify. Pra Facebook é só redundância
+// (a entrada já chega por webhook); duplicados são ignorados pelo dedup do próprio sync.
+const SYNC_LOOP_INTERVAL_MS = 30_000;
+function startSyncLoop() {
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/sync-facebook?token=${encodeURIComponent(token)}&since_minutes=10`;
+
+  setInterval(async () => {
+    try {
+      const res = await syncFacebook(new Request(url));
+      const body = await res.json();
+      if (body.errors?.length || body.inserted > 0 || body.outgoing_sent > 0 || body.media_repaired > 0) {
+        console.log("sync-facebook (auto):", JSON.stringify(body));
+      }
+    } catch (e) {
+      console.error("sync-facebook (auto) erro:", e);
+    }
+  }, SYNC_LOOP_INTERVAL_MS);
+}
 
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
@@ -53,4 +76,5 @@ Deno.serve({ port }, async (req) => {
   return new Response(res.body, { status: res.status, headers });
 });
 
+startSyncLoop();
 console.log(`bridge ouvindo na porta ${port}`);
