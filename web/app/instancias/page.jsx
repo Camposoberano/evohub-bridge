@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL } from "@/lib/supabase";
 import Nav from "@/components/Nav";
+import Menu from "@/components/Menu";
 
 function statusBadge(s) {
   if (s === "connected") return ["badge-green", "Conectado"];
@@ -124,16 +125,18 @@ export default function Instancias() {
                   <span className={"badge " + cls}>{txt}</span>
                 </div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 12 }}>{i.number || "—"}</div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 6, justifyContent: "space-between", alignItems: "center" }}>
                   {i.status === "connected"
                     ? <button className="btn-ghost mini" onClick={() => act("disconnect", i.name)}>Desconectar</button>
-                    : <button className="btn-ghost mini" onClick={() => conectar(i.name)}>Conectar (QR)</button>}
-                  <button className="btn-ghost mini" onClick={() => act("restart_instance", i.name, {}, false)}>Reiniciar</button>
-                  <button className="btn-ghost mini" onClick={() => verLimites(i.name)}>Limites</button>
-                  <button className="btn-ghost mini" onClick={() => renomear(i.name)}>Renomear</button>
-                  <button className="btn-ghost mini" onClick={() => abrirProxy(i.name)}>Proxy</button>
-                  <button className="btn-ghost mini" onClick={() => abrirChatwoot(i.name)}>Chatwoot</button>
-                  <button className="btn-ghost mini" style={{ color: "var(--red)" }} onClick={() => deletar(i.name)}>Deletar</button>
+                    : <button className="btn-mint" style={{ padding: "6px 12px", fontSize: 13 }} onClick={() => conectar(i.name)}>Conectar (QR)</button>}
+                  <Menu items={[
+                    { label: "Reiniciar", onClick: () => act("restart_instance", i.name, {}, false) },
+                    { label: "Limites", onClick: () => verLimites(i.name) },
+                    { label: "Renomear", onClick: () => renomear(i.name) },
+                    { label: "Proxy", onClick: () => abrirProxy(i.name) },
+                    { label: "Chatwoot", onClick: () => abrirChatwoot(i.name) },
+                    { label: "Deletar", onClick: () => deletar(i.name), danger: true },
+                  ]} />
                 </div>
               </div>
             );

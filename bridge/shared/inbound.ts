@@ -1,6 +1,6 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import type { DbClient } from "./supabase.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -17,7 +17,7 @@ export type InboundAttachment = ChatwootAttachment & {
 };
 
 export async function ingestInbound(
-  db: SupabaseClient,
+  db: DbClient,
   channel: Json,
   msg: {
     from: string;
@@ -120,7 +120,7 @@ export async function ingestInbound(
 }
 
 export async function repairInboundMedia(
-  db: SupabaseClient,
+  db: DbClient,
   messageId: string,
   input: {
     msgType: string;

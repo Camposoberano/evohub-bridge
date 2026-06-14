@@ -44,6 +44,7 @@ export default function Disparos() {
   const [delayMin, setDelayMin] = useState(1);
   const [delayMax, setDelayMax] = useState(3);
   const [enviando, setEnviando] = useState(false);
+  const [verInst, setVerInst] = useState(false);
 
   async function api(action, params = {}) {
     const { data: { session } } = await supabase.auth.getSession();
@@ -162,17 +163,20 @@ export default function Disparos() {
 
         {msg && <div className="card" style={{ marginBottom: 16, fontSize: 13, wordBreak: "break-word" }}>{msg}</div>}
 
-        {/* INSTÂNCIAS */}
-        <div className="section-title">Números / instâncias</div>
+        {/* INSTÂNCIAS (recolhe se > 5) */}
+        <div className="section-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Números ({instancias.filter((i) => i.status === "connected").length} conectados / {instancias.length})</span>
+          {instancias.length > 5 && <button className="btn-ghost mini" onClick={() => setVerInst(!verInst)}>{verInst ? "Recolher" : "Ver todos"}</button>}
+        </div>
         <div className="table-wrap" style={{ marginBottom: 16 }}>
           {instancias.length === 0 ? <div style={{ padding: 16, color: "var(--text-dim)" }}>Nenhuma instância.</div> :
-            instancias.map((i) => {
+            (verInst ? instancias : instancias.slice(0, 5)).map((i) => {
               const [cls, txt] = statusBadge(i.status);
               return (
                 <div key={i.name} className="integ">
                   <div className="integ-body"><div className="integ-name">{i.name}</div><div className="integ-desc">{i.number || "—"}</div></div>
                   <span className={"badge " + cls}>{txt}</span>
-                  {i.status !== "connected" && <button className="btn-ghost" style={{ padding: "5px 11px", fontSize: 12 }} onClick={() => conectar(i.name)}>Conectar (QR)</button>}
+                  {i.status !== "connected" && <button className="btn-ghost mini" onClick={() => conectar(i.name)}>Conectar (QR)</button>}
                 </div>
               );
             })}

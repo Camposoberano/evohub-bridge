@@ -83,6 +83,12 @@ npm run db:apply                  # aplica supabase/migrations/*.sql
 npm run db:apply -- 0002_llm_orchestration.sql  # aplica somente a 0002
 ```
 
+Se o projeto Supabase já tiver tabelas `public.conversations` ou
+`public.messages` de outro sistema, não aplique a `0001` em `public`. Use o SQL
+manual `supabase/manual/0001_0002_evohub_schema.sql`, que cria a base da ponte no
+schema dedicado `evohub`. Depois exponha `evohub` em Project Settings -> API ->
+Data API -> Exposed schemas.
+
 ## Projeto 1: rotacao de multiagentes (3+ LLMs)
 
 Base inicial ja versionada para evoluir a orquestracao:

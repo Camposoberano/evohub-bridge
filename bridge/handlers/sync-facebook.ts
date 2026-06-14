@@ -32,7 +32,7 @@ export async function handle(req: Request): Promise<Response> {
 
   const { data: rawChannels, error: channelError } = await query;
   if (channelError) return json({ error: channelError.message }, 500);
-  const channels = (rawChannels ?? []).filter((c) => (c.type === "instagram" ? c.ig_id : c.page_id));
+  const channels = (rawChannels ?? []).filter((c: Json) => (c.type === "instagram" ? c.ig_id : c.page_id));
 
   const totals = {
     channels: channels?.length ?? 0,
