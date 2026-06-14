@@ -1,7 +1,7 @@
 // Cliente Chatwoot.
 //  * Application API (token de agente/admin): cria inbox, busca dados de conta.
 //  * Client API pública (inbox_identifier + source_id): injeta mensagens de ENTRADA.
-import { env } from "./env.ts";
+import { env, optionalEnv } from "./env.ts";
 
 const BASE = () => env("CHATWOOT_URL").replace(/\/+$/, "");
 const ACC = () => env("CHATWOOT_ACCOUNT_ID");
@@ -46,6 +46,23 @@ export async function createApiInbox(name: string, webhookUrl: string): Promise<
   });
   const full = await got.json();
   return { id: inbox.id, inbox_identifier: full?.inbox_identifier ?? full?.channel?.inbox_identifier };
+}
+
+// Seta o webhook_url de uma inbox API (qualquer conta) — usado p/ ligar a saída
+// Chatwoot → uazapi automaticamente (senão o bot posta no Chatwoot mas não vai pro WhatsApp).
+export async function setInboxWebhook(
+  accountId: number | string,
+  inboxId: number | string,
+  webhookUrl: string,
+): Promise<{ ok: boolean; status: number; body: string }> {
+  // Editar config de inbox exige admin. Usa CHATWOOT_ADMIN_TOKEN se houver; senão o token padrão.
+  const adminToken = optionalEnv("CHATWOOT_ADMIN_TOKEN") ?? env("CHATWOOT_API_ACCESS_TOKEN");
+  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes/${inboxId}`, {
+    method: "PATCH",
+    headers: { "api_access_token": adminToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ channel: { webhook_url: webhookUrl } }),
+  });
+  return { ok: res.ok, status: res.status, body: (await res.text()).slice(0, 200) };
 }
 
 // ── Client API pública (ENTRADA) ─────────────────────────────────────────────

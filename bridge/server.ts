@@ -55,8 +55,9 @@ const version = {
     "wa-status-capture",
     "media-retention",
     "uazapi",
+    "rollup-loop",
   ],
-  build: "2026-06-13-uazapi",
+  build: "2026-06-14-rollup-loop",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -81,6 +82,22 @@ function startSyncLoop() {
   }, SYNC_LOOP_INTERVAL_MS);
 }
 
+// Rollup diário de daily_metrics — loop interno (sem cron externo). Roda a cada 24h
+// (dia anterior) + uma vez ~1min após subir, pra começar a preencher o histórico.
+const ROLLUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+function startRollupLoop() {
+  const run = async () => {
+    try {
+      const res = await metricsRollup(new Request("http://internal/metrics-rollup"));
+      console.log("metrics-rollup (auto):", JSON.stringify(await res.json()));
+    } catch (e) {
+      console.error("metrics-rollup (auto) erro:", e);
+    }
+  };
+  setTimeout(run, 60_000);
+  setInterval(run, ROLLUP_INTERVAL_MS);
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -102,4 +119,5 @@ Deno.serve({ port }, async (req) => {
 });
 
 startSyncLoop();
+startRollupLoop();
 console.log(`bridge ouvindo na porta ${port}`);

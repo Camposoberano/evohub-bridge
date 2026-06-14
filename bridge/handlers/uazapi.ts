@@ -5,6 +5,19 @@
 import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { adminPost, instDelete, instGet, instPost, instPut, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
+import { setInboxWebhook } from "../shared/chatwoot.ts";
+
+// Liga a saída Chatwoot→uazapi: configura o webhook esperado na inbox do Chatwoot.
+async function syncChatwootWebhook(token: string): Promise<Json> {
+  const cfg = await instGet("/chatwoot/config", token);
+  const d = (cfg.data ?? {}) as Json;
+  const url = (d.expected_webhook_url ?? (d.integration_status as Json)?.expected_webhook_url) as string | undefined;
+  const account = d.chatwoot_account_id as number | undefined;
+  const inbox = d.chatwoot_inbox_id as number | undefined;
+  if (!url || !account || !inbox) return { ok: false, reason: "config Chatwoot incompleta no uazapi" };
+  const r = await setInboxWebhook(account, inbox, url);
+  return { ok: r.ok, status: r.status, webhook: url };
+}
 
 type Json = Record<string, unknown>;
 
@@ -193,8 +206,13 @@ export async function handle(req: Request): Promise<Response> {
           create_new_conversation: cfg.create_new_conversation ?? true,
           ignore_groups: cfg.ignore_groups ?? true,
         };
-        return passthru(await instPut("/chatwoot/config", token, merged));
+        const put = await instPut("/chatwoot/config", token, merged);
+        // automático: configura o webhook da inbox no Chatwoot (saída → WhatsApp)
+        const hook = await syncChatwootWebhook(token).catch((e) => ({ ok: false, reason: String(e) }));
+        return json({ config: put.data, webhook_sync: hook }, put.ok ? 200 : put.status);
       }
+      case "chatwoot_webhook_sync":
+        return json(await syncChatwootWebhook(token));
 
       default:
         return json({ error: "ação desconhecida: " + action }, 400);
