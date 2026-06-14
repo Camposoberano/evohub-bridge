@@ -110,6 +110,20 @@ export async function handle(req: Request): Promise<Response> {
       case "edit_lead":
         return passthru(await instPost("/chat/editLead", token, body.lead ?? {}));
 
+      // ── Fase 5: grupos e canais ─────────────────────────────────────────
+      case "groups_list":
+        return passthru(await instGet("/group/list", token));
+      case "group_create":
+        return passthru(await instPost("/group/create", token, { name: body.name, participants: body.participants ?? [] }));
+      case "group_info":
+        return passthru(await instPost("/group/info", token, { groupjid: body.groupjid }));
+      case "group_leave":
+        return passthru(await instPost("/group/leave", token, { groupjid: body.groupjid }));
+      case "newsletters_list":
+        return passthru(await instGet("/newsletter/list", token));
+      case "newsletter_create":
+        return passthru(await instPost("/newsletter/create", token, { name: body.name, description: body.description }));
+
       // ── controle de instância ───────────────────────────────────────────
       case "restart_instance":
         return passthru(await instPost("/instance/reset", token, {}));

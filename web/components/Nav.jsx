@@ -11,6 +11,7 @@ const LINKS = [
   ["/analytics", "Analytics"],
   ["/disparos", "Disparos"],
   ["/ferramentas", "Ferramentas"],
+  ["/grupos", "Grupos"],
   ["/eventos", "Eventos"],
   ["/tecnologias", "Tecnologias"],
 ];
