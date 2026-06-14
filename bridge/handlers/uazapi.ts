@@ -86,6 +86,30 @@ export async function handle(req: Request): Promise<Response> {
       case "webhook_get":
         return passthru(await instGet("/webhook", token));
 
+      // ── Fase 4: contatos / bloqueios / etiquetas / CRM ──────────────────
+      case "contacts":
+        return passthru(await instGet("/contacts", token));
+      case "contact_add":
+        return passthru(await instPost("/contact/add", token, { number: body.number, name: body.name }));
+      case "contact_remove":
+        return passthru(await instPost("/contact/remove", token, { number: body.number }));
+      case "contact_details":
+        return passthru(await instPost("/chat/details", token, { number: body.number }));
+      case "block":
+        return passthru(await instPost("/chat/block", token, { number: body.number, action: body.block ? "block" : "unblock" }));
+      case "blocklist":
+        return passthru(await instGet("/chat/blocklist", token));
+      case "labels":
+        return passthru(await instGet("/labels", token));
+      case "label_edit":
+        return passthru(await instPost("/label/edit", token, body.label ?? {}));
+      case "chat_labels":
+        return passthru(await instPost("/chat/labels", token, { number: body.number, labelIds: body.labelIds, action: body.action }));
+      case "crm_fields":
+        return passthru(await instPost("/instance/updateFieldsMap", token, body.fields ?? {}));
+      case "edit_lead":
+        return passthru(await instPost("/chat/editLead", token, body.lead ?? {}));
+
       // ── controle de instância ───────────────────────────────────────────
       case "restart_instance":
         return passthru(await instPost("/instance/reset", token, {}));
