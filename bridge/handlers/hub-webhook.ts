@@ -7,8 +7,9 @@
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
-import { getChannelDetail } from "../shared/hub.ts";
+import { getChannelDetail, sendMeta } from "../shared/hub.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
+import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -172,6 +173,9 @@ async function handleWhatsApp(db: Db, p: Json) {
           content,
           attachments,
         });
+
+        // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
+        try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
       }
     }
   }
@@ -240,6 +244,36 @@ async function handleMessenger(db: Db, p: Json) {
       });
     }
   }
+}
+
+// ── Campanha gated: resposta do cliente dispara a sequência (janela 24h aberta) ──
+async function resumeCampaign(db: Db, channel: Json, from: string) {
+  const key = numKey(from);
+  const state = await readCampaigns();
+  const t = state.targets[key];
+  if (!t || t.status !== "awaiting") return; // só dispara quem está aguardando resposta
+  const camp = state.campaigns.find((c) => c.id === t.campaignId);
+  if (!camp) return;
+
+  // marca ativo já (evita disparo duplo se chegar 2 msgs juntas)
+  t.status = "active";
+  await writeCampaigns(state);
+
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+
+  for (const step of camp.steps) {
+    let body: Json;
+    if (step.type === "text") body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text ?? "" } };
+    else body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: { link: step.file, caption: step.text || undefined } };
+    await sendMeta(token, `${phone}/messages`, body);
+  }
+
+  // marca concluído
+  const s2 = await readCampaigns();
+  if (s2.targets[key]) { s2.targets[key].status = "done"; s2.targets[key].step = camp.steps.length; s2.targets[key].ts = new Date().toISOString(); await writeCampaigns(s2); }
 }
 
 function hasMessengerAttachments(message: Json): boolean {

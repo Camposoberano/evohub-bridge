@@ -22,6 +22,7 @@ const LINKS = [
   ["/contatos", "Contatos", "contatos"],
   ["/analytics", "Analytics", "analytics"],
   ["/disparos", "Disparos", "disparos"],
+  ["/campanhas", "Campanhas", "disparos"],
   ["/ferramentas", "Ferramentas", "ferramentas"],
   ["/grupos", "Grupos", "grupos"],
   ["/eventos", "Eventos", "eventos"],
