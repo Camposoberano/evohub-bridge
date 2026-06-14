@@ -80,6 +80,7 @@ Node 22 já basta:
 npm install                       # instala 'pg'
 # preencha .env (SUPABASE_DB_URL) primeiro
 npm run db:apply                  # aplica supabase/migrations/*.sql
+npm run db:apply -- 0002_llm_orchestration.sql  # aplica somente a 0002
 ```
 
 ## Projeto 1: rotacao de multiagentes (3+ LLMs)

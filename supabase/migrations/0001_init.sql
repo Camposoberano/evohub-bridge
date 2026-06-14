@@ -168,7 +168,15 @@ create table if not exists messages (
 create index if not exists idx_msg_conv     on messages(conversation_id);
 create index if not exists idx_msg_channel  on messages(channel_id, sent_at);
 create index if not exists idx_msg_meta_id  on messages(meta_message_id);
-create unique index if not exists uq_msg_meta on messages(meta_message_id) where meta_message_id is not null;
+do $$
+begin
+  create unique index if not exists uq_msg_meta
+    on messages(meta_message_id)
+    where meta_message_id is not null;
+exception
+  when unique_violation then
+    raise notice 'skipping uq_msg_meta because duplicate meta_message_id values already exist';
+end $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- events: auditoria bruta de tudo que entra (Hub + Chatwoot) — base analítica
@@ -259,8 +267,7 @@ declare t text;
 begin
   foreach t in array array['channels','contacts','conversations','messages','events','proxy_usage','daily_metrics','outcome_rules']
   loop
-    execute format(
-      'create policy %1$s_read on %1$I for select to authenticated using (true);', t
-    );
+    execute format('drop policy if exists %I on %I;', t || '_read', t);
+    execute format('create policy %I on %I for select to authenticated using (true);', t || '_read', t);
   end loop;
 end $$;

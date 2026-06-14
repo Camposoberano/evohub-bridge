@@ -1,5 +1,7 @@
-// Aplica supabase/migrations/*.sql ao Postgres alvo, sem precisar de psql/supabase CLI.
-// Uso: node --env-file=.env scripts/apply-migration.mjs   (precisa SUPABASE_DB_URL)
+// Aplica migrations SQL ao Postgres alvo, sem precisar de psql/supabase CLI.
+// Uso:
+//   node --env-file=.env scripts/apply-migration.mjs
+//   node --env-file=.env scripts/apply-migration.mjs 0002_llm_orchestration.sql
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +15,21 @@ if (!url) {
 }
 
 const dir = join(__dirname, "..", "supabase", "migrations");
-const files = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+const availableFiles = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+const requestedFiles = process.argv.slice(2).map((arg) => {
+  const file = arg.endsWith(".sql") ? arg : `${arg}.sql`;
+  if (file.includes("/") || file.includes("\\")) {
+    console.error(`ERRO: informe apenas o nome do arquivo da migration: ${arg}`);
+    process.exit(1);
+  }
+  if (!availableFiles.includes(file)) {
+    console.error(`ERRO: migration nao encontrada: ${file}`);
+    console.error(`Disponiveis: ${availableFiles.join(", ")}`);
+    process.exit(1);
+  }
+  return file;
+});
+const files = requestedFiles.length ? requestedFiles : availableFiles;
 
 const client = new pg.Client({
   connectionString: url,
