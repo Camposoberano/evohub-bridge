@@ -9,6 +9,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# NEXT_PUBLIC_* são inlinados no build. Schema "public" é onde os dados estão.
+# Sobrescreva via build args no Coolify se mudar (ex: evohub após migrar).
+ARG NEXT_PUBLIC_SUPABASE_SCHEMA=public
+ARG NEXT_PUBLIC_BRIDGE_URL=https://cofre.camposoberano.com.br
+ENV NEXT_PUBLIC_SUPABASE_SCHEMA=$NEXT_PUBLIC_SUPABASE_SCHEMA
+ENV NEXT_PUBLIC_BRIDGE_URL=$NEXT_PUBLIC_BRIDGE_URL
 RUN npm run build
 
 FROM node:22-alpine AS runner
