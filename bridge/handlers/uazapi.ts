@@ -50,7 +50,7 @@ export async function handle(req: Request): Promise<Response> {
       case "send_text":
         return passthru(await instPost("/send/text", token, { number: body.number, text: body.text, delay: body.delay }));
       case "campaign": {
-        // disparo em massa com espaçamento (sender/simple)
+        // disparo em massa com espaçamento (sender/simple). Um passo da timeline.
         const payload: Json = {
           numbers: body.numbers ?? [],
           type: body.type ?? "text",
@@ -61,6 +61,10 @@ export async function handle(req: Request): Promise<Response> {
           scheduled_for: body.scheduled_for ?? 0,
           info: body.info,
         };
+        // campos extra p/ botões/listas/documento
+        for (const k of ["choices", "buttonText", "footerText", "listButton", "docName"]) {
+          if (body[k] !== undefined) payload[k] = body[k];
+        }
         return passthru(await instPost("/sender/simple", token, payload));
       }
       case "campaigns_list":
