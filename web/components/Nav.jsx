@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import Logo from "@/components/Logo";
 
 const LINKS = [
+  ["/central", "Central"],
   ["/conexoes", "Conexões"],
   ["/conversas", "Conversas"],
   ["/contatos", "Contatos"],
