@@ -20,9 +20,12 @@ const TIPOS = [
   { t: "text", label: "Texto" },
   { t: "image", label: "Imagem" },
   { t: "video", label: "Vídeo" },
+  { t: "videoplay", label: "Vídeo nota" },
   { t: "audio", label: "Áudio" },
+  { t: "document", label: "Documento" },
   { t: "button", label: "Botões" },
 ];
+const TIPO_MIDIA = new Set(["image", "video", "videoplay", "audio", "document"]);
 let _sid = 1;
 
 export default function Disparos() {
@@ -120,7 +123,7 @@ export default function Disparos() {
     if (publicoUnico.length === 0) return setMsg("Público vazio.");
     for (const p of passos) {
       if (p.type === "text" && !p.text) return setMsg("Passo de texto sem mensagem.");
-      if (p.type !== "text" && p.type !== "button" && !p.file) return setMsg(`Passo de ${p.type} sem URL de mídia.`);
+      if (TIPO_MIDIA.has(p.type) && !p.file) return setMsg(`Passo de ${p.type} sem URL de mídia.`);
     }
     if (!confirm(`Disparar ${passos.length} passo(s) pra ${publicoUnico.length} números pela "${inst}", delay ${delayMin}-${delayMax} min entre contatos?`)) return;
     setEnviando(true);
@@ -141,6 +144,7 @@ export default function Disparos() {
         params.choices = p.choices.split("\n").map((s) => s.trim()).filter(Boolean);
         params.buttonText = "Escolha";
       }
+      if (p.type === "document" && p.docName) params.docName = p.docName;
       const r = await api("campaign", params);
       resultados.push(r.ok ? "ok" : (r.data.error || "erro"));
     }
@@ -233,8 +237,11 @@ export default function Disparos() {
                 Esperar <input type="number" value={p.waitMin} onChange={(e) => setPasso(p.id, { waitMin: e.target.value })} style={{ width: 70, margin: "0 6px" }} /> min após o passo anterior
               </div>
             )}
-            {p.type !== "text" && p.type !== "button" && (
-              <input value={p.file} onChange={(e) => setPasso(p.id, { file: e.target.value })} placeholder="URL da mídia" style={{ width: "100%", marginBottom: 8 }} />
+            {TIPO_MIDIA.has(p.type) && (
+              <input value={p.file} onChange={(e) => setPasso(p.id, { file: e.target.value })} placeholder="URL da mídia (ou base64)" style={{ width: "100%", marginBottom: 8 }} />
+            )}
+            {p.type === "document" && (
+              <input value={p.docName || ""} onChange={(e) => setPasso(p.id, { docName: e.target.value })} placeholder="Nome do arquivo (ex: catalogo.pdf)" style={{ width: "100%", marginBottom: 8 }} />
             )}
             {p.type === "button" && (
               <textarea value={p.choices} onChange={(e) => setPasso(p.id, { choices: e.target.value })} rows={2} placeholder={"Opções dos botões (uma por linha)"}
