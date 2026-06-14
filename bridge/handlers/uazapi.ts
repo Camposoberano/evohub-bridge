@@ -67,8 +67,8 @@ export async function handle(req: Request): Promise<Response> {
           scheduled_for: body.scheduled_for ?? 0,
           info: body.info,
         };
-        // campos extra p/ botões/listas/documento
-        for (const k of ["choices", "buttonText", "footerText", "listButton", "docName"]) {
+        // campos extra p/ botões/listas/enquete/documento/presença
+        for (const k of ["choices", "buttonText", "footerText", "listButton", "docName", "imageButton", "selectableCount", "delay"]) {
           if (body[k] !== undefined) payload[k] = body[k];
         }
         return passthru(await instPost("/sender/simple", token, payload));
@@ -105,6 +105,25 @@ export async function handle(req: Request): Promise<Response> {
         return passthru(await instPost("/label/edit", token, body.label ?? {}));
       case "chat_labels":
         return passthru(await instPost("/chat/labels", token, { number: body.number, labelIds: body.labelIds, action: body.action }));
+      case "label_bulk": {
+        // aplica etiqueta a vários números (quem recebeu o disparo). Cap 2000 por chamada.
+        const numbers = ((body.numbers ?? []) as string[]).slice(0, 2000);
+        const labelIds = body.labelIds;
+        let ok = 0;
+        for (const n of numbers) {
+          const r = await instPost("/chat/labels", token, { number: n, labelIds, action: "add" });
+          if (r.ok) ok++;
+        }
+        return json({ ok: true, applied: ok, total: numbers.length });
+      }
+      case "block_filter": {
+        // retorna os números que NÃO estão bloqueados.
+        const numbers = (body.numbers ?? []) as string[];
+        const bl = await instGet("/chat/blocklist", token);
+        const raw = JSON.stringify(bl.data ?? {});
+        const blocked = new Set((raw.match(/\d{12,}/g) ?? []));
+        return json({ allowed: numbers.filter((n) => !blocked.has(n)), removed: numbers.filter((n) => blocked.has(n)).length });
+      }
       case "crm_fields":
         return passthru(await instPost("/instance/updateFieldsMap", token, body.fields ?? {}));
       case "edit_lead":
