@@ -25,6 +25,8 @@ export const adminGet = (path: string) => call(path, { headers: { admintoken: AD
 export const adminPost = (path: string, body?: unknown) => call(path, { method: "POST", headers: { admintoken: ADMIN() }, body });
 export const instGet = (path: string, token: string) => call(path, { headers: { token } });
 export const instPost = (path: string, token: string, body?: unknown) => call(path, { method: "POST", headers: { token }, body });
+export const instPut = (path: string, token: string, body?: unknown) => call(path, { method: "PUT", headers: { token }, body });
+export const instDelete = (path: string, token: string, body?: unknown) => call(path, { method: "DELETE", headers: { token }, body });
 
 // Lista instâncias (admin). Normaliza campos úteis.
 export async function listInstances(): Promise<{ name: string; number: string | null; status: string; token: string }[]> {

@@ -2,9 +2,9 @@
 // O browser manda { action, instance, ...params }; o bridge resolve o token da
 // instância e chama a uazapi. Tokens nunca vão pro browser.
 // Auth: JWT do usuário do dashboard.
-import { env } from "../shared/env.ts";
+import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { instGet, instPost, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
+import { adminPost, instDelete, instGet, instPost, instPut, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
 
 type Json = Record<string, unknown>;
 
@@ -24,11 +24,17 @@ export async function handle(req: Request): Promise<Response> {
   const instance = body.instance as string | undefined;
 
   try {
-    // Ações que não precisam de instância
+    // Ações que não precisam de instância (admin)
     if (action === "instances") {
       const list = await listInstances();
       // não devolve token pro browser
       return json({ instances: list.map(({ token: _t, ...rest }) => rest) });
+    }
+    if (action === "create") {
+      return passthru(await adminPost("/instance/create", { name: body.name }));
+    }
+    if (action === "restart_api") {
+      return passthru(await adminPost("/admin/restart", {}));
     }
 
     // Demais ações precisam do token da instância
@@ -69,6 +75,48 @@ export async function handle(req: Request): Promise<Response> {
       }
       case "campaigns_list":
         return passthru(await instGet("/sender/listfolders", token));
+
+      // ── controle de instância ───────────────────────────────────────────
+      case "restart_instance":
+        return passthru(await instPost("/instance/reset", token, {}));
+      case "rename":
+        return passthru(await instPost("/instance/updateInstanceName", token, { name: body.name }));
+      case "delete":
+        return passthru(await instDelete("/instance", token, {}));
+      case "limits":
+        return passthru(await instGet("/instance/wa_messages_limits", token));
+      case "presence":
+        return passthru(await instPost("/instance/presence", token, { presence: body.presence ?? "available" }));
+      case "privacy_get":
+        return passthru(await instGet("/instance/privacy", token));
+
+      // ── proxy ───────────────────────────────────────────────────────────
+      case "proxy_get":
+        return passthru(await instGet("/instance/proxy", token));
+      case "proxy_set":
+        return passthru(await instPost("/instance/proxy", token, body.proxy ?? {}));
+      case "proxy_cities":
+        return passthru(await instGet("/proxy-managed/cities", token));
+
+      // ── Chatwoot nativo ─────────────────────────────────────────────────
+      case "chatwoot_get":
+        return passthru(await instGet("/chatwoot/config", token));
+      case "chatwoot_set": {
+        // url/token/conta vêm do env (não trafegam pelo browser); só inbox_id/flags vêm da UI.
+        const cfg = (body.config ?? {}) as Json;
+        const merged = {
+          enabled: cfg.enabled ?? true,
+          url: env("CHATWOOT_URL"),
+          access_token: optionalEnv("CHATWOOT_API_ACCESS_TOKEN") ?? "",
+          account_id: optionalEnv("CHATWOOT_ACCOUNT_ID") ?? "",
+          inbox_id: cfg.inbox_id ?? "",
+          sign_messages: cfg.sign_messages ?? false,
+          create_new_conversation: cfg.create_new_conversation ?? true,
+          ignore_groups: cfg.ignore_groups ?? true,
+        };
+        return passthru(await instPut("/chatwoot/config", token, merged));
+      }
+
       default:
         return json({ error: "ação desconhecida: " + action }, 400);
     }

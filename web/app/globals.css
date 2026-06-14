@@ -64,6 +64,7 @@ button { cursor: pointer; border: none; border-radius: 8px; }
   padding: 8px 14px;
 }
 .btn-ghost:hover { background: var(--surface-2); }
+.btn-ghost.mini { padding: 5px 10px; font-size: 12px; }
 
 .badge {
   font-size: 12px;
