@@ -13,6 +13,10 @@ function parseNumeros(txt) {
   return (txt.match(/\d[\d\s().-]{9,}/g) || []).map((s) => s.replace(/\D/g, "")).filter((d) => d.length >= 12);
 }
 function parseLista(txt) { return (txt || "").split("\n").map((s) => s.trim()).filter(Boolean); }
+function fileToB64(file) {
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+}
+function kb(n) { return n ? `${Math.round(n / 1024)} KB` : ""; }
 
 const TIPOS = [
   { t: "text", label: "Texto" },
@@ -95,9 +99,17 @@ export default function Disparos() {
     reader.readAsText(f);
   }
 
-  function addPasso(type) { setPassos([...passos, { id: _sid++, type, text: "", file: "", choices: "", footerText: "", listButton: "Ver opções", selectableCount: 1, docName: "", waitMin: passos.length ? 10 : 0 }]); }
-  function setPasso(id, patch) { setPassos(passos.map((p) => p.id === id ? { ...p, ...patch } : p)); }
+  function addPasso(type) { setPassos([...passos, { id: _sid++, type, text: "", file: "", fileName: "", choices: "", b1: "", b2: "", b3: "", footerText: "", listButton: "Ver opções", selectableCount: 1, docName: "", waitMin: passos.length ? 10 : 0 }]); }
+  function setPasso(id, patch) { setPassos((ps) => ps.map((p) => p.id === id ? { ...p, ...patch } : p)); }
   function rmPasso(id) { setPassos(passos.filter((p) => p.id !== id)); }
+  async function onFile(id, e) {
+    const f = e.target.files?.[0]; if (!f) return;
+    if (f.size > 16 * 1024 * 1024) { setMsg("Arquivo > 16MB — use URL pra arquivos grandes."); return; }
+    setMsg(`Lendo ${f.name}…`);
+    const b64 = await fileToB64(f);
+    setPasso(id, { file: b64, fileName: `${f.name} (${kb(f.size)})`, docName: f.name });
+    setMsg("");
+  }
   function mover(id, dir) { const i = passos.findIndex((p) => p.id === id), j = i + dir; if (j < 0 || j >= passos.length) return; const cp = [...passos];[cp[i], cp[j]] = [cp[j], cp[i]]; setPassos(cp); }
 
   async function conectar(nome) {
@@ -110,7 +122,7 @@ export default function Disparos() {
     const out = { type: p.type, text: p.text || undefined };
     if (MIDIA.has(p.type)) out.file = p.file || undefined;
     if (p.type === "document" && p.docName) out.docName = p.docName;
-    if (p.type === "button") { out.choices = parseLista(p.choices); out.buttonText = "Escolha"; if (p.file) out.imageButton = p.file; if (p.footerText) out.footerText = p.footerText; }
+    if (p.type === "button") { out.choices = [p.b1, p.b2, p.b3].map((s) => (s || "").trim()).filter(Boolean); out.buttonText = "Escolha"; if (p.file) out.imageButton = p.file; if (p.footerText) out.footerText = p.footerText; }
     if (p.type === "list") { out.choices = parseLista(p.choices); out.listButton = p.listButton || "Ver opções"; if (p.footerText) out.footerText = p.footerText; }
     if (p.type === "poll") { out.choices = parseLista(p.choices); out.selectableCount = Number(p.selectableCount) || 1; }
     if (presenca) out.delay = 3000; // simula digitando/gravando ~3s
@@ -124,7 +136,8 @@ export default function Disparos() {
     for (const p of passos) {
       if (p.type === "text" && !p.text) return setMsg("Passo de texto sem mensagem.");
       if (MIDIA.has(p.type) && !p.file) return setMsg(`Passo de ${p.type} sem URL.`);
-      if ((p.type === "button" || p.type === "list" || p.type === "poll") && parseLista(p.choices).length === 0) return setMsg(`Passo ${p.type} sem opções.`);
+      if (p.type === "button" && [p.b1, p.b2, p.b3].filter((s) => (s || "").trim()).length === 0) return setMsg("Passo de botões sem nenhum botão.");
+      if ((p.type === "list" || p.type === "poll") && parseLista(p.choices).length === 0) return setMsg(`Passo ${p.type} sem opções.`);
     }
     setEnviando(true);
     if (pularBloq) {
@@ -211,12 +224,40 @@ export default function Disparos() {
               </div>
             </div>
             {i > 0 && <div style={{ marginBottom: 8, fontSize: 13, color: "var(--text-dim)" }}>Esperar <input type="number" value={p.waitMin} onChange={(e) => setPasso(p.id, { waitMin: e.target.value })} style={{ width: 70, margin: "0 6px" }} /> min após o anterior</div>}
-            {(MIDIA.has(p.type) || p.type === "button") && <input value={p.file} onChange={(e) => setPasso(p.id, { file: e.target.value })} placeholder={p.type === "button" ? "URL imagem do botão (opcional)" : "URL da mídia (ou base64)"} style={{ width: "100%", marginBottom: 8 }} />}
+
+            {/* upload de mídia (vira base64) — image/video/videoplay/audio/document e imagem do botão */}
+            {(MIDIA.has(p.type) || p.type === "button") && (
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 12, color: "var(--text-dim)" }}>{p.type === "button" ? "Imagem do botão (opcional)" : "Arquivo do computador"}</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                  <input type="file" onChange={(e) => onFile(p.id, e)}
+                    accept={p.type === "image" || p.type === "button" ? "image/*" : p.type === "audio" ? "audio/*" : p.type === "document" ? "*" : "video/*"}
+                    style={{ fontSize: 13 }} />
+                  {p.fileName && <span className="badge badge-green" style={{ fontSize: 11 }}>{p.fileName}</span>}
+                  {p.file && <button className="btn-ghost mini" onClick={() => setPasso(p.id, { file: "", fileName: "" })}>limpar</button>}
+                </div>
+                <input value={p.file?.startsWith("data:") ? "" : (p.file || "")} onChange={(e) => setPasso(p.id, { file: e.target.value, fileName: "" })}
+                  placeholder="…ou cole uma URL (p/ arquivos grandes)" style={{ width: "100%", marginTop: 6, fontSize: 13 }} />
+              </div>
+            )}
+
             {p.type === "document" && <input value={p.docName} onChange={(e) => setPasso(p.id, { docName: e.target.value })} placeholder="Nome do arquivo (ex: catalogo.pdf)" style={{ width: "100%", marginBottom: 8 }} />}
+
+            {/* BOTÕES: até 3, cada um seu campo */}
+            {p.type === "button" && (
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontSize: 12, color: "var(--text-dim)" }}>Botões (até 3)</label>
+                {["b1", "b2", "b3"].map((b, idx) => (
+                  <input key={b} value={p[b]} onChange={(e) => setPasso(p.id, { [b]: e.target.value })} placeholder={`Botão ${idx + 1}`} style={{ width: "100%", marginTop: 6 }} />
+                ))}
+              </div>
+            )}
+
             {p.type === "list" && <input value={p.listButton} onChange={(e) => setPasso(p.id, { listButton: e.target.value })} placeholder="Texto do botão da lista" style={{ width: "100%", marginBottom: 8 }} />}
             {p.type === "poll" && <input type="number" value={p.selectableCount} onChange={(e) => setPasso(p.id, { selectableCount: e.target.value })} placeholder="Qtd selecionável" style={{ width: 160, marginBottom: 8 }} />}
-            {(p.type === "button" || p.type === "list" || p.type === "poll") && <textarea value={p.choices} onChange={(e) => setPasso(p.id, { choices: e.target.value })} rows={2} placeholder={"Opções (uma por linha)"} style={{ width: "100%", marginBottom: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />}
-            <textarea value={p.text} onChange={(e) => setPasso(p.id, { text: e.target.value })} rows={2} placeholder={p.type === "text" ? "Mensagem…" : p.type === "poll" ? "Pergunta…" : "Texto/legenda…"} style={{ width: "100%", marginBottom: (p.type === "button" || p.type === "list") ? 8 : 0, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />
+            {(p.type === "list" || p.type === "poll") && <textarea value={p.choices} onChange={(e) => setPasso(p.id, { choices: e.target.value })} rows={3} placeholder={"Opções (uma por linha)"} style={{ width: "100%", marginBottom: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />}
+
+            <textarea value={p.text} onChange={(e) => setPasso(p.id, { text: e.target.value })} rows={2} placeholder={p.type === "text" ? "Mensagem…" : p.type === "poll" ? "Pergunta…" : p.type === "button" || p.type === "list" ? "Texto do card…" : "Legenda (opcional)…"} style={{ width: "100%", marginBottom: (p.type === "button" || p.type === "list") ? 8 : 0, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />
             {(p.type === "button" || p.type === "list") && <input value={p.footerText} onChange={(e) => setPasso(p.id, { footerText: e.target.value })} placeholder="Rodapé (opcional)" style={{ width: "100%" }} />}
           </div>
         ))}
