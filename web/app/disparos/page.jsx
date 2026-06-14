@@ -193,7 +193,7 @@ export default function Disparos() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Disparos</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Disparos</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Campanha com linha do tempo, tipos ricos e anti-ban. Use chips separados.</div>
         </div>
         {msg && <div className="card" style={{ marginBottom: 16, fontSize: 13, wordBreak: "break-word" }}>{msg}</div>}

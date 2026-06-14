@@ -62,7 +62,7 @@ export default function Grupos() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Grupos & Canais</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Grupos & Canais</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Gerenciar grupos e canais (newsletters) por instância</div>
         </div>
 

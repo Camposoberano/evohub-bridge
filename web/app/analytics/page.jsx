@@ -115,7 +115,7 @@ export default function Analytics() {
       <div className="shell">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 22 }}>
           <div>
-            <div style={{ fontSize: 24, fontWeight: 700 }}>Analytics</div>
+            <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Analytics</div>
             <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Operacional e comercial</div>
           </div>
           <div style={{ display: "flex", gap: 10 }}>

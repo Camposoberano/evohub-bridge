@@ -104,7 +104,7 @@ export default function Instancias() {
       <div className="shell">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 24, fontWeight: 700 }}>Instâncias (uazapi)</div>
+            <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Instâncias (uazapi)</div>
             <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Conectar, proxy, limites e Chatwoot por número</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>

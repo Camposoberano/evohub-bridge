@@ -65,7 +65,7 @@ export default function Eventos() {
       <div className="shell">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18, gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 24, fontWeight: 700 }}>Monitor de eventos</div>
+            <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Monitor de eventos</div>
             <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Tudo que entra/sai em tempo real (webhooks)</div>
           </div>
           <button className="btn-ghost" onClick={ligarWebhook}>Ligar webhook uazapi</button>

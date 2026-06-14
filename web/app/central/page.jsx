@@ -87,7 +87,7 @@ export default function Central() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Central de Conexões</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Central de Conexões</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>
             Cada tela = um Chatwoot. Adicione canais por tela (oficial ou não-oficial).
           </div>

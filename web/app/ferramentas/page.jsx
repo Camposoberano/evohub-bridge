@@ -55,7 +55,7 @@ export default function Ferramentas() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Ferramentas WhatsApp</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Ferramentas WhatsApp</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Verificar número, bloqueios, etiquetas e contatos por instância</div>
         </div>
 

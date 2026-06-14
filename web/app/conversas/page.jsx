@@ -89,7 +89,7 @@ export default function Conversas() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Conversas</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Conversas</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>
             Acompanhe e marque o resultado comercial (ganho/perdido)
           </div>

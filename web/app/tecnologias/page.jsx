@@ -106,7 +106,7 @@ export default function Tecnologias() {
       <Nav />
       <div className="shell">
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>Tecnologias</div>
+          <div className="display" style={{ fontSize: 26, fontWeight: 700 }}>Tecnologias</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>
             Saúde dos números, integrações ativas e segurança
           </div>
