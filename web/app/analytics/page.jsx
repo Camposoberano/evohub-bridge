@@ -28,19 +28,22 @@ export default function Analytics() {
   const [msgs, setMsgs] = useState([]);
   const [contatos, setContatos] = useState([]);
   const [convs, setConvs] = useState([]);
+  const [mortos, setMortos] = useState([]);
 
   const carregar = useCallback(async (d) => {
     const desde = new Date(Date.now() - d * DAY).toISOString();
-    const [ch, ms, ct, cv] = await Promise.all([
+    const [ch, ms, ct, cv, dead] = await Promise.all([
       supabase.from("channels").select("id,name,type"),
-      supabase.from("messages").select("channel_id,direction,sent_at,created_at").gte("created_at", desde),
+      supabase.from("messages").select("channel_id,direction,status,sent_at,created_at").gte("created_at", desde),
       supabase.from("contacts").select("channel_id,first_seen_at").gte("first_seen_at", desde),
       supabase.from("conversations").select("channel_id,opened_at,first_response_at,resolved_at,outcome,outcome_value_cents,outcome_set_at"),
+      supabase.from("contacts").select("channel_id,attributes").eq("attributes->>dead", "true"),
     ]);
     setCanais(ch.data || []);
     setMsgs(ms.data || []);
     setContatos(ct.data || []);
     setConvs(cv.data || []);
+    setMortos(dead.data || []);
   }, []);
 
   useEffect(() => {
@@ -90,6 +93,19 @@ export default function Analytics() {
   }, [msgs, f, dias]);
 
   const maxBar = Math.max(1, ...serie.map((s) => s.in + s.out));
+
+  // Funil de entrega (saída) por status + números mortos.
+  const entrega = useMemo(() => {
+    const out = f(msgs).filter((x) => x.direction === "out");
+    const c = (s) => out.filter((x) => x.status === s).length;
+    return {
+      enviadas: out.length,
+      entregues: c("delivered") + c("read"),
+      lidas: c("read"),
+      falhas: c("failed"),
+    };
+  }, [msgs, f]);
+  const numerosMortos = useMemo(() => (canalId === "todos" ? mortos : mortos.filter((m) => m.channel_id === canalId)).length, [mortos, canalId]);
 
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
 
@@ -142,6 +158,18 @@ export default function Analytics() {
             <span><span className="legend-dot" style={{ background: "var(--blue)" }} />Recebidas</span>
             <span><span className="legend-dot" style={{ background: "var(--mint)" }} />Enviadas</span>
           </div>
+        </div>
+
+        <div style={{ fontSize: 13, color: "var(--text-faint)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".03em" }}>Entrega (saída)</div>
+        <div className="stat-grid" style={{ marginBottom: 8 }}>
+          <Stat label="Enviadas" value={entrega.enviadas} />
+          <Stat label="Entregues" value={entrega.entregues} sub={entrega.enviadas ? `${Math.round(entrega.entregues / entrega.enviadas * 100)}%` : null} />
+          <Stat label="Lidas" value={entrega.lidas} sub={entrega.enviadas ? `${Math.round(entrega.lidas / entrega.enviadas * 100)}%` : null} />
+          <Stat label="Falhas" value={entrega.falhas} />
+          <Stat label="Números mortos" value={numerosMortos} sub="inexistentes / inválidos" />
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 24 }}>
+          Status vem da Meta (entregue/lido). Número morto = envio falhou por inexistente — some das campanhas.
         </div>
 
         <div style={{ fontSize: 13, color: "var(--text-faint)", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".03em" }}>Comercial</div>

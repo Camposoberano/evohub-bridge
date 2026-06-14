@@ -2,12 +2,14 @@
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import Logo from "@/components/Logo";
 
 const LINKS = [
   ["/conexoes", "Conexões"],
   ["/conversas", "Conversas"],
   ["/contatos", "Contatos"],
   ["/analytics", "Analytics"],
+  ["/tecnologias", "Tecnologias"],
 ];
 
 export default function Nav() {
@@ -22,7 +24,7 @@ export default function Nav() {
   return (
     <div className="nav">
       <div className="nav-inner">
-        <div className="nav-brand">EVO Hub</div>
+        <Link href="/conexoes" className="nav-brand"><Logo /></Link>
         <nav className="nav-links">
           {LINKS.map(([href, label]) => (
             <Link key={href} href={href}

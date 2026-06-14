@@ -124,6 +124,10 @@ async function handleWhatsApp(db: Db, p: Json) {
         continue;
       }
 
+      // Status de saída (sent/delivered/read/failed) — atualiza messages e marca número morto.
+      const statuses = (value.statuses ?? []) as Json[];
+      if (statuses.length > 0) await handleWhatsAppStatuses(db, channel as Json, statuses);
+
       const contactsMeta = (value.contacts ?? []) as Json[];
       const messages = (value.messages ?? []) as Json[];
       if (messages.length === 0) continue;
@@ -168,6 +172,38 @@ async function handleWhatsApp(db: Db, p: Json) {
           content,
           attachments,
         });
+      }
+    }
+  }
+}
+
+// Erros da Meta que indicam número inexistente / não-WhatsApp (número morto).
+const DEAD_NUMBER_ERRORS = new Set([131026, 131051, 131047, 131000]);
+
+async function handleWhatsAppStatuses(db: Db, channel: Json, statuses: Json[]) {
+  for (const s of statuses) {
+    const wamid = stringValue(s.id);
+    const status = stringValue(s.status); // sent | delivered | read | failed
+    if (!wamid || !status) continue;
+
+    // ordem: não regredir read->delivered. Atualiza só se "avança" ou é failed.
+    const patch: Json = { status };
+    await db.from("messages").update(patch).eq("meta_message_id", wamid).eq("direction", "out");
+
+    if (status === "failed") {
+      const errors = (s.errors ?? []) as Json[];
+      const code = errors[0]?.code as number | undefined;
+      const recipient = stringValue(s.recipient_id);
+      if (recipient && code && DEAD_NUMBER_ERRORS.has(code)) {
+        // marca contato como número morto (attributes.dead) p/ limpar das campanhas.
+        const { data: contact } = await db.from("contacts").select("id,attributes")
+          .eq("channel_id", channel.id).eq("external_contact_id", recipient).maybeSingle();
+        if (contact) {
+          const attrs = (contact.attributes ?? {}) as Json;
+          await db.from("contacts").update({
+            attributes: { ...attrs, dead: true, dead_reason: code, dead_at: new Date().toISOString() },
+          }).eq("id", contact.id);
+        }
       }
     }
   }

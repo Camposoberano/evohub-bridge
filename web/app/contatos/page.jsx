@@ -26,6 +26,7 @@ export default function Contatos() {
   const [busca, setBusca] = useState("");
   const [fUf, setFUf] = useState("todos");
   const [fJanela, setFJanela] = useState("todos");
+  const [fMorto, setFMorto] = useState("vivos");
 
   const carregar = useCallback(async () => {
     const [ct, cv] = await Promise.all([
@@ -46,12 +47,29 @@ export default function Contatos() {
     });
   }, [router, carregar]);
 
+  // mapa telefone(normalizado) -> nº de registros (mesma pessoa em 2 números/canais)
+  const foneCount = useMemo(() => {
+    const m = {};
+    for (const c of contatos) {
+      const d = String(c.phone || c.external_contact_id || "").replace(/\D/g, "");
+      if (d.length >= 10) m[d] = (m[d] || 0) + 1;
+    }
+    return m;
+  }, [contatos]);
+
   // enriquece com UF/região derivados do telefone
   const enriquecidos = useMemo(() => contatos.map((c) => {
     const fone = c.phone || c.external_contact_id;
     const uf = c.channels?.type === "whatsapp" ? ufFromPhone(fone) : null;
-    return { ...c, uf, regiao: uf ? UF_REGIAO[uf] : (c.channels?.type === "whatsapp" ? regiaoFromPhone(fone) : null), janelaAberta: janela(c.last_seen_at) };
-  }), [contatos]);
+    const d = String(fone || "").replace(/\D/g, "");
+    return {
+      ...c, uf,
+      regiao: uf ? UF_REGIAO[uf] : (c.channels?.type === "whatsapp" ? regiaoFromPhone(fone) : null),
+      janelaAberta: janela(c.last_seen_at),
+      dead: Boolean((c.attributes || {}).dead),
+      multiNum: d.length >= 10 && foneCount[d] > 1,
+    };
+  }), [contatos, foneCount]);
 
   const ufsPresentes = useMemo(() => {
     const s = new Set(enriquecidos.map((c) => c.uf).filter(Boolean));
@@ -65,6 +83,8 @@ export default function Contatos() {
     if (fUf !== "todos" && c.uf !== fUf) return false;
     if (fJanela === "aberta" && !c.janelaAberta) return false;
     if (fJanela === "fechada" && c.janelaAberta) return false;
+    if (fMorto === "vivos" && c.dead) return false;
+    if (fMorto === "mortos" && !c.dead) return false;
     return true;
   });
 
@@ -109,6 +129,11 @@ export default function Contatos() {
             <option value="aberta">Janela aberta (24h)</option>
             <option value="fechada">Janela fechada</option>
           </select>
+          <select value={fMorto} onChange={(e) => setFMorto(e.target.value)}>
+            <option value="vivos">Só ativos</option>
+            <option value="todos">Incluir mortos</option>
+            <option value="mortos">Só números mortos</option>
+          </select>
           <span className="badge badge-gray">{filtrados.length}</span>
         </div>
 
@@ -122,7 +147,11 @@ export default function Contatos() {
                 <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-dim)", padding: 30 }}>Nenhum contato</td></tr>
               ) : filtrados.slice(0, 500).map((c) => (
                 <tr key={c.id}>
-                  <td>{c.name || <span style={{ color: "var(--text-faint)" }}>{c.external_contact_id}</span>}</td>
+                  <td>
+                    {c.name || <span style={{ color: "var(--text-faint)" }}>{c.external_contact_id}</span>}
+                    {c.dead && <span className="badge badge-red" style={{ marginLeft: 6, fontSize: 10 }}>morto</span>}
+                    {c.multiNum && <span className="badge badge-amber" style={{ marginLeft: 6, fontSize: 10 }}>2+ núm.</span>}
+                  </td>
                   <td>{PLAT[c.channels?.type] || c.channels?.type || "—"}<div style={{ fontSize: 12, color: "var(--text-faint)" }}>{c.channels?.name}</div></td>
                   <td style={{ fontSize: 13 }}>{c.phone || "—"}</td>
                   <td>{c.uf ? <span className="badge badge-gray">{c.uf}</span> : <span style={{ color: "var(--text-faint)" }}>—</span>}{c.regiao && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>{c.regiao}</div>}</td>

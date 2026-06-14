@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Evo Hub — Painel",
+  title: "Soberano — Painel",
   description: "Conexões e atendimento — Facebook, Instagram e WhatsApp",
 };
 

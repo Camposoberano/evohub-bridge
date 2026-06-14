@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import Logo from "@/components/Logo";
 
 export default function Login() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export default function Login() {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <form onSubmit={entrar} className="card" style={{ width: 360, maxWidth: "100%" }}>
-        <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 2 }}>Evo Hub</div>
+        <div style={{ marginBottom: 4 }}><Logo size={30} /></div>
         <div style={{ color: "var(--text-dim)", fontSize: 14, marginBottom: 22 }}>Entre no seu painel</div>
 
         <label style={{ fontSize: 13, color: "var(--text-dim)" }}>E-mail</label>
