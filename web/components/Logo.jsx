@@ -1,22 +1,24 @@
-// Marca Soberano — coroa + wordmark. size controla a altura do ícone.
-export default function Logo({ size = 22, showText = true }) {
+// Marca Soberano — coroa em ouro + wordmark Fraunces. size controla a altura do ícone.
+export default function Logo({ size = 24, showText = true }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 9 }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden>
         <defs>
-          <linearGradient id="sob-grad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#00e2a0" />
-            <stop offset="1" stopColor="#00b07c" />
+          <linearGradient id="sob-gold" x1="2" y1="3" x2="22" y2="20" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#f3dd9a" />
+            <stop offset=".5" stopColor="#d8b766" />
+            <stop offset="1" stopColor="#b8923f" />
           </linearGradient>
         </defs>
-        <path d="M3 8.5l3.4 2.6L12 4l5.6 7.1L21 8.5l-1.6 9.2a1 1 0 0 1-1 .8H5.6a1 1 0 0 1-1-.8L3 8.5Z"
-          fill="url(#sob-grad)" />
-        <circle cx="3" cy="8.5" r="1.6" fill="#00e2a0" />
-        <circle cx="21" cy="8.5" r="1.6" fill="#00e2a0" />
-        <circle cx="12" cy="4" r="1.8" fill="#00e2a0" />
+        <path d="M3 8.6l3.5 2.7L12 4l5.5 7.3L21 8.6l-1.7 9.1a1 1 0 0 1-1 .8H5.7a1 1 0 0 1-1-.8L3 8.6Z"
+          fill="url(#sob-gold)" />
+        <rect x="5.4" y="19" width="13.2" height="1.7" rx=".85" fill="url(#sob-gold)" />
+        <circle cx="3" cy="8.6" r="1.5" fill="#f3dd9a" />
+        <circle cx="21" cy="8.6" r="1.5" fill="#f3dd9a" />
+        <circle cx="12" cy="4" r="1.7" fill="#f3dd9a" />
       </svg>
       {showText && (
-        <span style={{ fontWeight: 800, fontSize: 17, letterSpacing: "-.01em", color: "var(--text)" }}>
+        <span style={{ fontFamily: '"Fraunces", serif', fontWeight: 600, fontSize: 19, letterSpacing: "-.01em", color: "var(--text)" }}>
           Soberano
         </span>
       )}
