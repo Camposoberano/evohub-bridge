@@ -31,6 +31,14 @@ export default function Central() {
   const [uaz, setUaz] = useState([]);
   const [add, setAdd] = useState(false);
   const [msg, setMsg] = useState("");
+  const [assign, setAssign] = useState({}); // { instanceName: contaId } — atribuição manual (localStorage)
+
+  useEffect(() => { try { setAssign(JSON.parse(localStorage.getItem("inst_tela") || "{}")); } catch (_) {} }, []);
+  function atribuir(nome, contaId) {
+    const novo = { ...assign, [nome]: contaId };
+    setAssign(novo);
+    try { localStorage.setItem("inst_tela", JSON.stringify(novo)); } catch (_) {}
+  }
 
   async function api(action, params = {}) {
     const { data: { session } } = await supabase.auth.getSession();
@@ -90,7 +98,7 @@ export default function Central() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
           {CONTAS.map((conta) => {
             const chs = conta.ativa ? canais : [];
-            const uazChs = conta.ativa ? uaz : [];
+            const uazChs = conta.ativa ? uaz.filter((i) => assign[i.name] === conta.id) : [];
             return (
               <div key={conta.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-2)" }}>
@@ -150,11 +158,37 @@ export default function Central() {
             );
           })}
 
-          {/* slot pra adicionar outra tela/Chatwoot no futuro */}
-          <div className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 160, color: "var(--text-faint)", borderStyle: "dashed" }}>
+          {/* adicionar outra tela/Chatwoot */}
+          <button className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 160, color: "var(--text-faint)", borderStyle: "dashed", cursor: "pointer", background: "var(--surface)" }}
+            onClick={() => alert("Pra adicionar outro Chatwoot (outra conta/URL) preciso da URL + token + account_id dele. Me passa que eu ligo — vai virar uma coluna aqui.")}>
             <div style={{ fontSize: 30, marginBottom: 6 }}>+</div>
-            <div style={{ fontSize: 14, textAlign: "center" }}>Adicionar Chatwoot<br /><span style={{ fontSize: 12 }}>(outra conta/cliente — em breve)</span></div>
-          </div>
+            <div style={{ fontSize: 14, textAlign: "center" }}>Adicionar Chatwoot<br /><span style={{ fontSize: 12 }}>(outra conta/cliente)</span></div>
+          </button>
+        </div>
+
+        {/* INSTÂNCIAS uazapi — todas; atribua cada uma à tela certa */}
+        <div className="section-title" style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>WhatsApp não-oficial (uazapi) — {uaz.length} instâncias</span>
+          <button className="btn-ghost mini" onClick={() => router.push("/instancias")}>Gerenciar</button>
+        </div>
+        <div className="table-wrap">
+          {uaz.length === 0 ? <div style={{ padding: 16, color: "var(--text-dim)" }}>Nenhuma instância.</div> :
+            uaz.map((i) => {
+              const [cls, txt] = statusBadge(i.status);
+              return (
+                <div key={i.name} className="integ">
+                  <div className="integ-body"><div className="integ-name">{i.name}</div><div className="integ-desc">{i.number || "—"}</div></div>
+                  <span className={"badge " + cls}>{txt}</span>
+                  <select value={assign[i.name] || ""} onChange={(e) => atribuir(i.name, e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
+                    <option value="">— tela —</option>
+                    {CONTAS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                  </select>
+                </div>
+              );
+            })}
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 8 }}>
+          O uazapi não informa a qual Chatwoot cada número pertence — atribua a tela aqui. (Salvo no navegador; depois persisto no banco.)
         </div>
       </div>
     </>

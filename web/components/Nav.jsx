@@ -5,12 +5,10 @@ import { supabase } from "@/lib/supabase";
 import Logo from "@/components/Logo";
 
 const LINKS = [
-  ["/central", "Central"],
-  ["/conexoes", "Conexões"],
+  ["/central", "Conexões"],
   ["/conversas", "Conversas"],
   ["/contatos", "Contatos"],
   ["/analytics", "Analytics"],
-  ["/instancias", "Instâncias"],
   ["/disparos", "Disparos"],
   ["/tecnologias", "Tecnologias"],
 ];
