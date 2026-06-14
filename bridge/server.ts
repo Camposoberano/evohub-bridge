@@ -15,6 +15,7 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
+import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
@@ -35,6 +36,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
+  "/meta-templates": metaTemplates,
   "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
@@ -57,8 +59,9 @@ const version = {
     "uazapi",
     "rollup-loop",
     "media-retention-bucket",
+    "meta-templates",
   ],
-  build: "2026-06-14-media-retention",
+  build: "2026-06-14-meta-templates",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
