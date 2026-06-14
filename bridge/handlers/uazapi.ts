@@ -76,6 +76,16 @@ export async function handle(req: Request): Promise<Response> {
       case "campaigns_list":
         return passthru(await instGet("/sender/listfolders", token));
 
+      // ── monitor de eventos: aponta a instância pro nosso receptor ────────
+      case "set_webhook": {
+        const base = env("BRIDGE_PUBLIC_BASE").replace(/\/+$/, "");
+        const wtoken = optionalEnv("UAZAPI_WEBHOOK_TOKEN") ?? env("CHATWOOT_WEBHOOK_SECRET");
+        const hookUrl = `${base}/uazapi-webhook?token=${encodeURIComponent(wtoken)}`;
+        return passthru(await instPost("/webhook", token, { url: hookUrl, enabled: true, action: "add" }));
+      }
+      case "webhook_get":
+        return passthru(await instGet("/webhook", token));
+
       // ── controle de instância ───────────────────────────────────────────
       case "restart_instance":
         return passthru(await instPost("/instance/reset", token, {}));
