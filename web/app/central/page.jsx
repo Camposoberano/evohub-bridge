@@ -31,13 +31,13 @@ export default function Central() {
   const [uaz, setUaz] = useState([]);
   const [add, setAdd] = useState(false);
   const [msg, setMsg] = useState("");
-  const [assign, setAssign] = useState({}); // { instanceName: contaId } — atribuição manual (localStorage)
+  const [assign, setAssign] = useState({}); // { instanceName: contaId } — persistido no banco (Supabase Storage via bridge)
 
-  useEffect(() => { try { setAssign(JSON.parse(localStorage.getItem("inst_tela") || "{}")); } catch (_) {} }, []);
-  function atribuir(nome, contaId) {
+  async function atribuir(nome, contaId) {
     const novo = { ...assign, [nome]: contaId };
-    setAssign(novo);
-    try { localStorage.setItem("inst_tela", JSON.stringify(novo)); } catch (_) {}
+    setAssign(novo); // otimista
+    const r = await api("assign_set", { instance: nome, conta: contaId });
+    if (r.ok && r.data.assign) setAssign(r.data.assign);
   }
 
   async function api(action, params = {}) {
@@ -54,6 +54,8 @@ export default function Central() {
     setCanais(ch.data || []);
     const r = await api("instances");
     if (r.ok && r.data.instances) setUaz(r.data.instances);
+    const a = await api("assign_get");
+    if (a.ok && a.data.assign) setAssign(a.data.assign);
   }, []);
 
   useEffect(() => {
@@ -188,7 +190,7 @@ export default function Central() {
             })}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 8 }}>
-          O uazapi não informa a qual Chatwoot cada número pertence — atribua a tela aqui. (Salvo no navegador; depois persisto no banco.)
+          O uazapi não informa a qual Chatwoot cada número pertence — atribua a tela aqui. (Salvo no banco; vale em qualquer dispositivo.)
         </div>
       </div>
     </>

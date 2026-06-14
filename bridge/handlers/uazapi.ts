@@ -6,6 +6,21 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { adminPost, instDelete, instGet, instPost, instPut, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
 import { setInboxWebhook } from "../shared/chatwoot.ts";
+import { admin } from "../shared/supabase.ts";
+
+const ASSIGN_BUCKET = "soberano-config";
+const ASSIGN_FILE = "instance-telas.json";
+// deno-lint-ignore no-explicit-any
+async function readAssign(): Promise<Record<string, string>> {
+  const { data } = await (admin() as any).storage.from(ASSIGN_BUCKET).download(ASSIGN_FILE);
+  if (!data) return {};
+  try { return JSON.parse(await data.text()); } catch { return {}; }
+}
+async function writeAssign(obj: Record<string, string>) {
+  const blob = new Blob([JSON.stringify(obj)], { type: "application/json" });
+  // deno-lint-ignore no-explicit-any
+  await (admin() as any).storage.from(ASSIGN_BUCKET).upload(ASSIGN_FILE, blob, { upsert: true, contentType: "application/json" });
+}
 
 // Liga a saída Chatwoot→uazapi: configura o webhook esperado na inbox do Chatwoot.
 async function syncChatwootWebhook(token: string): Promise<Json> {
@@ -48,6 +63,19 @@ export async function handle(req: Request): Promise<Response> {
     }
     if (action === "restart_api") {
       return passthru(await adminPost("/admin/restart", {}));
+    }
+    if (action === "assign_get") {
+      return json({ assign: await readAssign() });
+    }
+    if (action === "assign_set") {
+      const cur = await readAssign();
+      const inst = body.instance as string | undefined;
+      if (inst) {
+        if (body.conta) cur[inst] = body.conta as string;
+        else delete cur[inst];
+      }
+      await writeAssign(cur);
+      return json({ ok: true, assign: cur });
     }
 
     // Demais ações precisam do token da instância
