@@ -73,6 +73,11 @@ button { cursor: pointer; border: none; border-radius: 8px; }
 .menu-item:hover { background: var(--surface); }
 .menu-item-danger { color: var(--red); }
 
+/* Passo de disparo — accent na borda esquerda */
+.passo { border-left: 3px solid var(--mint-dark); }
+.section-title { line-height: 1.2; }
+textarea:focus, input:focus { border-color: var(--mint-dark); }
+
 .badge {
   font-size: 12px;
   font-weight: 600;

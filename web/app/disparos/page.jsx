@@ -28,6 +28,7 @@ const TIPOS = [
   { t: "button", label: "Botões" },
   { t: "list", label: "Lista" },
   { t: "poll", label: "Enquete" },
+  { t: "carousel", label: "Carrossel" },
 ];
 const MIDIA = new Set(["image", "video", "videoplay", "audio", "document"]);
 let _sid = 1;
@@ -99,7 +100,26 @@ export default function Disparos() {
     reader.readAsText(f);
   }
 
-  function addPasso(type) { setPassos([...passos, { id: _sid++, type, text: "", file: "", fileName: "", choices: "", b1: "", b2: "", b3: "", footerText: "", listButton: "Ver opções", selectableCount: 1, docName: "", waitMin: passos.length ? 10 : 0 }]); }
+  function addPasso(type) { setPassos([...passos, { id: _sid++, type, text: "", file: "", fileName: "", choices: "", b1: "", b2: "", b3: "", footerText: "", listButton: "Ver opções", selectableCount: 1, docName: "", cards: [], waitMin: passos.length ? 10 : 0 }]); }
+  // carrossel: cards aninhados
+  function addCard(id) { setPassos((ps) => ps.map((p) => p.id === id ? { ...p, cards: [...(p.cards || []), { cid: _sid++, file: "", fileName: "", text: "", b1: "", b2: "", b3: "" }] } : p)); }
+  function setCard(id, cid, patch) { setPassos((ps) => ps.map((p) => p.id === id ? { ...p, cards: p.cards.map((c) => c.cid === cid ? { ...c, ...patch } : c) } : p)); }
+  function rmCard(id, cid) { setPassos((ps) => ps.map((p) => p.id === id ? { ...p, cards: p.cards.filter((c) => c.cid !== cid) } : p)); }
+  async function onCardFile(id, cid, e) {
+    const f = e.target.files?.[0]; if (!f) return;
+    if (f.size > 16 * 1024 * 1024) { setMsg("Arquivo > 16MB."); return; }
+    const b64 = await fileToB64(f);
+    setCard(id, cid, { file: b64, fileName: `${f.name} (${kb(f.size)})` });
+  }
+  function buildCards(p) {
+    return (p.cards || []).map((c) => {
+      const card = { text: c.text || undefined };
+      if (c.file) { if (c.file.startsWith("data:video")) card.video = c.file; else card.image = c.file; }
+      const btns = [c.b1, c.b2, c.b3].map((s) => (s || "").trim()).filter(Boolean).map((t, i) => ({ id: `b${i}`, text: t, type: "REPLY" }));
+      if (btns.length) card.buttons = btns;
+      return card;
+    });
+  }
   function setPasso(id, patch) { setPassos((ps) => ps.map((p) => p.id === id ? { ...p, ...patch } : p)); }
   function rmPasso(id) { setPassos(passos.filter((p) => p.id !== id)); }
   async function onFile(id, e) {
@@ -138,6 +158,7 @@ export default function Disparos() {
       if (MIDIA.has(p.type) && !p.file) return setMsg(`Passo de ${p.type} sem URL.`);
       if (p.type === "button" && [p.b1, p.b2, p.b3].filter((s) => (s || "").trim()).length === 0) return setMsg("Passo de botões sem nenhum botão.");
       if ((p.type === "list" || p.type === "poll") && parseLista(p.choices).length === 0) return setMsg(`Passo ${p.type} sem opções.`);
+      if (p.type === "carousel" && (p.cards || []).length === 0) return setMsg("Carrossel sem cards.");
     }
     setEnviando(true);
     if (pularBloq) {
@@ -150,11 +171,15 @@ export default function Disparos() {
     for (let i = 0; i < passos.length; i++) {
       const p = passos[i]; acumulado += Number(p.waitMin) || 0;
       setMsg(`Passo ${i + 1}/${passos.length} (${p.type})…`);
-      await api("campaign", {
-        instance: inst, numbers: alvo, ...paramsDoPasso(p),
-        delayMin: Math.round(Number(delayMin) * 60), delayMax: Math.round(Number(delayMax) * 60),
-        scheduled_for: acumulado, info: `Soberano ${uf !== "nenhum" ? uf : "lista"} p${i + 1}`,
-      });
+      if (p.type === "carousel") {
+        await api("campaign_carousel", { instance: inst, numbers: alvo, text: p.text || "", carousel: buildCards(p) });
+      } else {
+        await api("campaign", {
+          instance: inst, numbers: alvo, ...paramsDoPasso(p),
+          delayMin: Math.round(Number(delayMin) * 60), delayMax: Math.round(Number(delayMax) * 60),
+          scheduled_for: acumulado, info: `Soberano ${uf !== "nenhum" ? uf : "lista"} p${i + 1}`,
+        });
+      }
     }
     if (etiqueta) { setMsg("Etiquetando quem recebeu…"); const r = await api("label_bulk", { instance: inst, numbers: alvo, labelIds: [etiqueta] }); setMsg(`Disparo criado. Etiqueta aplicada em ${r.data?.applied ?? 0}/${alvo.length}.`); }
     else setMsg(`Disparo criado pra ${alvo.length} números.`);
@@ -214,7 +239,7 @@ export default function Disparos() {
           {TIPOS.map((t) => <button key={t.t} className="btn-ghost mini" onClick={() => addPasso(t.t)}>+ {t.label}</button>)}
         </div>
         {passos.map((p, i) => (
-          <div key={p.id} className="card" style={{ marginBottom: 10 }}>
+          <div key={p.id} className="card passo" style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
               <span style={{ fontWeight: 600 }}>Passo {i + 1} · {TIPOS.find((x) => x.t === p.type)?.label}</span>
               <div style={{ display: "flex", gap: 6 }}>
@@ -257,11 +282,30 @@ export default function Disparos() {
             {p.type === "poll" && <input type="number" value={p.selectableCount} onChange={(e) => setPasso(p.id, { selectableCount: e.target.value })} placeholder="Qtd selecionável" style={{ width: 160, marginBottom: 8 }} />}
             {(p.type === "list" || p.type === "poll") && <textarea value={p.choices} onChange={(e) => setPasso(p.id, { choices: e.target.value })} rows={3} placeholder={"Opções (uma por linha)"} style={{ width: "100%", marginBottom: 8, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />}
 
+            {/* CARROSSEL: cards (imagem/vídeo upload + texto + botões) */}
+            {p.type === "carousel" && (
+              <div style={{ marginBottom: 8 }}>
+                {(p.cards || []).map((c, ci) => (
+                  <div key={c.cid} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12, marginBottom: 8, background: "var(--surface-2)" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>Card {ci + 1}</span>
+                      <button className="btn-ghost mini" onClick={() => rmCard(p.id, c.cid)}>✕</button>
+                    </div>
+                    <input type="file" accept="image/*,video/*" onChange={(e) => onCardFile(p.id, c.cid, e)} style={{ fontSize: 13 }} />
+                    {c.fileName && <span className="badge badge-green" style={{ fontSize: 11, marginLeft: 6 }}>{c.fileName}</span>}
+                    <textarea value={c.text} onChange={(e) => setCard(p.id, c.cid, { text: e.target.value })} rows={2} placeholder="Texto do card" style={{ width: "100%", margin: "8px 0", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 8, fontFamily: "inherit" }} />
+                    {["b1", "b2", "b3"].map((b, bi) => <input key={b} value={c[b]} onChange={(e) => setCard(p.id, c.cid, { [b]: e.target.value })} placeholder={`Botão ${bi + 1} (opcional)`} style={{ width: "100%", marginBottom: 6, fontSize: 13 }} />)}
+                  </div>
+                ))}
+                <button className="btn-ghost mini" onClick={() => addCard(p.id)}>+ Adicionar card</button>
+              </div>
+            )}
+
             <textarea value={p.text} onChange={(e) => setPasso(p.id, { text: e.target.value })} rows={2} placeholder={p.type === "text" ? "Mensagem…" : p.type === "poll" ? "Pergunta…" : p.type === "button" || p.type === "list" ? "Texto do card…" : "Legenda (opcional)…"} style={{ width: "100%", marginBottom: (p.type === "button" || p.type === "list") ? 8 : 0, background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8, padding: 10, fontFamily: "inherit" }} />
             {(p.type === "button" || p.type === "list") && <input value={p.footerText} onChange={(e) => setPasso(p.id, { footerText: e.target.value })} placeholder="Rodapé (opcional)" style={{ width: "100%" }} />}
           </div>
         ))}
-        <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Figurinha e carrossel: por enquanto via envio avulso (carrossel precisa montar cards — faço a seguir se quiser).</div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Carrossel envia por loop (cap 1000/disparo, não usa o agendamento da timeline). Figurinha = envio avulso.</div>
 
         {/* ENVIO */}
         <div className="card">

@@ -75,6 +75,18 @@ export async function handle(req: Request): Promise<Response> {
       }
       case "campaigns_list":
         return passthru(await instGet("/sender/listfolders", token));
+      case "campaign_carousel": {
+        // carrossel não existe no sender em massa — loop /send/carousel (cap 1000, async).
+        const numbers = ((body.numbers ?? []) as string[]).slice(0, 1000);
+        const text = body.text ?? "";
+        const carousel = body.carousel ?? [];
+        let ok = 0;
+        for (const n of numbers) {
+          const r = await instPost("/send/carousel", token, { number: n, text, carousel, async: true });
+          if (r.ok) ok++;
+        }
+        return json({ ok: true, sent: ok, total: numbers.length });
+      }
 
       // ── monitor de eventos: aponta a instância pro nosso receptor ────────
       case "set_webhook": {
