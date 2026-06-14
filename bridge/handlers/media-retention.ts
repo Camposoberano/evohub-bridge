@@ -1,17 +1,15 @@
-// media-retention — política de retenção de mídia.
-//   entrada (in):  expira após 30 dias
-//   saída   (out): expira após 365 dias
-// Padrão = dry-run (só conta/reporta). ?confirm=1 zera media_url no nosso DB.
-// Deleção dos BYTES depende de onde o storage mora: efetiva de verdade após migrar
-// os anexos do Chatwoot pro Supabase Storage (bucket chatwoot-media) — aí dá pra
-// apagar os objetos do bucket aqui. Auth: JWT do dashboard OU token de cron.
+// media-retention — limpa o bucket de mídia do Chatwoot (Supabase Storage) por idade.
+// Apaga objetos mais velhos que MEDIA_RETENTION_DAYS (default 365).
+// Seguro por padrão: só apaga de verdade com ?confirm=1 OU MEDIA_RETENTION_ENABLED=true.
+// Lista/apaga via service role (Storage REST) — não precisa das chaves S3 aqui.
+// Auth: token de cron (?token=) OU JWT do dashboard.
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const IN_DAYS = 30;
-const OUT_DAYS = 365;
+const BUCKET = optionalEnv("MEDIA_BUCKET") ?? "chatwoot-media";
+const DAYS = Number(optionalEnv("MEDIA_RETENTION_DAYS") ?? "365");
 
 export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
@@ -19,47 +17,43 @@ export async function handle(req: Request): Promise<Response> {
   const cronToken = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
   let authed = timingSafeEqual(token, cronToken);
   if (!authed) {
-    const userClient = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
+    const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
       auth: { persistSession: false },
     });
-    const { data } = await userClient.auth.getUser();
-    authed = Boolean(data?.user);
+    authed = Boolean((await uc.auth.getUser()).data?.user);
   }
   if (!authed) return json({ error: "unauthorized" }, 401);
 
-  const confirm = url.searchParams.get("confirm") === "1";
-  const db = admin();
-  const now = Date.now();
-  const inCutoff = new Date(now - IN_DAYS * 86_400_000).toISOString();
-  const outCutoff = new Date(now - OUT_DAYS * 86_400_000).toISOString();
+  const confirm = url.searchParams.get("confirm") === "1" || optionalEnv("MEDIA_RETENTION_ENABLED") === "true";
+  const cutoff = Date.now() - DAYS * 86_400_000;
+  // deno-lint-ignore no-explicit-any
+  const storage = (admin() as any).storage.from(BUCKET);
 
-  async function count(direction: string, cutoff: string) {
-    const { count } = await db.from("messages").select("*", { count: "exact", head: true })
-      .eq("direction", direction).not("media_url", "is", null).lt("sent_at", cutoff);
-    return count ?? 0;
+  let offset = 0, scanned = 0, expired = 0, removed = 0;
+  const toDelete: string[] = [];
+  for (let page = 0; page < 200; page++) {
+    const { data, error } = await storage.list("", { limit: 1000, offset, sortBy: { column: "created_at", order: "asc" } });
+    if (error) return json({ error: error.message }, 500);
+    const items = (data ?? []) as { name: string; created_at?: string }[];
+    if (items.length === 0) break;
+    for (const it of items) {
+      scanned++;
+      const created = it.created_at ? Date.parse(it.created_at) : NaN;
+      if (Number.isFinite(created) && created < cutoff) { expired++; toDelete.push(it.name); }
+    }
+    offset += items.length;
+    if (items.length < 1000) break;
   }
 
-  const expiredIn = await count("in", inCutoff);
-  const expiredOut = await count("out", outCutoff);
-
-  let clearedIn = 0, clearedOut = 0;
-  if (confirm) {
-    const r1 = await db.from("messages").update({ media_url: null })
-      .eq("direction", "in").not("media_url", "is", null).lt("sent_at", inCutoff).select("id");
-    clearedIn = r1.data?.length ?? 0;
-    const r2 = await db.from("messages").update({ media_url: null })
-      .eq("direction", "out").not("media_url", "is", null).lt("sent_at", outCutoff).select("id");
-    clearedOut = r2.data?.length ?? 0;
+  if (confirm && toDelete.length) {
+    for (let i = 0; i < toDelete.length; i += 100) {
+      const { data } = await storage.remove(toDelete.slice(i, i + 100));
+      removed += (data?.length ?? 0);
+    }
   }
 
-  return json({
-    policy: { in_days: IN_DAYS, out_days: OUT_DAYS },
-    expired: { in: expiredIn, out: expiredOut },
-    confirmed: confirm,
-    cleared: confirm ? { in: clearedIn, out: clearedOut } : null,
-    note: "Limpa a referência (media_url) no DB. Apagar os bytes exige storage no Supabase/S3 (migrar anexos do Chatwoot).",
-  });
+  return json({ bucket: BUCKET, retention_days: DAYS, scanned, expired, confirmed: confirm, removed });
 }
 
 function json(obj: unknown, status = 200): Response {

@@ -56,8 +56,9 @@ const version = {
     "media-retention",
     "uazapi",
     "rollup-loop",
+    "media-retention-bucket",
   ],
-  build: "2026-06-14-rollup-loop",
+  build: "2026-06-14-media-retention",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -98,6 +99,24 @@ function startRollupLoop() {
   setInterval(run, ROLLUP_INTERVAL_MS);
 }
 
+// Retenção de mídia — loop diário. Dry-run por padrão (só conta); apaga de verdade
+// se MEDIA_RETENTION_ENABLED=true. Usa o token de cron interno.
+function startRetentionLoop() {
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/media-retention?token=${encodeURIComponent(token)}`;
+  const run = async () => {
+    try {
+      const res = await mediaRetention(new Request(url));
+      const body = await res.json();
+      if (body.expired > 0 || body.removed > 0) console.log("media-retention (auto):", JSON.stringify(body));
+    } catch (e) {
+      console.error("media-retention (auto) erro:", e);
+    }
+  };
+  setTimeout(run, 120_000);
+  setInterval(run, 24 * 60 * 60 * 1000);
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -120,4 +139,5 @@ Deno.serve({ port }, async (req) => {
 
 startSyncLoop();
 startRollupLoop();
+startRetentionLoop();
 console.log(`bridge ouvindo na porta ${port}`);
