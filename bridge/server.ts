@@ -71,8 +71,9 @@ const version = {
     "native-inbox-headless",
     "template-from-chat",
     "debug-audio",
+    "ffmpeg-ld-fix",
   ],
-  build: "2026-06-15-template-chat",
+  build: "2026-06-15-ffmpeg-ldfix",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

@@ -27,6 +27,8 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     await Deno.writeFile(inPath, input);
     const cmd = new Deno.Command("ffmpeg", {
       args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", outPath],
+      // Deno bloqueia spawn escopado herdando LD_LIBRARY_PATH (da imagem Deno) — zera p/ ffmpeg.
+      env: { LD_LIBRARY_PATH: "" },
       stderr: "null", stdout: "null",
     });
     const { success } = await cmd.output();
