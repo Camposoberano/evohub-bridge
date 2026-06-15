@@ -6,7 +6,12 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 type Json = Record<string, unknown>;
-type Conta = { id: string; label: string; accountId: string; url: string; ativa: boolean };
+type Conta = { id: string; label: string; accountId: string; url: string; token?: string; ativa: boolean };
+
+// remove o token bruto antes de devolver pro painel (segredo só no servidor).
+function mask(c: Conta): Json {
+  return { id: c.id, label: c.label, accountId: c.accountId, url: c.url, ativa: c.ativa, hasToken: !!c.token, tokenMask: c.token ? "••••" + c.token.slice(-4) : null };
+}
 
 const BUCKET = "soberano-config";
 const FILE = "chatwoot-accounts.json";
@@ -35,7 +40,7 @@ export async function handle(req: Request): Promise<Response> {
   });
   if (!(await uc.auth.getUser()).data?.user) return json({ error: "unauthorized" }, 401);
 
-  if (req.method === "GET") return json({ accounts: await read() });
+  if (req.method === "GET") return json({ accounts: (await read()).map(mask) });
 
   const body = await req.json().catch(() => ({})) as Json;
   const action = body.action as string;
@@ -46,20 +51,29 @@ export async function handle(req: Request): Promise<Response> {
     const label = String(body.label ?? "").trim();
     if (!accountId || !label) return json({ error: "accountId e label obrigatórios" }, 400);
     const url = String(body.url ?? "").trim() || env("CHATWOOT_URL");
-    const i = accounts.findIndex((a) => a.id === accountId);
-    const conta: Conta = { id: accountId, label, accountId, url, ativa: true };
-    if (i >= 0) accounts[i] = { ...accounts[i], ...conta };
+    const token = String(body.token ?? "").trim(); // só pra instância externa; vazio = usa env
+    const externo = url.replace(/\/+$/, "") !== env("CHATWOOT_URL").replace(/\/+$/, "");
+    // id único: mesma instância -> accountId; externa -> url+accountId (evita colisão de account_id entre instâncias)
+    const id = externo ? `${url.replace(/\/+$/, "")}#${accountId}` : accountId;
+    const i = accounts.findIndex((a) => a.id === id);
+    const conta: Conta = {
+      id, label, accountId, url, ativa: true,
+      token: token || (i >= 0 ? accounts[i].token : undefined), // mantém token antigo se não reenviou
+    };
+    if (externo && !conta.token) return json({ error: "Chatwoot externo (outra URL) exige token" }, 400);
+    if (i >= 0) accounts[i] = conta;
     else accounts.push(conta);
     await write(accounts);
-    return json({ ok: true, accounts });
+    return json({ ok: true, accounts: accounts.map(mask) });
   }
 
   if (action === "remove") {
     const id = String(body.id ?? "").trim();
     const principal = optionalEnv("CHATWOOT_ACCOUNT_ID");
     if (id === principal) return json({ error: "não dá pra remover a conta principal" }, 400);
-    await write(accounts.filter((a) => a.id !== id));
-    return json({ ok: true, accounts: accounts.filter((a) => a.id !== id) });
+    const rest = accounts.filter((a) => a.id !== id);
+    await write(rest);
+    return json({ ok: true, accounts: rest.map(mask) });
   }
 
   return json({ error: "ação desconhecida: " + action }, 400);

@@ -1,45 +1,74 @@
-// accounts — mapeia canal -> account_id do Chatwoot (multi-conta na MESMA instância).
-// Mesmo token, muda só o account_id na URL. Config: soberano-config/channel-accounts.json
-// = { "<channel_id>": "1", ... }. Default = CHATWOOT_ACCOUNT_ID (conta principal).
+// accounts — resolve a CONTA Chatwoot de cada canal (multi-cliente: outra URL/token/account).
+// Mapas em soberano-config:
+//   channel-accounts.json   = { "<channel_id>": "<accountKey>" }
+//   chatwoot-accounts.json  = { accounts: [{ id, label, accountId, url, token, ativa }] }
+// Default = conta principal do env.
 import { admin } from "./supabase.ts";
-import { env } from "./env.ts";
+import { type CwAcct, envAcct } from "./chatwoot.ts";
 
 const BUCKET = "soberano-config";
-const FILE = "channel-accounts.json";
+const CH_FILE = "channel-accounts.json";
+const ACC_FILE = "chatwoot-accounts.json";
 
-let cache: Record<string, string> | null = null;
-let cacheTs = 0;
+type StoredAcct = { id: string; label: string; accountId: string; url: string; token?: string; ativa?: boolean };
+
+let chCache: Record<string, string> | null = null;
+let accCache: StoredAcct[] | null = null;
+let ts = 0;
 const TTL_MS = 30_000;
 
-async function load(): Promise<Record<string, string>> {
+async function dl<T>(file: string, fallback: T): Promise<T> {
   try {
-    const { data } = await (admin() as any).storage.from(BUCKET).download(FILE);
-    if (!data) return {};
-    return JSON.parse(await data.text()) as Record<string, string>;
-  } catch {
-    return {};
-  }
+    const { data } = await (admin() as any).storage.from(BUCKET).download(file);
+    if (data) return JSON.parse(await data.text());
+  } catch { /* vazio */ }
+  return fallback;
 }
 
-// account_id do Chatwoot pra um canal (default = conta principal do env).
-export async function accountForChannel(channelId: string): Promise<string> {
+async function refresh() {
   const now = Date.now();
-  if (!cache || now - cacheTs > TTL_MS) {
-    cache = await load();
-    cacheTs = now;
-  }
-  return cache[channelId] ?? env("CHATWOOT_ACCOUNT_ID");
+  if (chCache && accCache && now - ts <= TTL_MS) return;
+  chCache = await dl<Record<string, string>>(CH_FILE, {});
+  const accObj = await dl<{ accounts?: StoredAcct[] }>(ACC_FILE, {});
+  accCache = Array.isArray(accObj.accounts) ? accObj.accounts : [];
+  ts = now;
 }
 
-// grava o account_id de um canal (usado no connect-channel).
-export async function setAccountForChannel(channelId: string, accountId: string): Promise<void> {
-  const map = await load();
-  map[channelId] = accountId;
-  const body = JSON.stringify(map, null, 2);
-  await (admin() as any).storage.from(BUCKET).upload(FILE, new Blob([body], { type: "application/json" }), {
-    upsert: true,
-    contentType: "application/json",
+// CwAcct (url+token+accountId) de uma conta da lista; default = env.
+function toCwAcct(a: StoredAcct | undefined): CwAcct {
+  const def = envAcct();
+  if (!a) return def;
+  return {
+    url: a.url || def.url,
+    token: a.token || def.token, // conta sem token guardado (mesma instância) -> usa o do env
+    accountId: a.accountId,
+    adminToken: def.adminToken,
+  };
+}
+
+// Conta Chatwoot completa pra um canal (pra o bridge postar entrada na conta certa).
+export async function accountForChannel(channelId: string): Promise<CwAcct> {
+  await refresh();
+  const key = chCache![channelId];
+  if (!key) return envAcct();
+  const found = accCache!.find((a) => a.id === key || a.accountId === key);
+  return toCwAcct(found);
+}
+
+// grava o canal -> conta (usado no connect-channel).
+export async function setAccountForChannel(channelId: string, accountKey: string): Promise<void> {
+  const map = await dl<Record<string, string>>(CH_FILE, {});
+  map[channelId] = accountKey;
+  await (admin() as any).storage.from(BUCKET).upload(CH_FILE, new Blob([JSON.stringify(map, null, 2)], { type: "application/json" }), {
+    upsert: true, contentType: "application/json",
   });
-  cache = map;
-  cacheTs = Date.now();
+  chCache = map;
+  ts = Date.now();
+}
+
+// CwAcct por id/accountId (usado no connect-channel pra criar inbox na instância certa).
+export async function acctByKey(accountKey: string): Promise<CwAcct> {
+  await refresh();
+  const found = accCache!.find((a) => a.id === accountKey || a.accountId === accountKey);
+  return toCwAcct(found);
 }

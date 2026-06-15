@@ -3,21 +3,22 @@
 //  * Client API pública (inbox_identifier + source_id): injeta mensagens de ENTRADA.
 import { env, optionalEnv } from "./env.ts";
 
-const BASE = () => env("CHATWOOT_URL").replace(/\/+$/, "");
-const ACC = () => env("CHATWOOT_ACCOUNT_ID");
+// Conta Chatwoot (instância): URL + token + account_id. Permite multi-cliente (outra
+// instância/URL/token). Default = conta principal do env.
+export type CwAcct = { url: string; token: string; accountId: string; adminToken?: string };
 
-function appAuthHeaders(): HeadersInit {
+export function envAcct(): CwAcct {
   return {
-    "api_access_token": env("CHATWOOT_API_ACCESS_TOKEN"),
+    url: env("CHATWOOT_URL").replace(/\/+$/, ""),
+    token: env("CHATWOOT_API_ACCESS_TOKEN"),
+    accountId: env("CHATWOOT_ACCOUNT_ID"),
+    adminToken: optionalEnv("CHATWOOT_ADMIN_TOKEN") ?? undefined,
   };
 }
 
-function appHeaders(): HeadersInit {
-  return {
-    ...appAuthHeaders(),
-    "Content-Type": "application/json",
-  };
-}
+const baseOf = (a: CwAcct) => a.url.replace(/\/+$/, "");
+const appAuthHeaders = (a: CwAcct): HeadersInit => ({ "api_access_token": a.token });
+const appHeaders = (a: CwAcct): HeadersInit => ({ "api_access_token": a.token, "Content-Type": "application/json" });
 
 export type ChatwootAttachment = {
   filename: string;
@@ -28,36 +29,35 @@ export type ChatwootAttachment = {
 // ── Application API ──────────────────────────────────────────────────────────
 
 // Cria inbox tipo "api" e devolve id + inbox_identifier.
-export async function createApiInbox(name: string, webhookUrl: string, accountId: string | number = ACC()): Promise<{
+export async function createApiInbox(name: string, webhookUrl: string, acct: CwAcct = envAcct()): Promise<{
   id: number;
   inbox_identifier: string;
 }> {
-  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes`, {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/inboxes`, {
     method: "POST",
-    headers: appHeaders(),
+    headers: appHeaders(acct),
     body: JSON.stringify({ name, channel: { type: "api", webhook_url: webhookUrl } }),
   });
   if (!res.ok) throw new Error(`Chatwoot createApiInbox ${res.status}: ${await res.text()}`);
   const inbox = await res.json();
   const identifier = inbox?.inbox_identifier ?? inbox?.channel?.inbox_identifier;
   if (identifier) return { id: inbox.id, inbox_identifier: identifier };
-  const got = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes/${inbox.id}`, {
-    headers: appHeaders(),
+  const got = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/inboxes/${inbox.id}`, {
+    headers: appHeaders(acct),
   });
   const full = await got.json();
   return { id: inbox.id, inbox_identifier: full?.inbox_identifier ?? full?.channel?.inbox_identifier };
 }
 
-// Seta o webhook_url de uma inbox API (qualquer conta) — usado p/ ligar a saída
-// Chatwoot → uazapi automaticamente (senão o bot posta no Chatwoot mas não vai pro WhatsApp).
+// Seta o webhook_url de uma inbox API — usado p/ ligar a saída Chatwoot → uazapi.
 export async function setInboxWebhook(
   accountId: number | string,
   inboxId: number | string,
   webhookUrl: string,
+  acct: CwAcct = envAcct(),
 ): Promise<{ ok: boolean; status: number; body: string }> {
-  // Editar config de inbox exige admin. Usa CHATWOOT_ADMIN_TOKEN se houver; senão o token padrão.
-  const adminToken = optionalEnv("CHATWOOT_ADMIN_TOKEN") ?? env("CHATWOOT_API_ACCESS_TOKEN");
-  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes/${inboxId}`, {
+  const adminToken = acct.adminToken ?? acct.token;
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${accountId}/inboxes/${inboxId}`, {
     method: "PATCH",
     headers: { "api_access_token": adminToken, "Content-Type": "application/json" },
     body: JSON.stringify({ channel: { webhook_url: webhookUrl } }),
@@ -71,8 +71,9 @@ export async function setInboxWebhook(
 export async function ensureContact(
   inboxIdentifier: string,
   input: { name?: string; phone?: string; identifier?: string },
+  acct: CwAcct = envAcct(),
 ): Promise<{ source_id: string; pubsub_token?: string; contact_id?: number }> {
-  const res = await fetch(`${BASE()}/public/api/v1/inboxes/${inboxIdentifier}/contacts`, {
+  const res = await fetch(`${baseOf(acct)}/public/api/v1/inboxes/${inboxIdentifier}/contacts`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -89,9 +90,10 @@ export async function ensureContact(
 export async function createConversation(
   inboxIdentifier: string,
   sourceId: string,
+  acct: CwAcct = envAcct(),
 ): Promise<{ id: number }> {
   const res = await fetch(
-    `${BASE()}/public/api/v1/inboxes/${inboxIdentifier}/contacts/${sourceId}/conversations`,
+    `${baseOf(acct)}/public/api/v1/inboxes/${inboxIdentifier}/contacts/${sourceId}/conversations`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
   );
   if (!res.ok) throw new Error(`Chatwoot createConversation ${res.status}: ${await res.text()}`);
@@ -103,9 +105,10 @@ export async function createIncomingMessage(
   sourceId: string,
   conversationId: number,
   content: string,
+  acct: CwAcct = envAcct(),
 ): Promise<{ id: number }> {
   const res = await fetch(
-    `${BASE()}/public/api/v1/inboxes/${inboxIdentifier}/contacts/${sourceId}/conversations/${conversationId}/messages`,
+    `${baseOf(acct)}/public/api/v1/inboxes/${inboxIdentifier}/contacts/${sourceId}/conversations/${conversationId}/messages`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -123,7 +126,7 @@ export async function createConversationMessage(
     messageType: "incoming" | "outgoing";
     attachments?: ChatwootAttachment[];
   },
-  accountId: string | number = ACC(),
+  acct: CwAcct = envAcct(),
 ): Promise<Record<string, unknown> & { id?: number }> {
   const attachments = input.attachments ?? [];
 
@@ -139,18 +142,18 @@ export async function createConversationMessage(
       form.append("attachments[]", blob, attachment.filename);
     }
 
-    const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
+    const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`, {
       method: "POST",
-      headers: appAuthHeaders(),
+      headers: appAuthHeaders(acct),
       body: form,
     });
     if (!res.ok) throw new Error(`Chatwoot createConversationMessage ${res.status}: ${await res.text()}`);
     return await res.json();
   }
 
-  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`, {
     method: "POST",
-    headers: appHeaders(),
+    headers: appHeaders(acct),
     body: JSON.stringify({
       content: input.content,
       message_type: input.messageType,
@@ -163,9 +166,9 @@ export async function createConversationMessage(
   return await res.json();
 }
 
-export async function listConversationMessages(conversationId: number): Promise<Record<string, unknown>[]> {
-  const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
-    headers: appHeaders(),
+export async function listConversationMessages(conversationId: number, acct: CwAcct = envAcct()): Promise<Record<string, unknown>[]> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`, {
+    headers: appHeaders(acct),
   });
   if (!res.ok) throw new Error(`Chatwoot listConversationMessages ${res.status}: ${await res.text()}`);
   const json = await res.json();

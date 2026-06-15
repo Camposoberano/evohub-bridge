@@ -38,15 +38,18 @@ export default function Central() {
     });
     return { ok: res.ok, data: await res.json().catch(() => ({})) };
   }
-  async function salvarConta(label, accountId) {
-    if (!label?.trim() || !accountId?.trim()) return setMsg("Nome e account_id são obrigatórios.");
-    const r = await acc("POST", { action: "save", label: label.trim(), accountId: accountId.trim() });
+  async function salvarConta(c) {
+    if (!c.label?.trim() || !c.accountId?.trim()) return setMsg("Nome e account_id são obrigatórios.");
+    const r = await acc("POST", {
+      action: "save", label: c.label.trim(), accountId: c.accountId.trim(),
+      url: c.url?.trim() || undefined, token: c.token?.trim() || undefined,
+    });
     if (r.ok && r.data.accounts) { setContas(r.data.accounts); setNovaConta(null); setMsg("Chatwoot salvo."); }
     else setMsg("Erro: " + (r.data.error || "falha"));
   }
   async function renomearConta(conta) {
     const novo = prompt("Novo nome da tela:", conta.label); if (!novo) return;
-    await salvarConta(novo, conta.accountId);
+    await salvarConta({ label: novo, accountId: conta.accountId, url: conta.url }); // mantém url/token
   }
   async function removerConta(conta) {
     if (!confirm(`Remover a tela "${conta.label}"? (não apaga nada no Chatwoot, só tira do painel)`)) return;
@@ -175,9 +178,9 @@ export default function Central() {
                         <button className="btn-ghost" style={{ width: "100%" }} onClick={() => setAdd(conta.id)}>+ Adicionar canal</button>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("facebook", conta.accountId)}>Facebook</button>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("instagram", conta.accountId)}>Instagram</button>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("whatsapp", conta.accountId)}>WhatsApp oficial (EVO Hub)</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("facebook", conta.id)}>Facebook</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("instagram", conta.id)}>Instagram</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("whatsapp", conta.id)}>WhatsApp oficial (EVO Hub)</button>
                           <button className="btn-ghost mini" onClick={() => router.push("/instancias")}>WhatsApp não-oficial (uazapi)</button>
                           <button className="btn-ghost mini" onClick={() => setAdd(null)}>Cancelar</button>
                         </div>
@@ -199,11 +202,22 @@ export default function Central() {
           ) : (
             <div className="card" style={{ minHeight: 160, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
               <div style={{ fontWeight: 700, fontSize: 14 }}>Nova tela Chatwoot</div>
-              <input placeholder="Nome (ex.: Cliente X)" value={novaConta.label} onChange={(e) => setNovaConta({ ...novaConta, label: e.target.value })} />
-              <input placeholder="account_id (ex.: 1, 3…)" value={novaConta.accountId} onChange={(e) => setNovaConta({ ...novaConta, accountId: e.target.value })} />
-              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Mesma instância e token. O account_id é o número na URL do Chatwoot (/accounts/<b>N</b>/).</div>
+              <input placeholder="Nome (ex.: Instituto Belém)" value={novaConta.label} onChange={(e) => setNovaConta({ ...novaConta, label: e.target.value })} />
+              <input placeholder="account_id (número na URL /accounts/N/)" value={novaConta.accountId} onChange={(e) => setNovaConta({ ...novaConta, accountId: e.target.value })} />
+              <label style={{ fontSize: 12, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
+                <input type="checkbox" checked={novaConta.externo || false} onChange={(e) => setNovaConta({ ...novaConta, externo: e.target.checked })} style={{ width: "auto" }} />
+                Chatwoot externo (outra URL / outro cliente)
+              </label>
+              {novaConta.externo && (
+                <>
+                  <input placeholder="URL (ex.: https://chat.institutobelem.com)" value={novaConta.url || ""} onChange={(e) => setNovaConta({ ...novaConta, url: e.target.value })} />
+                  <input type="password" placeholder="Token da API (cola 1x, some depois)" value={novaConta.token || ""} onChange={(e) => setNovaConta({ ...novaConta, token: e.target.value })} />
+                  <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Token fica só no servidor (mascarado depois). Mesmo número/página continua entrando pelo EVO Hub.</div>
+                </>
+              )}
+              {!novaConta.externo && <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Mesma instância e token. Só muda o account_id.</div>}
               <div style={{ display: "flex", gap: 6 }}>
-                <button className="btn-mint mini" onClick={() => salvarConta(novaConta.label, novaConta.accountId)}>Salvar</button>
+                <button className="btn-mint mini" onClick={() => salvarConta(novaConta)}>Salvar</button>
                 <button className="btn-ghost mini" onClick={() => setNovaConta(null)}>Cancelar</button>
               </div>
             </div>

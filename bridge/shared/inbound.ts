@@ -6,6 +6,7 @@ import {
   createConversation,
   createConversationMessage,
   createIncomingMessage,
+  type CwAcct,
   ensureContact,
 } from "./chatwoot.ts";
 
@@ -29,10 +30,10 @@ export async function ingestInbound(
     attachments?: InboundAttachment[];
     outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
     skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
-    accountId?: string; // account_id do Chatwoot (multi-conta na mesma instância)
+    acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
-  const acct = msg.accountId; // undefined -> createConversationMessage usa o default (env)
+  const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
   if (msg.metaMessageId) {
@@ -57,7 +58,7 @@ export async function ingestInbound(
 
   if (!contact || (!sourceId && !skip)) {
     // nativo: não cria contato no Chatwoot (a nativa já tem o seu) — só no banco.
-    const cw = skip ? null : await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from });
+    const cw = skip ? null : await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from }, acct);
     if (cw) sourceId = cw.source_id;
     const { data: upserted, error: upsertError } = await db.from("contacts").upsert({
       channel_id: channel.id,
@@ -86,7 +87,7 @@ export async function ingestInbound(
   let conv = openConv as Json | null;
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
-    const cwConv = skip ? null : await createConversation(inboxId, sourceId!);
+    const cwConv = skip ? null : await createConversation(inboxId, sourceId!, acct);
     const { data: insertedConv, error: convInsertError } = await db.from("conversations").insert({
       channel_id: channel.id,
       contact_id: contact.id,
@@ -116,7 +117,7 @@ export async function ingestInbound(
       attachments,
     }, acct);
   } else {
-    cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
+    cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content, acct);
   }
   const chatwootMediaUrl = cwMsg ? firstAttachmentUrl(cwMsg) : (msg.attachments?.[0]?.sourceUrl ?? null);
   const { data: insertedMessage, error: messageError } = await db.from("messages").insert({
