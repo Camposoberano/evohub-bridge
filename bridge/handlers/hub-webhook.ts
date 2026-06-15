@@ -266,9 +266,19 @@ async function resumeCampaign(db: Db, channel: Json, from: string) {
 
   for (const step of camp.steps) {
     let body: Json;
-    if (step.type === "text") body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text ?? "" } };
-    else body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: { link: step.file, caption: step.text || undefined } };
-    await sendMeta(token, `${phone}/messages`, body);
+    if (step.type === "text") {
+      if (!step.text) continue; // texto vazio = pula
+      body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text } };
+    } else {
+      if (!step.file) continue; // mídia sem URL = pula (não quebra a sequência)
+      const media: Json = { link: step.file };
+      // áudio NÃO aceita caption na Cloud API; image/video/document aceitam.
+      if (step.type !== "audio" && step.text) media.caption = step.text;
+      if (step.type === "document" && step.text) media.filename = step.text;
+      body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: media };
+    }
+    const r = await sendMeta(token, `${phone}/messages`, body);
+    if (!r.ok) console.error(`resumeCampaign step falhou (${step.type}):`, JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200));
   }
 
   // marca concluído

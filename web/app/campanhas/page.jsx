@@ -13,6 +13,7 @@ export default function Campanhas() {
   const [pronto, setPronto] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [tpl, setTpl] = useState("");
+  const [headerUrl, setHeaderUrl] = useState("");
   const [contatos, setContatos] = useState([]);
   const [uf, setUf] = useState("nenhum");
   const [manual, setManual] = useState("");
@@ -63,12 +64,21 @@ export default function Campanhas() {
     const t = templates.find((x) => x.name === tpl);
     if (!t) return setMsg("Escolha um template aprovado.");
     if (publico.length === 0) return setMsg("Público vazio.");
+    const hf = headerFormat(t);
+    if (hf && !headerUrl) return setMsg(`Esse template tem cabeçalho de ${hf} — informe a URL da mídia.`);
     if (!confirm(`Disparar template "${tpl}" pra ${publico.length} números? Sequência (${passos.length} passos) sai quando cada um responder.`)) return;
     setEnviando(true);
-    const r = await api("/campaign", "start", { name: tpl, template: tpl, language: t.language, numbers: publico, steps: passos.map((p) => ({ type: p.type, text: p.text, file: p.file })) });
+    const params = { name: tpl, template: tpl, language: t.language, numbers: publico, steps: passos.map((p) => ({ type: p.type, text: p.text, file: p.file })) };
+    if (hf && headerUrl) params.headerMedia = { format: hf, link: headerUrl };
+    const r = await api("/campaign", "start", params);
     setEnviando(false);
-    setMsg(r.ok ? `Template enviado: ${r.data.sent} ok, ${r.data.failed} falha. Aguardando respostas pra disparar a sequência.` : "Erro: " + (r.data.error || JSON.stringify(r.data).slice(0, 150)));
+    setMsg(r.ok ? `Template enviado: ${r.data.sent} ok, ${r.data.failed} falha.${r.data.errors?.length ? " Erros: " + r.data.errors.join(" | ") : ""} Aguardando respostas pra disparar a sequência.` : "Erro: " + (r.data.error || JSON.stringify(r.data).slice(0, 150)));
     carregar();
+  }
+  function headerFormat(t) {
+    const h = (t?.components || []).find((c) => c.type === "HEADER");
+    const f = h?.format;
+    return f && f !== "TEXT" ? String(f).toLowerCase() : null; // image | video | document
   }
 
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;

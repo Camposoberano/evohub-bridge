@@ -75,42 +75,55 @@ async function handleOutgoing(db: Db, p: Json) {
   let mediaUrl: string | null = null;
   if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
-    if (content) {
-      res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
-        messaging_product: "whatsapp", to, type: "text", text: { body: content },
-      });
-    } else {
-      // anexo sem texto: usa o data_url público do Chatwoot como link de mídia.
-      mediaUrl = (attachment!.data_url as string) ?? null;
-      if (!mediaUrl) { console.warn("anexo sem data_url", channel.id); return; }
-      const attachType = metaAttachmentType(attachment!.file_type as string | undefined);
-      msgType = attachType === "file" ? "document" : attachType;
-      const mediaPayload: Json = { link: mediaUrl };
-      if (msgType === "document") {
-        mediaPayload.filename = (attachment!.fallback_title as string) ?? "arquivo";
+    const url = `${channel.phone_number_id}/messages`;
+    if (attachments.length > 0) {
+      // mídia (com ou sem legenda). A legenda do Chatwoot (content) entra na 1ª mídia.
+      // Bug antigo: "if (content) só texto" descartava a mídia quando havia legenda.
+      let captionUsed = false;
+      for (const att of attachments) {
+        const aUrl = (att.data_url as string) ?? null;
+        if (!aUrl) { console.warn("anexo sem data_url", channel.id); continue; }
+        const attachType = metaAttachmentType(att.file_type as string | undefined);
+        msgType = attachType === "file" ? "document" : attachType;
+        mediaUrl = aUrl;
+        const mediaPayload: Json = { link: aUrl };
+        // áudio NÃO aceita caption; image/video/document aceitam.
+        if (content && !captionUsed && msgType !== "audio") { mediaPayload.caption = content; captionUsed = true; }
+        if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";
+        res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload });
       }
-      res = await sendMeta(token, `${channel.phone_number_id}/messages`, {
-        messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload,
+      // legenda não coube em nenhuma mídia (ex.: só áudio) → manda como texto separado.
+      if (content && !captionUsed) {
+        res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+        msgType = "text";
+      }
+    } else {
+      res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+    }
+  } else {
+    // facebook / instagram (Messenger): texto e anexo são mensagens separadas (não há caption).
+    // Manda cada anexo e, se houver texto, manda também — antes só ia um dos dois.
+    for (const att of attachments) {
+      const aUrl = (att.data_url as string) ?? null;
+      if (!aUrl) { console.warn("anexo sem data_url", channel.id); continue; }
+      const attachType = metaAttachmentType(att.file_type as string | undefined);
+      msgType = attachType === "file" ? "document" : attachType;
+      mediaUrl = aUrl;
+      res = await sendMeta(token, "me/messages", {
+        recipient: { id: to },
+        message: { attachment: { type: attachType, payload: { url: aUrl, is_reusable: true } } },
+        messaging_type: "RESPONSE",
       });
     }
-  } else if (content) {
-    // facebook / instagram (Messenger): envia pela página (me), destinatário = PSID/IGSID.
-    res = await sendMeta(token, "me/messages", {
-      recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE",
-    });
-  } else {
-    // anexo sem texto: usa o data_url público do Chatwoot (Active Storage) como payload.
-    mediaUrl = (attachment!.data_url as string) ?? null;
-    if (!mediaUrl) { console.warn("anexo sem data_url", channel.id); return; }
-    const attachType = metaAttachmentType(attachment!.file_type as string | undefined);
-    msgType = attachType === "file" ? "document" : attachType;
-    res = await sendMeta(token, "me/messages", {
-      recipient: { id: to },
-      message: { attachment: { type: attachType, payload: { url: mediaUrl, is_reusable: true } } },
-      messaging_type: "RESPONSE",
-    });
+    if (content) {
+      res = await sendMeta(token, "me/messages", {
+        recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE",
+      });
+      if (attachments.length === 0) msgType = "text";
+    }
   }
 
+  if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); return; }
   const d = res.data as Json;
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
     ((d?.message_id as string) ?? null);

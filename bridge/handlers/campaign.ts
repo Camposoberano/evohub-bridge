@@ -54,17 +54,25 @@ export async function handle(req: Request): Promise<Response> {
     };
     state.campaigns.push(camp);
 
-    let sent = 0, failed = 0;
+    // componentes do template: header de mídia (imagem/vídeo/documento) se informado.
+    let components = (body.components as Json[]) ?? [];
+    const hm = body.headerMedia as Json | undefined; // { format:"image"|"video"|"document", link }
+    if (hm?.link && hm?.format) {
+      const fmt = String(hm.format).toLowerCase();
+      components = [{ type: "header", parameters: [{ type: fmt, [fmt]: { link: hm.link } }] }, ...components];
+    }
+
+    let sent = 0, failed = 0; const errors: string[] = [];
     for (const to of numbers) {
       const r = await sendMeta(token, `${ch.phone_number_id}/messages`, {
         messaging_product: "whatsapp", to, type: "template",
-        template: { name: template, language: { code: language }, components: (body.components as Json[]) ?? [] },
+        template: { name: template, language: { code: language }, components },
       });
       if (r.ok) { sent++; state.targets[to] = { campaignId: camp.id, status: "awaiting", step: 0, ts: new Date().toISOString() }; }
-      else failed++;
+      else { failed++; if (errors.length < 3) errors.push(JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 120)); }
     }
     await writeCampaigns(state);
-    return json({ ok: true, campaign: camp.id, sent, failed, awaiting: sent });
+    return json({ ok: true, campaign: camp.id, sent, failed, awaiting: sent, errors });
   }
 
   return json({ error: "ação desconhecida: " + action }, 400);
