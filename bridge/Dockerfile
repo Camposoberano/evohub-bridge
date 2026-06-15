@@ -19,4 +19,4 @@ RUN deno check server.ts
 EXPOSE 8000
 
 # Permissões: rede (Hub/Chatwoot/Supabase) + env (segredos) + run/read/write (ffmpeg + temp)
-CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-run=ffmpeg", "--allow-read", "--allow-write", "server.ts"]
+CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-run", "--allow-read", "--allow-write", "server.ts"]

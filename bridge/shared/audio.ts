@@ -25,10 +25,12 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
     outPath = await Deno.makeTempFile({ suffix: ".ogg" });
     await Deno.writeFile(inPath, input);
-    const cmd = new Deno.Command("ffmpeg", {
+    // Deno bloqueia spawn herdando LD_LIBRARY_PATH (da imagem Deno). clearEnv remove TODA a
+    // env herdada (inclui LD_LIBRARY_PATH) e passamos só PATH. ffmpeg por caminho absoluto.
+    const cmd = new Deno.Command("/usr/bin/ffmpeg", {
       args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", outPath],
-      // Deno bloqueia spawn escopado herdando LD_LIBRARY_PATH (da imagem Deno) — zera p/ ffmpeg.
-      env: { LD_LIBRARY_PATH: "" },
+      clearEnv: true,
+      env: { PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" },
       stderr: "null", stdout: "null",
     });
     const { success } = await cmd.output();

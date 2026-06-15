@@ -73,7 +73,7 @@ const version = {
     "debug-audio",
     "ffmpeg-ld-fix",
   ],
-  build: "2026-06-15-ffmpeg-ldfix",
+  build: "2026-06-15-ffmpeg-clearenv",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
