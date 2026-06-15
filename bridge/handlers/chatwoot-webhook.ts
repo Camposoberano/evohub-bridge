@@ -59,6 +59,14 @@ async function handleOutgoing(db: Db, p: Json) {
 
   if (!cwConversationId || (!content && !attachment)) return;
 
+  // Anti-loop: se a mensagem já está no banco (ex.: echo do aparelho que injetamos como
+  // outgoing no Chatwoot), NÃO reenviar pro Meta — senão duplica e re-entrega ao cliente.
+  const cwMsgId = p.id as number | undefined;
+  if (cwMsgId) {
+    const { data: dup } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+    if (dup) { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
+  }
+
   const { data: channel } = await db.from("channels").select("*").eq("chatwoot_inbox_id", cwInboxId!).maybeSingle();
   if (!channel) { console.warn("sem canal p/ inbox", cwInboxId); return; }
 

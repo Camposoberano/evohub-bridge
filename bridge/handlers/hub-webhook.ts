@@ -335,7 +335,9 @@ async function extractWaContent(
     const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
     if (!metaToken) console.warn("WA mídia sem META_ACCESS_TOKEN — usando placeholder", channelId);
     const downloaded = metaToken && mediaId ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint) : null;
-    return { content: caption ?? fallbackContent(type), attachments: downloaded ? [downloaded] : undefined };
+    // anexo baixou: conteúdo = legenda (ou vazio; sem rótulo "[audio]"). Sem anexo: placeholder textual.
+    if (downloaded) return { content: caption ?? "", attachments: [downloaded] };
+    return { content: caption ?? fallbackContent(type) };
   }
   return { content: `[${type}]` }; // tipo sem tradução (location/contacts/interactive/etc.)
 }

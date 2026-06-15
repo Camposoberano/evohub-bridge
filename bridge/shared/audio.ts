@@ -8,7 +8,9 @@ const BUCKET = "soberano-out"; // público; mídia gerada pelo bridge (PTT)
 let bucketReady = false;
 async function ensureBucket() {
   if (bucketReady) return;
-  try { await (admin() as any).storage.createBucket(BUCKET, { public: true }); } catch { /* já existe */ }
+  const { error } = await (admin() as any).storage.createBucket(BUCKET, { public: true });
+  // "already exists" não é erro real; qualquer outro loga mas segue (bucket pode já existir).
+  if (error && !/exist/i.test(error.message ?? "")) console.warn("createBucket soberano-out:", error.message);
   bucketReady = true;
 }
 
