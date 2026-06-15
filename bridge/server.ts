@@ -70,11 +70,11 @@ const version = {
     "echo-no-resend-loop",
     "native-inbox-headless",
     "template-from-chat",
-    "debug-audio",
+    
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-15-fb-echo",
+  build: "2026-06-15-cleanup",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -143,29 +143,6 @@ Deno.serve({ port }, async (req) => {
       headers: { "Content-Type": "application/json" },
     });
   }
-  // diagnóstico temporário do transcode de áudio (PTT). Remover depois.
-  if (pathname === "/debug-audio") {
-    const out: Record<string, unknown> = {};
-    // binário existe?
-    for (const p of ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/bin/ffmpeg"]) {
-      try { await Deno.stat(p); out[`exists ${p}`] = true; } catch { out[`exists ${p}`] = false; }
-    }
-    try {
-      const c = new Deno.Command("ffmpeg", { args: ["-version"], env: { LD_LIBRARY_PATH: "/usr/lib:/lib" }, stdout: "piped", stderr: "piped" });
-      const r = await c.output();
-      out.ffmpeg = r.success ? new TextDecoder().decode(r.stdout).split("\n")[0] : `FAIL code ${r.code}`;
-      out.stderr = new TextDecoder().decode(r.stderr).slice(0, 400);
-    } catch (e) { out.ffmpeg = "ERR " + String(e).slice(0, 200); }
-    const testUrl = new URL(req.url).searchParams.get("url");
-    if (testUrl) {
-      try {
-        const { toVoiceOgg } = await import("./shared/audio.ts");
-        out.transcode = (await toVoiceOgg(testUrl)) ?? "NULL (falhou)";
-      } catch (e) { out.transcode = "ERR " + String(e).slice(0, 300); }
-    }
-    return new Response(JSON.stringify(out, null, 2), { headers: { "Content-Type": "application/json" } });
-  }
-
   const h = routes[pathname];
   if (!h) return new Response("not found", { status: 404 });
 
