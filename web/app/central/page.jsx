@@ -4,14 +4,7 @@ import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL, CHATWOOT_URL, CHATWOOT_ACCOUNT_ID } from "@/lib/supabase";
 import Nav from "@/components/Nav";
 
-// Telas (Chatwoots). Por enquanto só o nosso; estrutura pronta p/ adicionar outros
-// (outras contas no mesmo URL ou outro URL/cliente) quando tiver token.
-const CONTAS = [
-  { id: CHATWOOT_ACCOUNT_ID, label: "Campo Soberano", url: CHATWOOT_URL, accountId: CHATWOOT_ACCOUNT_ID, ativa: true },
-  // 2ª conta na MESMA instância (mesmo token, muda só o account_id).
-  ...(CHATWOOT_ACCOUNT_ID !== "1" ? [{ id: "1", label: "Chatwoot 1", url: CHATWOOT_URL, accountId: "1", ativa: true }] : []),
-];
-
+// Telas (Chatwoots) agora vêm do bridge (/chatwoot-accounts), editáveis no painel.
 const PLAT = {
   whatsapp: { label: "WhatsApp oficial", color: "#1fbf75" },
   facebook: { label: "Facebook", color: "#3b82f6" },
@@ -33,6 +26,34 @@ export default function Central() {
   const [add, setAdd] = useState(null); // conta.id cujo menu "adicionar canal" está aberto
   const [msg, setMsg] = useState("");
   const [assign, setAssign] = useState({}); // { instanceName: contaId } — persistido no banco (Supabase Storage via bridge)
+  const [contas, setContas] = useState([]); // telas Chatwoot (do bridge)
+  const [novaConta, setNovaConta] = useState(null); // form de adicionar Chatwoot ({label, accountId}) ou null
+
+  // CRUD das contas Chatwoot no bridge.
+  async function acc(method, body) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/chatwoot-accounts`, {
+      method, headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return { ok: res.ok, data: await res.json().catch(() => ({})) };
+  }
+  async function salvarConta(label, accountId) {
+    if (!label?.trim() || !accountId?.trim()) return setMsg("Nome e account_id são obrigatórios.");
+    const r = await acc("POST", { action: "save", label: label.trim(), accountId: accountId.trim() });
+    if (r.ok && r.data.accounts) { setContas(r.data.accounts); setNovaConta(null); setMsg("Chatwoot salvo."); }
+    else setMsg("Erro: " + (r.data.error || "falha"));
+  }
+  async function renomearConta(conta) {
+    const novo = prompt("Novo nome da tela:", conta.label); if (!novo) return;
+    await salvarConta(novo, conta.accountId);
+  }
+  async function removerConta(conta) {
+    if (!confirm(`Remover a tela "${conta.label}"? (não apaga nada no Chatwoot, só tira do painel)`)) return;
+    const r = await acc("POST", { action: "remove", id: conta.id });
+    if (r.ok && r.data.accounts) setContas(r.data.accounts);
+    else setMsg("Erro: " + (r.data.error || "falha"));
+  }
 
   async function atribuir(nome, contaId) {
     const novo = { ...assign, [nome]: contaId };
@@ -57,6 +78,8 @@ export default function Central() {
     if (r.ok && r.data.instances) setUaz(r.data.instances);
     const a = await api("assign_get");
     if (a.ok && a.data.assign) setAssign(a.data.assign);
+    const c = await acc("GET");
+    if (c.ok && c.data.accounts) setContas(c.data.accounts);
   }, []);
 
   useEffect(() => {
@@ -99,10 +122,11 @@ export default function Central() {
         {msg && <div className="card" style={{ marginBottom: 16, fontSize: 13 }}>{msg}</div>}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
-          {CONTAS.map((conta) => {
+          {contas.map((conta) => {
             // canais oficiais aparecem na conta principal (frontend ainda não sabe a conta por canal).
             const chs = conta.accountId === CHATWOOT_ACCOUNT_ID ? canais : [];
             const uazChs = conta.ativa ? uaz.filter((i) => assign[i.name] === conta.id) : [];
+            const principal = conta.accountId === CHATWOOT_ACCOUNT_ID;
             return (
               <div key={conta.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-2)" }}>
@@ -110,7 +134,10 @@ export default function Central() {
                     <div style={{ fontWeight: 700 }}>{conta.label}</div>
                     <div style={{ fontSize: 12, color: "var(--text-faint)" }}>conta {conta.accountId}</div>
                   </div>
-                  {!conta.ativa && <span className="badge badge-gray">a configurar</span>}
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <button className="btn-ghost mini" title="Renomear" onClick={() => renomearConta(conta)}>✎</button>
+                    {!principal && <button className="btn-ghost mini" title="Remover do painel" onClick={() => removerConta(conta)}>✕</button>}
+                  </div>
                 </div>
 
                 <div style={{ padding: 14 }}>
@@ -162,12 +189,25 @@ export default function Central() {
             );
           })}
 
-          {/* adicionar outra tela/Chatwoot */}
-          <button className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 160, color: "var(--text-faint)", borderStyle: "dashed", cursor: "pointer", background: "var(--surface)" }}
-            onClick={() => alert("Pra adicionar outro Chatwoot (outra conta/URL) preciso da URL + token + account_id dele. Me passa que eu ligo — vai virar uma coluna aqui.")}>
-            <div style={{ fontSize: 30, marginBottom: 6 }}>+</div>
-            <div style={{ fontSize: 14, textAlign: "center" }}>Adicionar Chatwoot<br /><span style={{ fontSize: 12 }}>(outra conta/cliente)</span></div>
-          </button>
+          {/* adicionar outra tela/Chatwoot — form direto no painel */}
+          {!novaConta ? (
+            <button className="card" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 160, color: "var(--text-faint)", borderStyle: "dashed", cursor: "pointer", background: "var(--surface)" }}
+              onClick={() => setNovaConta({ label: "", accountId: "" })}>
+              <div style={{ fontSize: 30, marginBottom: 6 }}>+</div>
+              <div style={{ fontSize: 14, textAlign: "center" }}>Adicionar Chatwoot<br /><span style={{ fontSize: 12 }}>(conta na mesma instância)</span></div>
+            </button>
+          ) : (
+            <div className="card" style={{ minHeight: 160, display: "flex", flexDirection: "column", gap: 8, justifyContent: "center" }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Nova tela Chatwoot</div>
+              <input placeholder="Nome (ex.: Cliente X)" value={novaConta.label} onChange={(e) => setNovaConta({ ...novaConta, label: e.target.value })} />
+              <input placeholder="account_id (ex.: 1, 3…)" value={novaConta.accountId} onChange={(e) => setNovaConta({ ...novaConta, accountId: e.target.value })} />
+              <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Mesma instância e token. O account_id é o número na URL do Chatwoot (/accounts/<b>N</b>/).</div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn-mint mini" onClick={() => salvarConta(novaConta.label, novaConta.accountId)}>Salvar</button>
+                <button className="btn-ghost mini" onClick={() => setNovaConta(null)}>Cancelar</button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* INSTÂNCIAS uazapi — todas; atribua cada uma à tela certa */}
@@ -185,7 +225,7 @@ export default function Central() {
                   <span className={"badge " + cls}>{txt}</span>
                   <select value={assign[i.name] || ""} onChange={(e) => atribuir(i.name, e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
                     <option value="">— tela —</option>
-                    {CONTAS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    {contas.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
                   </select>
                 </div>
               );

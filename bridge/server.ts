@@ -17,6 +17,7 @@ import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
+import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
@@ -39,6 +40,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/uazapi-webhook": uazapiWebhook,
   "/meta-templates": metaTemplates,
   "/campaign": campaign,
+  "/chatwoot-accounts": chatwootAccounts,
   "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
@@ -74,7 +76,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-15-cleanup",
+  build: "2026-06-15-cw-accounts",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
