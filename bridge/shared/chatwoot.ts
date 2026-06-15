@@ -19,6 +19,24 @@ export function envAcct(): CwAcct {
 const baseOf = (a: CwAcct) => a.url.replace(/\/+$/, "");
 const appAuthHeaders = (a: CwAcct): HeadersInit => ({ "api_access_token": a.token });
 const appHeaders = (a: CwAcct): HeadersInit => ({ "api_access_token": a.token, "Content-Type": "application/json" });
+// criar inbox / gerenciar membros exige role Administrator -> usa adminToken se houver.
+const adminHeaders = (a: CwAcct): HeadersInit => ({ "api_access_token": a.adminToken ?? a.token, "Content-Type": "application/json" });
+
+// id do agente do token (pra virar membro de inbox criada — senão o agente não a enxerga).
+export async function profileId(acct: CwAcct = envAcct()): Promise<number | undefined> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/profile`, { headers: appAuthHeaders(acct) });
+  if (!res.ok) return undefined;
+  return (await res.json().catch(() => ({})))?.id as number | undefined;
+}
+
+// adiciona agentes como membros de uma inbox (visibilidade). Precisa admin.
+export async function addInboxMembers(accountId: string | number, inboxId: number, userIds: number[], acct: CwAcct = envAcct()): Promise<boolean> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${accountId}/inbox_members`, {
+    method: "POST", headers: adminHeaders(acct),
+    body: JSON.stringify({ inbox_id: inboxId, user_ids: userIds }),
+  });
+  return res.ok;
+}
 
 export type ChatwootAttachment = {
   filename: string;
@@ -35,7 +53,7 @@ export async function createApiInbox(name: string, webhookUrl: string, acct: CwA
 }> {
   const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/inboxes`, {
     method: "POST",
-    headers: appHeaders(acct),
+    headers: adminHeaders(acct), // criar inbox exige Administrator
     body: JSON.stringify({ name, channel: { type: "api", webhook_url: webhookUrl } }),
   });
   if (!res.ok) throw new Error(`Chatwoot createApiInbox ${res.status}: ${await res.text()}`);

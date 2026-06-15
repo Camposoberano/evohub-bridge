@@ -5,7 +5,8 @@
 import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { adminPost, instDelete, instGet, instPost, instPut, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
-import { setInboxWebhook } from "../shared/chatwoot.ts";
+import { addInboxMembers, createApiInbox, type CwAcct, envAcct, profileId, setInboxWebhook } from "../shared/chatwoot.ts";
+import { acctByKey } from "../shared/accounts.ts";
 import { admin } from "../shared/supabase.ts";
 
 const ASSIGN_BUCKET = "soberano-config";
@@ -23,15 +24,46 @@ async function writeAssign(obj: Record<string, string>) {
 }
 
 // Liga a saída Chatwoot→uazapi: configura o webhook esperado na inbox do Chatwoot.
-async function syncChatwootWebhook(token: string): Promise<Json> {
+async function syncChatwootWebhook(token: string, acct: CwAcct = envAcct()): Promise<Json> {
   const cfg = await instGet("/chatwoot/config", token);
   const d = (cfg.data ?? {}) as Json;
   const url = (d.expected_webhook_url ?? (d.integration_status as Json)?.expected_webhook_url) as string | undefined;
   const account = d.chatwoot_account_id as number | undefined;
   const inbox = d.chatwoot_inbox_id as number | undefined;
   if (!url || !account || !inbox) return { ok: false, reason: "config Chatwoot incompleta no uazapi" };
-  const r = await setInboxWebhook(account, inbox, url);
+  const r = await setInboxWebhook(account, inbox, url, acct);
   return { ok: r.ok, status: r.status, webhook: url };
+}
+
+// Liga a instância uazapi à CONTA Chatwoot (multi-cliente): garante uma inbox API na conta,
+// torna o agente membro (visibilidade), seta a config no uazapi e o webhook de saída.
+// Schema uazapi descoberto: account_id é NÚMERO, inbox_id NÚMERO; criar inbox exige admin.
+async function applyChatwootConfig(token: string, acct: CwAcct, extra: Json = {}, inboxName = "WhatsApp"): Promise<Json> {
+  // 1) inbox: usa a já configurada se existir/válida; senão cria + adiciona o agente.
+  const cur = (await instGet("/chatwoot/config", token)).data as Json;
+  let inboxId = Number(extra.inbox_id ?? cur.chatwoot_inbox_id ?? 0);
+  const exists = (cur.integration_status as Json)?.inbox_exists === true;
+  if (!inboxId || !exists) {
+    const inbox = await createApiInbox(inboxName, "", acct); // webhook setado depois (uazapi)
+    inboxId = inbox.id;
+    const uid = await profileId(acct);
+    if (uid) await addInboxMembers(acct.accountId, inboxId, [uid], acct);
+  }
+  // 2) config no uazapi
+  const merged = {
+    enabled: extra.enabled ?? true,
+    url: acct.url,
+    access_token: acct.token,
+    account_id: Number(acct.accountId),
+    inbox_id: inboxId,
+    sign_messages: extra.sign_messages ?? false,
+    create_new_conversation: extra.create_new_conversation ?? true,
+    ignore_groups: extra.ignore_groups ?? true,
+  };
+  const put = await instPut("/chatwoot/config", token, merged);
+  // 3) webhook de saída (Chatwoot inbox → uazapi)
+  const hook = await syncChatwootWebhook(token, acct).catch((e) => ({ ok: false, reason: String(e) }));
+  return { config: put.data, ok: put.ok, status: put.status, inbox_id: inboxId, webhook_sync: hook };
 }
 
 type Json = Record<string, unknown>;
@@ -70,12 +102,19 @@ export async function handle(req: Request): Promise<Response> {
     if (action === "assign_set") {
       const cur = await readAssign();
       const inst = body.instance as string | undefined;
+      let cwResult: Json | null = null;
       if (inst) {
-        if (body.conta) cur[inst] = body.conta as string;
-        else delete cur[inst];
+        if (body.conta) {
+          cur[inst] = body.conta as string;
+          // auto: configura uazapi→Chatwoot na CONTA da tela (sem depender de outra ação).
+          try {
+            const tok = await tokenForInstance(inst);
+            if (tok) { const acct = await acctByKey(body.conta as string); cwResult = await applyChatwootConfig(tok, acct, {}, inst); }
+          } catch (e) { cwResult = { ok: false, reason: String(e) }; }
+        } else delete cur[inst];
       }
       await writeAssign(cur);
-      return json({ ok: true, assign: cur });
+      return json({ ok: true, assign: cur, chatwoot: cwResult });
     }
 
     // Demais ações precisam do token da instância
@@ -222,22 +261,13 @@ export async function handle(req: Request): Promise<Response> {
       case "chatwoot_get":
         return passthru(await instGet("/chatwoot/config", token));
       case "chatwoot_set": {
-        // url/token/conta vêm do env (não trafegam pelo browser); só inbox_id/flags vêm da UI.
+        // Conta = a tela atribuída à instância (multi-cliente); url/token vêm da conta, não do env.
         const cfg = (body.config ?? {}) as Json;
-        const merged = {
-          enabled: cfg.enabled ?? true,
-          url: env("CHATWOOT_URL"),
-          access_token: optionalEnv("CHATWOOT_API_ACCESS_TOKEN") ?? "",
-          account_id: optionalEnv("CHATWOOT_ACCOUNT_ID") ?? "",
-          inbox_id: cfg.inbox_id ?? "",
-          sign_messages: cfg.sign_messages ?? false,
-          create_new_conversation: cfg.create_new_conversation ?? true,
-          ignore_groups: cfg.ignore_groups ?? true,
-        };
-        const put = await instPut("/chatwoot/config", token, merged);
-        // automático: configura o webhook da inbox no Chatwoot (saída → WhatsApp)
-        const hook = await syncChatwootWebhook(token).catch((e) => ({ ok: false, reason: String(e) }));
-        return json({ config: put.data, webhook_sync: hook }, put.ok ? 200 : put.status);
+        const assign = await readAssign();
+        const contaKey = (body.conta as string) ?? assign[instance];
+        const acct = contaKey ? await acctByKey(contaKey) : envAcct();
+        const r = await applyChatwootConfig(token, acct, cfg, instance);
+        return json(r, r.ok ? 200 : (r.status as number));
       }
       case "chatwoot_webhook_sync":
         return json(await syncChatwootWebhook(token));
