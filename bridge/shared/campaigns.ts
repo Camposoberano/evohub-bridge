@@ -5,6 +5,14 @@ import { admin } from "./supabase.ts";
 const BUCKET = "soberano-config";
 const FILE = "campaigns.json";
 
+let bucketReady = false;
+async function ensureBucket() {
+  if (bucketReady) return;
+  const { error } = await (admin() as any).storage.createBucket(BUCKET, { public: false });
+  if (error && !/exist/i.test(error.message ?? "")) console.warn("createBucket soberano-config:", error.message);
+  bucketReady = true;
+}
+
 export type Step = { type: string; text?: string; file?: string; waitMin?: number };
 export type Campaign = {
   id: string; name: string; template: string; language: string;
@@ -21,9 +29,11 @@ export async function readCampaigns(): Promise<CampaignState> {
 }
 
 export async function writeCampaigns(state: CampaignState): Promise<void> {
+  await ensureBucket();
   const blob = new Blob([JSON.stringify(state)], { type: "application/json" });
   // deno-lint-ignore no-explicit-any
-  await (admin() as any).storage.from(BUCKET).upload(FILE, blob, { upsert: true, contentType: "application/json" });
+  const { error } = await (admin() as any).storage.from(BUCKET).upload(FILE, blob, { upsert: true, contentType: "application/json" });
+  if (error) throw new Error(`writeCampaigns: ${error.message}`);
 }
 
 // normaliza número (só dígitos) p/ chave de target

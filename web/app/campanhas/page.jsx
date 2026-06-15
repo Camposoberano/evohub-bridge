@@ -19,7 +19,9 @@ export default function Campanhas() {
   const [manual, setManual] = useState("");
   const [importado, setImportado] = useState([]);
   const [passos, setPassos] = useState([{ id: _sid++, type: "text", text: "", file: "" }]);
-  const [status, setStatus] = useState({ campaigns: [], counts: {} });
+  const [status, setStatus] = useState({ campaigns: [], counts: {}, officialChannel: null });
+  const [canaisWa, setCanaisWa] = useState([]);
+  const [canalId, setCanalId] = useState("");
   const [msg, setMsg] = useState("");
   const [enviando, setEnviando] = useState(false);
 
@@ -40,8 +42,17 @@ export default function Campanhas() {
     else setMsg(t.data.error || "Erro ao listar templates");
     const ct = await supabase.from("contacts").select("external_contact_id,phone,attributes,channels(type)").limit(5000);
     setContatos((ct.data || []).filter((c) => c.channels?.type === "whatsapp" && !(c.attributes || {}).dead));
+    const chs = await supabase.from("channels").select("id,name,status,phone_number,display_name,phone_number_id").eq("type", "whatsapp").order("created_at", { ascending: false });
+    const lista = (chs.data || []).filter((c) => c.phone_number_id);
+    setCanaisWa(lista);
     const s = await api("/campaign", "status");
-    if (s.ok) setStatus(s.data);
+    if (s.ok) {
+      setStatus(s.data);
+      const oficial = s.data.officialChannel;
+      if (oficial?.id) setCanalId(oficial.id);
+      else if (lista.length === 1) setCanalId(lista[0].id);
+      else if (lista.length > 0) setCanalId(lista.find((c) => c.status === "active")?.id || lista[0].id);
+    }
   }, []);
 
   useEffect(() => {
@@ -64,16 +75,29 @@ export default function Campanhas() {
     const t = templates.find((x) => x.name === tpl);
     if (!t) return setMsg("Escolha um template aprovado.");
     if (publico.length === 0) return setMsg("Público vazio.");
+    if (!canalId) return setMsg("Nenhum número oficial WhatsApp conectado. Vá em Conexões e conecte o canal.");
     const hf = headerFormat(t);
     if (hf && !headerUrl) return setMsg(`Esse template tem cabeçalho de ${hf} — informe a URL da mídia.`);
     if (!confirm(`Disparar template "${tpl}" pra ${publico.length} números? Sequência (${passos.length} passos) sai quando cada um responder.`)) return;
     setEnviando(true);
-    const params = { name: tpl, template: tpl, language: t.language, numbers: publico, steps: passos.map((p) => ({ type: p.type, text: p.text, file: p.file })) };
-    if (hf && headerUrl) params.headerMedia = { format: hf, link: headerUrl };
-    const r = await api("/campaign", "start", params);
-    setEnviando(false);
-    setMsg(r.ok ? `Template enviado: ${r.data.sent} ok, ${r.data.failed} falha.${r.data.errors?.length ? " Erros: " + r.data.errors.join(" | ") : ""} Aguardando respostas pra disparar a sequência.` : "Erro: " + (r.data.error || JSON.stringify(r.data).slice(0, 150)));
-    carregar();
+    setMsg(`Enviando template para ${publico.length} números…`);
+    try {
+      const params = { name: tpl, template: tpl, language: t.language, numbers: publico, channel_id: canalId, steps: passos.map((p) => ({ type: p.type, text: p.text, file: p.file })) };
+      if (hf && headerUrl) params.headerMedia = { format: hf, link: headerUrl };
+      const r = await api("/campaign", "start", params);
+      if (r.ok) {
+        const d = r.data;
+        setMsg(`Template enviado pelo ${d.channel?.phone_number || d.channel?.display_name || d.channel?.name || "oficial"}: ${d.sent}/${d.total ?? publico.length} ok, ${d.failed} falha.${d.errors?.length ? " Erros: " + d.errors.join(" | ") : ""} Aguardando respostas pra disparar a sequência.`);
+      } else {
+        const partial = r.data.partial ? ` (${r.data.sent} enviados antes da falha)` : "";
+        setMsg("Erro: " + (r.data.error || JSON.stringify(r.data).slice(0, 150)) + partial);
+      }
+      carregar();
+    } catch (err) {
+      setMsg("Falha na rede: " + err.message);
+    } finally {
+      setEnviando(false);
+    }
   }
   function headerFormat(t) {
     const h = (t?.components || []).find((c) => c.type === "HEADER");
@@ -92,6 +116,27 @@ export default function Campanhas() {
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>Template oficial → cliente responde (abre janela) → dispara a sequência. Sem webhook por contato.</div>
         </div>
         {msg && <div className="card" style={{ marginBottom: 16, fontSize: 13, wordBreak: "break-word" }}>{msg}</div>}
+
+        <div className="section-title">Número oficial (remetente)</div>
+        <div className="card" style={{ marginBottom: 16 }}>
+          {canaisWa.length === 0 ? (
+            <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
+              Nenhum WhatsApp oficial conectado. <a href="/conexoes" style={{ color: "var(--mint)" }}>Conectar em Conexões</a>
+            </div>
+          ) : canaisWa.length === 1 ? (
+            <div style={{ fontSize: 14 }}>
+              <span className="badge badge-green" style={{ marginRight: 8 }}>Conectado</span>
+              {canaisWa[0].name} — {canaisWa[0].phone_number || canaisWa[0].display_name || "—"}
+            </div>
+          ) : (
+            <select value={canalId} onChange={(e) => setCanalId(e.target.value)} style={{ width: "100%" }}>
+              <option value="">Escolha o número oficial…</option>
+              {canaisWa.map((c) => (
+                <option key={c.id} value={c.id}>{c.name} — {c.phone_number || c.display_name || c.id} ({c.status})</option>
+              ))}
+            </select>
+          )}
+        </div>
 
         <div className="section-title">Template aprovado</div>
         <div className="card" style={{ marginBottom: 16 }}>

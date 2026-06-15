@@ -88,6 +88,9 @@ async function handleOutgoing(db: Db, p: Json) {
     if (attachments.length > 0) {
       // mídia (com ou sem legenda). A legenda do Chatwoot (content) entra na 1ª mídia.
       // Bug antigo: "if (content) só texto" descartava a mídia quando havia legenda.
+      const onlyAudio = attachments.every((att) =>
+        metaAttachmentType(att.file_type as string | undefined) === "audio",
+      );
       let captionUsed = false;
       for (const att of attachments) {
         const aUrl = (att.data_url as string) ?? null;
@@ -104,8 +107,9 @@ async function handleOutgoing(db: Db, p: Json) {
         if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";
         res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload });
       }
-      // legenda não coube em nenhuma mídia (ex.: só áudio) → manda como texto separado.
-      if (content && !captionUsed) {
+      // legenda que não coube na mídia → texto separado. Áudio puro NÃO manda texto extra
+      // (Chatwoot costuma preencher content com placeholder tipo "áudio").
+      if (content && !captionUsed && !onlyAudio) {
         res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
         msgType = "text";
       }

@@ -28,9 +28,11 @@ export async function ingestInbound(
     sentAt?: string;
     attachments?: InboundAttachment[];
     outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
+    skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   const direction = msg.outgoing ? "out" : "in";
+  const skip = msg.skipChatwoot === true;
   if (msg.metaMessageId) {
     const { data: existingMessages } = await db.from("messages")
       .select("id")
@@ -51,16 +53,17 @@ export async function ingestInbound(
   let contact = existing as Json | null;
   let sourceId = (existing?.attributes as Json | undefined)?.source_id as string | undefined;
 
-  if (!contact || !sourceId) {
-    const cw = await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from });
-    sourceId = cw.source_id;
+  if (!contact || (!sourceId && !skip)) {
+    // nativo: não cria contato no Chatwoot (a nativa já tem o seu) — só no banco.
+    const cw = skip ? null : await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from });
+    if (cw) sourceId = cw.source_id;
     const { data: upserted, error: upsertError } = await db.from("contacts").upsert({
       channel_id: channel.id,
       external_contact_id: msg.from,
       name: msg.name ?? null,
       phone: phone,
-      chatwoot_contact_id: cw.contact_id ?? null,
-      attributes: { source_id: sourceId },
+      chatwoot_contact_id: cw?.contact_id ?? (contact?.chatwoot_contact_id ?? null),
+      attributes: sourceId ? { source_id: sourceId } : ((contact?.attributes as Json) ?? {}),
       last_seen_at: new Date().toISOString(),
     }, { onConflict: "channel_id,external_contact_id" }).select().single();
     if (upsertError) throw upsertError;
@@ -80,11 +83,12 @@ export async function ingestInbound(
 
   let conv = openConv as Json | null;
   if (!conv) {
-    const cwConv = await createConversation(inboxId, sourceId!);
+    // nativo: conversa só no banco (a nativa gerencia a dela).
+    const cwConv = skip ? null : await createConversation(inboxId, sourceId!);
     const { data: insertedConv, error: convInsertError } = await db.from("conversations").insert({
       channel_id: channel.id,
       contact_id: contact.id,
-      chatwoot_conversation_id: cwConv.id,
+      chatwoot_conversation_id: cwConv?.id ?? null,
       status: "open",
     }).select().single();
     if (convInsertError) throw convInsertError;
@@ -92,8 +96,11 @@ export async function ingestInbound(
   }
 
   const attachments = msg.attachments ?? [];
-  let cwMsg: Record<string, unknown> & { id?: number };
-  if (msg.outgoing) {
+  let cwMsg: (Record<string, unknown> & { id?: number }) | null = null;
+  if (skip) {
+    // nativo: não posta no Chatwoot. Entrada já chega na caixa nativa pelo repasse do EVO Hub.
+    cwMsg = null;
+  } else if (msg.outgoing) {
     // echo do aparelho -> mensagem de SAÍDA na conversa do cliente.
     cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
       content: msg.content,
@@ -109,7 +116,7 @@ export async function ingestInbound(
   } else {
     cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
   }
-  const chatwootMediaUrl = firstAttachmentUrl(cwMsg);
+  const chatwootMediaUrl = cwMsg ? firstAttachmentUrl(cwMsg) : (msg.attachments?.[0]?.sourceUrl ?? null);
   const { data: insertedMessage, error: messageError } = await db.from("messages").insert({
     conversation_id: conv.id,
     channel_id: channel.id,

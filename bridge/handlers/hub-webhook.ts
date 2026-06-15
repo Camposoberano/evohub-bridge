@@ -10,6 +10,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { getChannelDetail, sendMeta } from "../shared/hub.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
+import { isNativeChannel } from "../shared/native.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -134,6 +135,11 @@ async function handleWhatsApp(db: Db, p: Json) {
       // do Hub não autentica a lookaside. META_ACCESS_TOKEN é o token da sua WABA.
       const metaToken = optionalEnv("META_ACCESS_TOKEN");
 
+      // Canal nativo: a entrada/echo já chega na caixa nativa do Chatwoot pelo repasse do EVO Hub.
+      // Aqui o bridge NÃO posta no Chatwoot (evita duplicata) — só persiste no banco (analytics)
+      // e roda o motor de campanha.
+      const native = await isNativeChannel(channel.phone_number_id as string | undefined);
+
       // Echoes: mensagem enviada PELO APARELHO (modo coexistência app+API).
       // Vem em message_echoes (não em messages) -> entra como SAÍDA na conversa do cliente.
       // Dedup por meta_message_id: echo de msg que NÓS mandamos via API já está no banco -> pula.
@@ -143,7 +149,7 @@ async function handleWhatsApp(db: Db, p: Json) {
         if (!to) continue;
         const { content, attachments } = await extractWaContent(e, e.type as string, metaToken, channel.id as string);
         await ingestInbound(db, channel as Json, {
-          from: to, metaMessageId: e.id as string, msgType: e.type as string, content, attachments, outgoing: true,
+          from: to, metaMessageId: e.id as string, msgType: e.type as string, content, attachments, outgoing: true, skipChatwoot: native,
         });
       }
 
@@ -165,6 +171,7 @@ async function handleWhatsApp(db: Db, p: Json) {
           msgType: type,
           content,
           attachments,
+          skipChatwoot: native,
         });
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
