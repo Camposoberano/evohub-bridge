@@ -129,41 +129,34 @@ async function handleWhatsApp(db: Db, p: Json) {
       const statuses = (value.statuses ?? []) as Json[];
       if (statuses.length > 0) await handleWhatsAppStatuses(db, channel as Json, statuses);
 
-      const contactsMeta = (value.contacts ?? []) as Json[];
-      const messages = (value.messages ?? []) as Json[];
-      if (messages.length === 0) continue;
-
       // Mídia WhatsApp baixa direto na Graph API com o token Meta (Usuário do Sistema da
       // WABA). O Hub está em modo "shared" e não expõe download de binário; o channel_token
       // do Hub não autentica a lookaside. META_ACCESS_TOKEN é o token da sua WABA.
       const metaToken = optionalEnv("META_ACCESS_TOKEN");
+
+      // Echoes: mensagem enviada PELO APARELHO (modo coexistência app+API).
+      // Vem em message_echoes (não em messages) -> entra como SAÍDA na conversa do cliente.
+      // Dedup por meta_message_id: echo de msg que NÓS mandamos via API já está no banco -> pula.
+      const echoes = (value.message_echoes ?? []) as Json[];
+      for (const e of echoes) {
+        const to = e.to as string;
+        if (!to) continue;
+        const { content, attachments } = await extractWaContent(e, e.type as string, metaToken, channel.id as string);
+        await ingestInbound(db, channel as Json, {
+          from: to, metaMessageId: e.id as string, msgType: e.type as string, content, attachments, outgoing: true,
+        });
+      }
+
+      const contactsMeta = (value.contacts ?? []) as Json[];
+      const messages = (value.messages ?? []) as Json[];
+      if (messages.length === 0) continue;
 
       for (const m of messages) {
         const from = m.from as string;
         const profileName = (contactsMeta.find((c) => (c.wa_id as string) === from)?.profile as Json)?.name as string | undefined;
 
         const type = m.type as string;
-        let content: string;
-        let attachments: InboundAttachment[] | undefined;
-
-        if (type === "text") {
-          content = ((m.text as Json)?.body as string) ?? "";
-        } else if (WA_MEDIA_TYPES.has(type)) {
-          const media = (m[type] ?? {}) as Json;
-          const mediaId = stringValue(media.id);
-          const caption = stringValue(media.caption);
-          const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
-          if (!metaToken) console.warn("WA mídia sem META_ACCESS_TOKEN — usando placeholder", channel.id);
-          const downloaded = metaToken && mediaId ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint) : null;
-          if (downloaded) {
-            attachments = [downloaded];
-            content = caption ?? fallbackContent(type);
-          } else {
-            content = caption ?? fallbackContent(type);
-          }
-        } else {
-          content = `[${type}]`; // tipo sem tradução (location/contacts/interactive/etc.)
-        }
+        const { content, attachments } = await extractWaContent(m, type, metaToken, channel.id as string);
 
         await ingestInbound(db, channel as Json, {
           from,
@@ -328,6 +321,23 @@ async function downloadWhatsAppMedia(metaToken: string, mediaId: string, filenam
     bytes,
     sourceUrl: url,
   };
+}
+
+// Extrai texto + anexo de uma mensagem/echo WhatsApp (mesmo formato p/ inbound e echo).
+async function extractWaContent(
+  m: Json, type: string, metaToken: string | undefined, channelId: string,
+): Promise<{ content: string; attachments?: InboundAttachment[] }> {
+  if (type === "text") return { content: ((m.text as Json)?.body as string) ?? "" };
+  if (WA_MEDIA_TYPES.has(type)) {
+    const media = (m[type] ?? {}) as Json;
+    const mediaId = stringValue(media.id);
+    const caption = stringValue(media.caption);
+    const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
+    if (!metaToken) console.warn("WA mídia sem META_ACCESS_TOKEN — usando placeholder", channelId);
+    const downloaded = metaToken && mediaId ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint) : null;
+    return { content: caption ?? fallbackContent(type), attachments: downloaded ? [downloaded] : undefined };
+  }
+  return { content: `[${type}]` }; // tipo sem tradução (location/contacts/interactive/etc.)
 }
 
 function fallbackContent(type: string): string {

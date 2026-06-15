@@ -66,8 +66,9 @@ const version = {
     "outbound-media-caption-fix",
     "template-header-media",
     "audio-ptt-ogg",
+    "message-echoes-coexistence",
   ],
-  build: "2026-06-15-audio-ptt",
+  build: "2026-06-15-echoes",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

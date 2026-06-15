@@ -27,8 +27,10 @@ export async function ingestInbound(
     content: string;
     sentAt?: string;
     attachments?: InboundAttachment[];
+    outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
+  const direction = msg.outgoing ? "out" : "in";
   if (msg.metaMessageId) {
     const { data: existingMessages } = await db.from("messages")
       .select("id")
@@ -90,24 +92,34 @@ export async function ingestInbound(
   }
 
   const attachments = msg.attachments ?? [];
-  const cwMsg = attachments.length > 0
-    ? await createConversationMessage(conv.chatwoot_conversation_id as number, {
+  let cwMsg: Record<string, unknown> & { id?: number };
+  if (msg.outgoing) {
+    // echo do aparelho -> mensagem de SAÍDA na conversa do cliente.
+    cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
+      content: msg.content,
+      messageType: "outgoing",
+      attachments,
+    });
+  } else if (attachments.length > 0) {
+    cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
       content: msg.content,
       messageType: "incoming",
       attachments,
-    })
-    : await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
+    });
+  } else {
+    cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
+  }
   const chatwootMediaUrl = firstAttachmentUrl(cwMsg);
   const { data: insertedMessage, error: messageError } = await db.from("messages").insert({
     conversation_id: conv.id,
     channel_id: channel.id,
-    direction: "in",
+    direction,
     msg_type: normalizeMsgType(msg.msgType),
     content: msg.content,
     media_url: chatwootMediaUrl,
     meta_message_id: msg.metaMessageId ?? null,
     chatwoot_message_id: cwMsg?.id ?? null,
-    status: "received",
+    status: msg.outgoing ? "sent" : "received",
     sent_at: msg.sentAt ?? new Date().toISOString(),
   }).select("id").single();
 
