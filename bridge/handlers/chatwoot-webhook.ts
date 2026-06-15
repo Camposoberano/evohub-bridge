@@ -29,16 +29,12 @@ export async function handle(req: Request): Promise<Response> {
   const db = admin();
   const eventName = (p.event as string) ?? "unknown";
 
-  await db.from("events").insert({ source: "chatwoot", event_type: eventName, payload: p });
+  db.from("events").insert({ source: "chatwoot", event_type: eventName, payload: p }).then(() => {}, () => {});
 
-  try {
-    if (eventName === "message_created" && isOutgoing(p) && !p.private) {
-      await handleOutgoing(db, p);
-    }
-    // TODO Fase 4: conversation_created / conversation_resolved / contact_created -> métricas
-  } catch (e) {
-    console.error("chatwoot-webhook erro:", e);
-    return new Response("ok (logged error)", { status: 200 });
+  // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
+  // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
+  if (eventName === "message_created" && isOutgoing(p) && !p.private) {
+    handleOutgoing(db, p).catch((e) => console.error("chatwoot-webhook handleOutgoing erro:", e));
   }
   return new Response("ok", { status: 200 });
 }

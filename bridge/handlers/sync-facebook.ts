@@ -142,9 +142,16 @@ async function syncInbound(
       const from = (message.from ?? {}) as Json;
       const senderId = from.id as string | undefined;
       if (!senderId) continue;
-      if (senderId === nodeId) {
-        result.skipped_self++;
-        continue;
+      // mensagem enviada PELA PÁGINA (app/aparelho) = SAÍDA; contato = destinatário (to).
+      // Antes era pulada (skipped_self) -> mensagem do aparelho não chegava no chat.
+      const isFromPage = senderId === nodeId;
+      let contactId = senderId;
+      let contactName = from.name as string | undefined;
+      if (isFromPage) {
+        const to = (((message.to as Json)?.data as Json[]) ?? [])[0] as Json | undefined;
+        contactId = (to?.id as string | undefined) ?? "";
+        contactName = to?.name as string | undefined;
+        if (!contactId) continue; // sem destinatário identificável
       }
 
       result.inbound_found++;
@@ -179,13 +186,14 @@ async function syncInbound(
       const msgType = inboundMsgType(message, attachments);
       const content = (message.message as string | undefined)?.trim() || fallbackContent(msgType);
       const ingest = await ingestInbound(db, channel, {
-        from: senderId,
-        name: from.name as string | undefined,
+        from: contactId,
+        name: contactName,
         metaMessageId,
         msgType,
         content,
         sentAt: message.created_time as string | undefined,
         attachments,
+        outgoing: isFromPage,
       });
 
       if (ingest.inserted) result.inserted++;
