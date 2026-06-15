@@ -29,8 +29,10 @@ export async function ingestInbound(
     attachments?: InboundAttachment[];
     outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
     skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
+    accountId?: string; // account_id do Chatwoot (multi-conta na mesma instância)
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
+  const acct = msg.accountId; // undefined -> createConversationMessage usa o default (env)
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
   if (msg.metaMessageId) {
@@ -106,13 +108,13 @@ export async function ingestInbound(
       content: msg.content,
       messageType: "outgoing",
       attachments,
-    });
+    }, acct);
   } else if (attachments.length > 0) {
     cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
       content: msg.content,
       messageType: "incoming",
       attachments,
-    });
+    }, acct);
   } else {
     cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content);
   }

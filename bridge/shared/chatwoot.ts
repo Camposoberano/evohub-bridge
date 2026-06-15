@@ -28,11 +28,11 @@ export type ChatwootAttachment = {
 // ── Application API ──────────────────────────────────────────────────────────
 
 // Cria inbox tipo "api" e devolve id + inbox_identifier.
-export async function createApiInbox(name: string, webhookUrl: string): Promise<{
+export async function createApiInbox(name: string, webhookUrl: string, accountId: string | number = ACC()): Promise<{
   id: number;
   inbox_identifier: string;
 }> {
-  const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/inboxes`, {
+  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes`, {
     method: "POST",
     headers: appHeaders(),
     body: JSON.stringify({ name, channel: { type: "api", webhook_url: webhookUrl } }),
@@ -41,7 +41,7 @@ export async function createApiInbox(name: string, webhookUrl: string): Promise<
   const inbox = await res.json();
   const identifier = inbox?.inbox_identifier ?? inbox?.channel?.inbox_identifier;
   if (identifier) return { id: inbox.id, inbox_identifier: identifier };
-  const got = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/inboxes/${inbox.id}`, {
+  const got = await fetch(`${BASE()}/api/v1/accounts/${accountId}/inboxes/${inbox.id}`, {
     headers: appHeaders(),
   });
   const full = await got.json();
@@ -123,6 +123,7 @@ export async function createConversationMessage(
     messageType: "incoming" | "outgoing";
     attachments?: ChatwootAttachment[];
   },
+  accountId: string | number = ACC(),
 ): Promise<Record<string, unknown> & { id?: number }> {
   const attachments = input.attachments ?? [];
 
@@ -138,7 +139,7 @@ export async function createConversationMessage(
       form.append("attachments[]", blob, attachment.filename);
     }
 
-    const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
+    const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
       method: "POST",
       headers: appAuthHeaders(),
       body: form,
@@ -147,7 +148,7 @@ export async function createConversationMessage(
     return await res.json();
   }
 
-  const res = await fetch(`${BASE()}/api/v1/accounts/${ACC()}/conversations/${conversationId}/messages`, {
+  const res = await fetch(`${BASE()}/api/v1/accounts/${accountId}/conversations/${conversationId}/messages`, {
     method: "POST",
     headers: appHeaders(),
     body: JSON.stringify({

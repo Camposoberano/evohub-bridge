@@ -8,7 +8,8 @@ import Nav from "@/components/Nav";
 // (outras contas no mesmo URL ou outro URL/cliente) quando tiver token.
 const CONTAS = [
   { id: CHATWOOT_ACCOUNT_ID, label: "Campo Soberano", url: CHATWOOT_URL, accountId: CHATWOOT_ACCOUNT_ID, ativa: true },
-  // exemplo futuro: { id:"1", label:"Cliente X", url: CHATWOOT_URL, accountId:"1", ativa:false },
+  // 2ª conta na MESMA instância (mesmo token, muda só o account_id).
+  ...(CHATWOOT_ACCOUNT_ID !== "1" ? [{ id: "1", label: "Chatwoot 1", url: CHATWOOT_URL, accountId: "1", ativa: true }] : []),
 ];
 
 const PLAT = {
@@ -29,7 +30,7 @@ export default function Central() {
   const [pronto, setPronto] = useState(false);
   const [canais, setCanais] = useState([]);
   const [uaz, setUaz] = useState([]);
-  const [add, setAdd] = useState(false);
+  const [add, setAdd] = useState(null); // conta.id cujo menu "adicionar canal" está aberto
   const [msg, setMsg] = useState("");
   const [assign, setAssign] = useState({}); // { instanceName: contaId } — persistido no banco (Supabase Storage via bridge)
 
@@ -66,20 +67,20 @@ export default function Central() {
     });
   }, [router, carregar]);
 
-  async function novoOficial(type) {
+  async function novoOficial(type, accountId) {
     const nome = prompt(`Nome do canal ${type}:`); if (!nome) return;
     setMsg("Criando canal…");
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`${BRIDGE_URL}/connect-channel`, {
       method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ type, name: nome }),
+      body: JSON.stringify({ type, name: nome, account_id: accountId }),
     });
     const j = await res.json();
     if (!res.ok) { setMsg(j.error || "Erro"); return; }
     const token = (j.connect_url || "").split("/").pop();
     window.open(j.connect_url, "_blank", "noopener");
     setMsg("Canal criado — autorize na Meta na nova aba.");
-    setAdd(false); carregar();
+    setAdd(null); carregar();
   }
 
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
@@ -99,7 +100,8 @@ export default function Central() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
           {CONTAS.map((conta) => {
-            const chs = conta.ativa ? canais : [];
+            // canais oficiais aparecem na conta principal (frontend ainda não sabe a conta por canal).
+            const chs = conta.accountId === CHATWOOT_ACCOUNT_ID ? canais : [];
             const uazChs = conta.ativa ? uaz.filter((i) => assign[i.name] === conta.id) : [];
             return (
               <div key={conta.id} className="card" style={{ padding: 0, overflow: "hidden" }}>
@@ -142,15 +144,15 @@ export default function Central() {
 
                   {conta.ativa && (
                     <div style={{ marginTop: 14 }}>
-                      {!add ? (
-                        <button className="btn-ghost" style={{ width: "100%" }} onClick={() => setAdd(true)}>+ Adicionar canal</button>
+                      {add !== conta.id ? (
+                        <button className="btn-ghost" style={{ width: "100%" }} onClick={() => setAdd(conta.id)}>+ Adicionar canal</button>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("facebook")}>Facebook</button>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("instagram")}>Instagram</button>
-                          <button className="btn-ghost mini" onClick={() => novoOficial("whatsapp")}>WhatsApp oficial (EVO Hub)</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("facebook", conta.accountId)}>Facebook</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("instagram", conta.accountId)}>Instagram</button>
+                          <button className="btn-ghost mini" onClick={() => novoOficial("whatsapp", conta.accountId)}>WhatsApp oficial (EVO Hub)</button>
                           <button className="btn-ghost mini" onClick={() => router.push("/instancias")}>WhatsApp não-oficial (uazapi)</button>
-                          <button className="btn-ghost mini" onClick={() => setAdd(false)}>Cancelar</button>
+                          <button className="btn-ghost mini" onClick={() => setAdd(null)}>Cancelar</button>
                         </div>
                       )}
                     </div>

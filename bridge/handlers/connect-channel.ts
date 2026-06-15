@@ -5,6 +5,7 @@ import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { createApiInbox } from "../shared/chatwoot.ts";
 import { createChannel, publicConnectUrl } from "../shared/hub.ts";
+import { setAccountForChannel } from "../shared/accounts.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 type ChannelType = "whatsapp" | "facebook" | "instagram";
@@ -52,6 +53,8 @@ export async function handle(req: Request): Promise<Response> {
   if (!["whatsapp", "facebook", "instagram"].includes(type) || !name) {
     return json({ error: "type (whatsapp|facebook|instagram) e name são obrigatórios" }, 400);
   }
+  // conta Chatwoot de destino (multi-conta na mesma instância). Default = conta principal.
+  const accountId = (body.account_id as string | number | undefined)?.toString().trim() || env("CHATWOOT_ACCOUNT_ID");
 
   // 1) canal local (external_id = id local)
   const { data: channel, error } = await db.from("channels")
@@ -71,8 +74,11 @@ export async function handle(req: Request): Promise<Response> {
       webhook_secret: env("EVOLUTION_HUB_WEBHOOK_SECRET"),
     });
 
-    // 3) inbox no Chatwoot (webhook autenticado por token na query)
-    const inbox = await createApiInbox(name, `${base}/chatwoot-webhook?token=${encodeURIComponent(cwSecret)}`);
+    // 3) inbox no Chatwoot na conta escolhida (webhook autenticado por token na query)
+    const inbox = await createApiInbox(name, `${base}/chatwoot-webhook?token=${encodeURIComponent(cwSecret)}`, accountId);
+
+    // 3b) grava o mapa canal -> conta (pro bridge rotear entrada/echo na conta certa)
+    if (accountId !== env("CHATWOOT_ACCOUNT_ID")) await setAccountForChannel(channel.id, accountId);
 
     // 4) grava mapa + segredo
     await db.from("channels").update({
