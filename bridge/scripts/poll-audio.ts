@@ -4,7 +4,7 @@ const TEST = "https://download.samplelib.com/mp3/sample-3s.mp3";
 for (let i = 1; i <= 18; i++) {
   let build = "?";
   try { build = (await (await fetch(`${BASE}/version`)).json()).build; } catch { /* */ }
-  if (build === "2026-06-15-dbgaudio2") {
+  if (build === "2026-06-15-ldpath") {
     console.log(`[${i}] LIVE`);
     try {
       const r = await fetch(`${BASE}/debug-audio?url=${encodeURIComponent(TEST)}`);

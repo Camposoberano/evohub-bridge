@@ -5,7 +5,7 @@ FROM denoland/deno:alpine-2.1.4
 WORKDIR /app
 
 # ffmpeg: transcodifica áudio de saída pra ogg/opus (voz/PTT no WhatsApp)
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg && ffmpeg -version
 
 # Cache de dependências (esm.sh) — copia só os fontes necessários
 COPY deno.json deno.json

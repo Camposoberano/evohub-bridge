@@ -25,14 +25,15 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
     outPath = await Deno.makeTempFile({ suffix: ".ogg" });
     await Deno.writeFile(inPath, input);
-    // --allow-run (sem escopo) no Dockerfile permite spawn herdando a env da imagem,
-    // incluindo LD_LIBRARY_PATH que o ffmpeg precisa pra achar as libs (libopus etc.).
+    // LD_LIBRARY_PATH herdado da imagem Deno desviava a busca de libs do ffmpeg (exit 127).
+    // Aponta pras libs do sistema (alpine musl) pra ele achar libavcodec/libopus/etc.
     const cmd = new Deno.Command("ffmpeg", {
       args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", outPath],
-      stderr: "null", stdout: "null",
+      env: { LD_LIBRARY_PATH: "/usr/lib:/lib:/usr/local/lib" },
+      stderr: "piped", stdout: "null",
     });
-    const { success } = await cmd.output();
-    if (!success) { console.error("ffmpeg falhou ao transcodificar áudio"); return null; }
+    const { success, code, stderr } = await cmd.output();
+    if (!success) { console.error(`ffmpeg falhou (code ${code}):`, new TextDecoder().decode(stderr).slice(0, 300)); return null; }
     const bytes = await Deno.readFile(outPath);
     if (bytes.length === 0) return null;
 

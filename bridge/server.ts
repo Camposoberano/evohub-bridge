@@ -74,7 +74,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-15-dbgaudio2",
+  build: "2026-06-15-ldpath",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -151,7 +151,7 @@ Deno.serve({ port }, async (req) => {
       try { await Deno.stat(p); out[`exists ${p}`] = true; } catch { out[`exists ${p}`] = false; }
     }
     try {
-      const c = new Deno.Command("ffmpeg", { args: ["-version"], stdout: "piped", stderr: "piped" });
+      const c = new Deno.Command("ffmpeg", { args: ["-version"], env: { LD_LIBRARY_PATH: "/usr/lib:/lib:/usr/local/lib" }, stdout: "piped", stderr: "piped" });
       const r = await c.output();
       out.ffmpeg = r.success ? new TextDecoder().decode(r.stdout).split("\n")[0] : `FAIL code ${r.code}`;
       out.stderr = new TextDecoder().decode(r.stderr).slice(0, 400);
