@@ -8,6 +8,7 @@ import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
+import { toVoiceOgg } from "../shared/audio.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -86,7 +87,10 @@ async function handleOutgoing(db: Db, p: Json) {
         const attachType = metaAttachmentType(att.file_type as string | undefined);
         msgType = attachType === "file" ? "document" : attachType;
         mediaUrl = aUrl;
-        const mediaPayload: Json = { link: aUrl };
+        // áudio: transcodifica pra ogg/opus pra virar "voz gravada" (PTT) no WhatsApp.
+        let linkUrl = aUrl;
+        if (msgType === "audio") { const ogg = await toVoiceOgg(aUrl); if (ogg) { linkUrl = ogg; mediaUrl = ogg; } }
+        const mediaPayload: Json = { link: linkUrl };
         // áudio NÃO aceita caption; image/video/document aceitam.
         if (content && !captionUsed && msgType !== "audio") { mediaPayload.caption = content; captionUsed = true; }
         if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";

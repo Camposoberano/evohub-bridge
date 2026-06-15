@@ -65,8 +65,9 @@ const version = {
     "campaign-gated",
     "outbound-media-caption-fix",
     "template-header-media",
+    "audio-ptt-ogg",
   ],
-  build: "2026-06-15-media-caption-fix",
+  build: "2026-06-15-audio-ptt",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

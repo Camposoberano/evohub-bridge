@@ -4,6 +4,9 @@ FROM denoland/deno:alpine-2.1.4
 
 WORKDIR /app
 
+# ffmpeg: transcodifica áudio de saída pra ogg/opus (voz/PTT no WhatsApp)
+RUN apk add --no-cache ffmpeg
+
 # Cache de dependências (esm.sh) — copia só os fontes necessários
 COPY deno.json deno.json
 COPY shared/ shared/
@@ -15,5 +18,5 @@ RUN deno check server.ts
 
 EXPOSE 8000
 
-# Permissões mínimas: rede (Hub/Chatwoot/Supabase) + env (segredos)
-CMD ["deno", "run", "--allow-net", "--allow-env", "server.ts"]
+# Permissões: rede (Hub/Chatwoot/Supabase) + env (segredos) + run/read/write (ffmpeg + temp)
+CMD ["deno", "run", "--allow-net", "--allow-env", "--allow-run=ffmpeg", "--allow-read", "--allow-write", "server.ts"]
