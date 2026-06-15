@@ -85,7 +85,19 @@ async function handleOutgoing(db: Db, p: Json) {
   if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
     const url = `${channel.phone_number_id}/messages`;
-    if (attachments.length > 0) {
+    // Disparo de template DE DENTRO DO CHAT: agente digita "/template <nome> [idioma]" (ou /tpl, /t).
+    // Útil pra falar com cliente fora da janela 24h sem sair do Chatwoot.
+    const tplCmd = content.trim().match(/^\/(?:template|tpl|t)\s+([a-z0-9_]+)(?:\s+([a-z_]+))?$/i);
+    if (tplCmd && attachments.length === 0) {
+      const name = tplCmd[1];
+      const lang = tplCmd[2] || "pt_BR";
+      res = await sendMeta(token, url, {
+        messaging_product: "whatsapp", to, type: "template",
+        template: { name, language: { code: lang }, components: [] },
+      });
+      msgType = "template";
+      if (!res.ok) console.error("template via chat falhou:", JSON.stringify((res.data as Json)?.error ?? res.data).slice(0, 200));
+    } else if (attachments.length > 0) {
       // mídia (com ou sem legenda). A legenda do Chatwoot (content) entra na 1ª mídia.
       // Bug antigo: "if (content) só texto" descartava a mídia quando havia legenda.
       const onlyAudio = attachments.every((att) =>
