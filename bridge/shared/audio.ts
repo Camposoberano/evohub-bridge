@@ -25,11 +25,11 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
     outPath = await Deno.makeTempFile({ suffix: ".ogg" });
     await Deno.writeFile(inPath, input);
-    // LD_LIBRARY_PATH herdado da imagem Deno desviava a busca de libs do ffmpeg (exit 127).
-    // Aponta pras libs do sistema (alpine musl) pra ele achar libavcodec/libopus/etc.
+    // A imagem Deno traz /usr/local/lib/libgcc_s.so.1 incompatível que sombreia o do sistema
+    // e quebra o ffmpeg (exit 127). Força /usr/lib primeiro p/ pegar o libgcc certo da alpine.
     const cmd = new Deno.Command("ffmpeg", {
       args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", outPath],
-      env: { LD_LIBRARY_PATH: "/usr/lib:/lib:/usr/local/lib" },
+      env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
       stderr: "piped", stdout: "null",
     });
     const { success, code, stderr } = await cmd.output();
