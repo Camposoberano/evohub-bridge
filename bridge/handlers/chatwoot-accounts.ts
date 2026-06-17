@@ -3,6 +3,7 @@
 // Mesma instância, mesmo token -> conta = só accountId + label (url default = CHATWOOT_URL).
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
+import { getChannelMap, setAccountForChannel } from "../shared/accounts.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 type Json = Record<string, unknown>;
@@ -40,11 +41,21 @@ export async function handle(req: Request): Promise<Response> {
   });
   if (!(await uc.auth.getUser()).data?.user) return json({ error: "unauthorized" }, 401);
 
-  if (req.method === "GET") return json({ accounts: (await read()).map(mask) });
+  if (req.method === "GET") return json({ accounts: (await read()).map(mask), channelMap: await getChannelMap() });
 
   const body = await req.json().catch(() => ({})) as Json;
   const action = body.action as string;
   const accounts = await read();
+
+  // atribui um canal oficial a uma tela (conta). account_key vazio = volta pra principal.
+  if (action === "assign_channel") {
+    const channelId = String(body.channel_id ?? "").trim();
+    let key = String(body.account_key ?? "").trim();
+    if (!channelId) return json({ error: "channel_id obrigatório" }, 400);
+    if (key === env("CHATWOOT_ACCOUNT_ID")) key = ""; // principal = sem mapa (default)
+    await setAccountForChannel(channelId, key);
+    return json({ ok: true, channelMap: await getChannelMap() });
+  }
 
   if (action === "save") {
     const accountId = String(body.accountId ?? "").trim();

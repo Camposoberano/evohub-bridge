@@ -55,10 +55,16 @@ export async function accountForChannel(channelId: string): Promise<CwAcct> {
   return toCwAcct(found);
 }
 
-// grava o canal -> conta (usado no connect-channel).
+// mapa canal -> accountKey (pro painel mostrar/atribuir).
+export async function getChannelMap(): Promise<Record<string, string>> {
+  return await dl<Record<string, string>>(CH_FILE, {});
+}
+
+// grava (ou remove, se accountKey vazio) o canal -> conta.
 export async function setAccountForChannel(channelId: string, accountKey: string): Promise<void> {
   const map = await dl<Record<string, string>>(CH_FILE, {});
-  map[channelId] = accountKey;
+  if (accountKey) map[channelId] = accountKey;
+  else delete map[channelId];
   await (admin() as any).storage.from(BUCKET).upload(CH_FILE, new Blob([JSON.stringify(map, null, 2)], { type: "application/json" }), {
     upsert: true, contentType: "application/json",
   });

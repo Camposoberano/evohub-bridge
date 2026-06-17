@@ -28,6 +28,16 @@ export default function Central() {
   const [assign, setAssign] = useState({}); // { instanceName: contaId } — persistido no banco (Supabase Storage via bridge)
   const [contas, setContas] = useState([]); // telas Chatwoot (do bridge)
   const [novaConta, setNovaConta] = useState(null); // form de adicionar Chatwoot ({label, accountId}) ou null
+  const [channelMap, setChannelMap] = useState({}); // { channel_id: accountKey } — canal oficial -> tela
+  const [showOficiais, setShowOficiais] = useState(false); // seção recolhível dos canais oficiais
+
+  // atribui canal oficial a uma tela (igual ao uazapi).
+  async function atribuirCanal(channelId, key) {
+    setChannelMap({ ...channelMap, [channelId]: key }); // otimista
+    const r = await acc("POST", { action: "assign_channel", channel_id: channelId, account_key: key });
+    if (r.ok && r.data.channelMap) setChannelMap(r.data.channelMap);
+  }
+  const contaDoCanal = (id) => channelMap[id] || CHATWOOT_ACCOUNT_ID;
 
   // CRUD das contas Chatwoot no bridge.
   async function acc(method, body) {
@@ -83,6 +93,7 @@ export default function Central() {
     if (a.ok && a.data.assign) setAssign(a.data.assign);
     const c = await acc("GET");
     if (c.ok && c.data.accounts) setContas(c.data.accounts);
+    if (c.ok && c.data.channelMap) setChannelMap(c.data.channelMap);
   }, []);
 
   useEffect(() => {
@@ -127,8 +138,8 @@ export default function Central() {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
           {contas.map((conta) => {
-            // canais oficiais aparecem na conta principal (frontend ainda não sabe a conta por canal).
-            const chs = conta.accountId === CHATWOOT_ACCOUNT_ID ? canais : [];
+            // canais oficiais aparecem na tela atribuída (channelMap; default = principal).
+            const chs = canais.filter((c) => contaDoCanal(c.id) === conta.id);
             const uazChs = conta.ativa ? uaz.filter((i) => assign[i.name] === conta.id) : [];
             const principal = conta.accountId === CHATWOOT_ACCOUNT_ID;
             return (
@@ -224,6 +235,32 @@ export default function Central() {
             </div>
           )}
         </div>
+
+        {/* CANAIS OFICIAIS (EVO Hub) — recolhível; atribua cada um à tela certa */}
+        <div className="section-title" style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
+          onClick={() => setShowOficiais(!showOficiais)}>
+          <span>{showOficiais ? "▾" : "☰"} Canais oficiais (EVO Hub) — {canais.length}</span>
+          <span style={{ fontSize: 12, color: "var(--text-faint)" }}>{showOficiais ? "recolher" : "expandir"}</span>
+        </div>
+        {showOficiais && (
+          <div className="table-wrap">
+            {canais.length === 0 ? <div style={{ padding: 16, color: "var(--text-dim)" }}>Nenhum canal oficial.</div> :
+              canais.map((c) => {
+                const plat = PLAT[c.type] || { label: c.type, color: "#888" };
+                const [cls, txt] = statusBadge(c.status);
+                return (
+                  <div key={c.id} className="integ">
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: plat.color, flex: "0 0 auto" }} />
+                    <div className="integ-body"><div className="integ-name">{c.name}</div><div className="integ-desc">{plat.label}{c.phone_number_id ? " · " + c.phone_number_id : ""}</div></div>
+                    <span className={"badge " + cls}>{txt}</span>
+                    <select value={contaDoCanal(c.id)} onChange={(e) => atribuirCanal(c.id, e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
+                      {contas.map((ct) => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
+                    </select>
+                  </div>
+                );
+              })}
+          </div>
+        )}
 
         {/* INSTÂNCIAS uazapi — todas; atribua cada uma à tela certa */}
         <div className="section-title" style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
