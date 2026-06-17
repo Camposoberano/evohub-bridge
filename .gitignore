@@ -7,3 +7,7 @@ dist/
 .DS_Store
 supabase/.branches/
 supabase/.temp/
+
+# dados/listas locais (não versionar)
+imagens da dental jua.json
+*.xlsx
