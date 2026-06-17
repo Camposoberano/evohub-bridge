@@ -1,0 +1,10 @@
+import * as XLSX from "https://esm.sh/xlsx@0.18.5";
+const path = Deno.args[0];
+const buf = await Deno.readFile(path);
+const wb = XLSX.read(buf, { type: "buffer" });
+console.log("abas:", wb.SheetNames.join(", "));
+const ws = wb.Sheets[wb.SheetNames[0]];
+const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as Record<string, unknown>[];
+console.log("total linhas:", rows.length);
+console.log("colunas:", Object.keys(rows[0] || {}).join(" | "));
+for (const r of rows.slice(0, 5)) console.log(JSON.stringify(r).slice(0, 220));

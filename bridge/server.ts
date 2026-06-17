@@ -22,6 +22,9 @@ import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { env, optionalEnv } from "./shared/env.ts";
+import { admin } from "./shared/supabase.ts";
+import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
+import { enrichStep } from "./shared/enrich.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -76,7 +79,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-15-uazapi-multiacct",
+  build: "2026-06-16-enrich-loop",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -135,6 +138,27 @@ function startRetentionLoop() {
   setInterval(run, 24 * 60 * 60 * 1000);
 }
 
+// Enriquecimento de clientes (uazapi) — loop sempre-on, resumível. Só roda se
+// ENRICH_ENABLED=true + ENRICH_INSTANCE=<nome da instância uazapi de trabalho>.
+// Ritmo: 1 passo por ENRICH_INTERVAL_MS (default 10s) -> check em lote, depois details 1 a 1.
+function startEnrichLoop() {
+  if (optionalEnv("ENRICH_ENABLED") !== "true") return;
+  const instName = optionalEnv("ENRICH_INSTANCE");
+  if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
+  const interval = Number(optionalEnv("ENRICH_INTERVAL_MS") ?? "10000");
+  let tok = "";
+  const run = async () => {
+    try {
+      if (!tok) tok = (await tokenForInstance(instName)) ?? "";
+      if (!tok) { console.warn("enrich: instância não encontrada", instName); return; }
+      const res = await enrichStep(admin(), tok);
+      if (res !== "idle") console.log("enrich:", res);
+    } catch (e) { console.error("enrich erro:", e); }
+  };
+  setInterval(run, interval);
+  console.log(`enrich loop ON (instância=${instName}, ${interval}ms)`);
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -157,4 +181,5 @@ Deno.serve({ port }, async (req) => {
 startSyncLoop();
 startRollupLoop();
 startRetentionLoop();
+startEnrichLoop();
 console.log(`bridge ouvindo na porta ${port}`);
