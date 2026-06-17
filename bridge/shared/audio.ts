@@ -28,7 +28,7 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     // A imagem Deno traz /usr/local/lib/libgcc_s.so.1 incompatível que sombreia o do sistema
     // e quebra o ffmpeg (exit 127). Força /usr/lib primeiro p/ pegar o libgcc certo da alpine.
     const cmd = new Deno.Command("ffmpeg", {
-      args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "32k", "-ar", "48000", "-ac", "1", outPath],
+      args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1", "-application", "voip", outPath],
       env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
       stderr: "piped", stdout: "null",
     });
