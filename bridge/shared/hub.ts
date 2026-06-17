@@ -91,6 +91,22 @@ export async function createChannel(input: {
   return json.channel ? json : { channel: json, webhook_id: undefined };
 }
 
+// Cria um webhook de MENSAGENS pro canal (o createChannel só assina ciclo de vida).
+// Sem isso, o Hub não encaminha messages/echoes/statuses -> entrada não chega.
+export async function createMessagesWebhook(hubChannelId: string, webhookUrl: string, secret: string): Promise<boolean> {
+  const events = [
+    "messages", "message_echoes", "message_reactions", "message_reads", "message_deliveries",
+    "smb_message_echoes", "messaging_postbacks", "messaging_optins", "messaging_referral",
+    "account_update", "message_template_status_update", "*",
+  ];
+  const res = await fetch(`${HUB()}/api/v1/webhooks`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${env("EVOLUTION_HUB_API_KEY")}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "mensagens", channel_id: hubChannelId, url: webhookUrl, events, secret }),
+  });
+  return res.ok;
+}
+
 // URL pública do link de conexão (cliente final loga na Meta).
 export function publicConnectUrl(channelToken: string): string {
   return `${env("EVOLUTION_HUB_FRONTEND_URL").replace(/\/+$/, "")}/connect/${channelToken}`;
