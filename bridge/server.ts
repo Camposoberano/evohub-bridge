@@ -18,6 +18,7 @@ import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
+import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
@@ -44,6 +45,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/meta-templates": metaTemplates,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
+  "/channel-sync": channelSync,
   "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
@@ -79,7 +81,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-canais-assign",
+  build: "2026-06-16-channel-sync",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -178,8 +180,20 @@ Deno.serve({ port }, async (req) => {
   return new Response(res.body, { status: res.status, headers });
 });
 
+// Sync de status dos canais oficiais (Hub -> base) a cada 5 min: pending->active quando
+// conecta, detecta queda. Complementa o webhook channel_connected (que pode falhar).
+function startChannelSyncLoop() {
+  const run = async () => {
+    try { const r = await syncChannels(admin()); if (r.updated) console.log("channel-sync:", JSON.stringify(r)); }
+    catch (e) { console.error("channel-sync erro:", e); }
+  };
+  setTimeout(run, 45_000);
+  setInterval(run, 5 * 60 * 1000);
+}
+
 startSyncLoop();
 startRollupLoop();
 startRetentionLoop();
 startEnrichLoop();
+startChannelSyncLoop();
 console.log(`bridge ouvindo na porta ${port}`);

@@ -30,6 +30,19 @@ export default function Central() {
   const [novaConta, setNovaConta] = useState(null); // form de adicionar Chatwoot ({label, accountId}) ou null
   const [channelMap, setChannelMap] = useState({}); // { channel_id: accountKey } — canal oficial -> tela
   const [showOficiais, setShowOficiais] = useState(false); // seção recolhível dos canais oficiais
+  const [sincronizando, setSincronizando] = useState(false);
+  const [novoCanalOpen, setNovoCanalOpen] = useState(false);
+
+  // Atualiza status dos canais oficiais (consulta o EVO Hub e grava na base).
+  async function atualizarCanais() {
+    setSincronizando(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/channel-sync`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+    const j = await res.json().catch(() => ({}));
+    setSincronizando(false);
+    setMsg(res.ok ? `Atualizado: ${j.updated || 0} canal(is)${j.changes?.length ? " — " + j.changes.join(", ") : ""}.` : "Erro ao atualizar");
+    carregar();
+  }
 
   // atribui canal oficial a uma tela (igual ao uazapi).
   async function atribuirCanal(channelId, key) {
@@ -236,12 +249,23 @@ export default function Central() {
           )}
         </div>
 
-        {/* CANAIS OFICIAIS (EVO Hub) — recolhível; atribua cada um à tela certa */}
-        <div className="section-title" style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
-          onClick={() => setShowOficiais(!showOficiais)}>
-          <span>{showOficiais ? "▾" : "☰"} Canais oficiais (EVO Hub) — {canais.length}</span>
-          <span style={{ fontSize: 12, color: "var(--text-faint)" }}>{showOficiais ? "recolher" : "expandir"}</span>
+        {/* CANAIS OFICIAIS (EVO Hub) — recolhível; atualizar + criar + atribuir tela */}
+        <div className="section-title" style={{ marginTop: 28, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ cursor: "pointer" }} onClick={() => setShowOficiais(!showOficiais)}>{showOficiais ? "▾" : "☰"} Canais oficiais (EVO Hub) — {canais.length}</span>
+          <span style={{ display: "flex", gap: 6 }}>
+            <button className="btn-ghost mini" onClick={atualizarCanais} disabled={sincronizando}>{sincronizando ? "Atualizando…" : "↻ Atualizar"}</button>
+            <button className="btn-ghost mini" onClick={() => { setShowOficiais(true); setNovoCanalOpen(!novoCanalOpen); }}>+ Novo</button>
+          </span>
         </div>
+        {showOficiais && novoCanalOpen && (
+          <div className="card" style={{ marginBottom: 8, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{ fontSize: 13, color: "var(--text-dim)" }}>Novo canal oficial (conta principal):</span>
+            <button className="btn-ghost mini" onClick={() => novoOficial("whatsapp", CHATWOOT_ACCOUNT_ID)}>WhatsApp</button>
+            <button className="btn-ghost mini" onClick={() => novoOficial("facebook", CHATWOOT_ACCOUNT_ID)}>Facebook</button>
+            <button className="btn-ghost mini" onClick={() => novoOficial("instagram", CHATWOOT_ACCOUNT_ID)}>Instagram</button>
+            <span style={{ fontSize: 11, color: "var(--text-faint)" }}>(pra criar em outra tela, use o "+ Adicionar canal" na coluna dela)</span>
+          </div>
+        )}
         {showOficiais && (
           <div className="table-wrap">
             {canais.length === 0 ? <div style={{ padding: 16, color: "var(--text-dim)" }}>Nenhum canal oficial.</div> :
