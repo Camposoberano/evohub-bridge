@@ -4,7 +4,7 @@
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { createApiInbox } from "../shared/chatwoot.ts";
-import { createChannel, createMessagesWebhook, publicConnectUrl } from "../shared/hub.ts";
+import { createChannel, publicConnectUrl } from "../shared/hub.ts";
 import { acctByKey, setAccountForChannel } from "../shared/accounts.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -74,8 +74,9 @@ export async function handle(req: Request): Promise<Response> {
       webhook_secret: env("EVOLUTION_HUB_WEBHOOK_SECRET"),
     });
 
-    // 2b) webhook de MENSAGENS (createChannel só assina ciclo de vida; sem isto a entrada não chega)
-    await createMessagesWebhook(hub.channel.id, `${base}/hub-webhook`, env("EVOLUTION_HUB_WEBHOOK_SECRET")).catch(() => {});
+    // 2b) NÃO precisa webhook de mensagens por canal: existe um webhook all_channels=true
+    // no Hub que entrega messages/echoes de TODOS os canais pro /hub-webhook (dedup por
+    // meta_message_id). O createChannel já cobre o ciclo de vida.
 
     // 3) inbox no Chatwoot na CONTA escolhida (instância própria: URL+token da conta)
     const acct = await acctByKey(accountId);
