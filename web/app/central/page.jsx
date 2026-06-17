@@ -95,17 +95,18 @@ export default function Central() {
 
   async function novoOficial(type, accountId) {
     const nome = prompt(`Nome do canal ${type}:`); if (!nome) return;
+    // Abre a aba JÁ no gesto do clique. Se abrir depois do await, o navegador BLOQUEIA o popup.
+    const win = window.open("about:blank", "_blank");
     setMsg("Criando canal…");
     const { data: { session } } = await supabase.auth.getSession();
     const res = await fetch(`${BRIDGE_URL}/connect-channel`, {
       method: "POST", headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ type, name: nome, account_id: accountId }),
     });
-    const j = await res.json();
-    if (!res.ok) { setMsg(j.error || "Erro"); return; }
-    const token = (j.connect_url || "").split("/").pop();
-    window.open(j.connect_url, "_blank", "noopener");
-    setMsg("Canal criado — autorize na Meta na nova aba.");
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || !j.connect_url) { setMsg("Erro: " + (j.error || res.status)); if (win) win.close(); return; }
+    if (win) win.location.href = j.connect_url; else window.open(j.connect_url, "_blank");
+    setMsg("Canal criado — autorize na Meta na aba que abriu.");
     setAdd(null); carregar();
   }
 
