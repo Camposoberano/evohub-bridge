@@ -19,6 +19,7 @@ import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts";
+import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
@@ -46,6 +47,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
   "/channel-sync": channelSync,
+  "/clientes": clientes,
   "/sync-facebook": syncFacebook,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
@@ -81,7 +83,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-audio-always-opus",
+  build: "2026-06-16-clientes-panel",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
