@@ -16,7 +16,8 @@ async function ensureBucket() {
 
 // Devolve URL pública de um .ogg/opus, ou null se falhar (caller usa o original).
 export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
-  if (/\.(ogg|oga)(\?|$)/i.test(srcUrl)) return srcUrl; // já é ogg -> nada a fazer
+  // SEMPRE transcodifica pra ogg/opus. (Não pula .ogg: o Chatwoot serve ogg/vorbis,
+  // que o WhatsApp mostra como ARQUIVO, não como voz/PTT — só opus vira bolha de voz.)
   let inPath = "", outPath = "";
   try {
     const res = await fetch(srcUrl);
