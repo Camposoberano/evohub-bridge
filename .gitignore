@@ -11,3 +11,6 @@ supabase/.temp/
 # dados/listas locais (não versionar)
 imagens da dental jua.json
 *.xlsx
+
+# conteúdo de outro projeto (não versionar aqui)
+docs/
