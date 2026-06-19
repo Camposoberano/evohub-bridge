@@ -83,7 +83,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-enrich-rotate",
+  build: "2026-06-16-enrich-0595-on",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -146,8 +146,8 @@ function startRetentionLoop() {
 // ENRICH_ENABLED=true + ENRICH_INSTANCE=<nome da instância uazapi de trabalho>.
 // Ritmo: 1 passo por ENRICH_INTERVAL_MS (default 10s) -> check em lote, depois details 1 a 1.
 function startEnrichLoop() {
-  if (optionalEnv("ENRICH_ENABLED") !== "true") return;
-  const instName = optionalEnv("ENRICH_INSTANCE");
+  if (optionalEnv("ENRICH_ENABLED") === "false") return; // ligado por padrão; kill-switch = false
+  const instName = optionalEnv("ENRICH_INSTANCE") ?? "0595"; // chip de trabalho default
   if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
   // Delay ROTACIONA aleatoriamente entre min e max (mais humano, anti-ban). Compat: se só
   // ENRICH_INTERVAL_MS estiver setado, usa ele como min e max (fixo).
