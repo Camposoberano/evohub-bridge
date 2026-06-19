@@ -83,7 +83,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-clientes-panel",
+  build: "2026-06-16-enrich-rotate",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -149,18 +149,22 @@ function startEnrichLoop() {
   if (optionalEnv("ENRICH_ENABLED") !== "true") return;
   const instName = optionalEnv("ENRICH_INSTANCE");
   if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
-  const interval = Number(optionalEnv("ENRICH_INTERVAL_MS") ?? "10000");
+  // Delay ROTACIONA aleatoriamente entre min e max (mais humano, anti-ban). Compat: se só
+  // ENRICH_INTERVAL_MS estiver setado, usa ele como min e max (fixo).
+  const min = Number(optionalEnv("ENRICH_MIN_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "16000");
+  const max = Number(optionalEnv("ENRICH_MAX_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "28000");
   let tok = "";
-  const run = async () => {
+  const tick = async () => {
     try {
       if (!tok) tok = (await tokenForInstance(instName)) ?? "";
-      if (!tok) { console.warn("enrich: instância não encontrada", instName); return; }
-      const res = await enrichStep(admin(), tok);
-      if (res !== "idle") console.log("enrich:", res);
+      if (tok) { const res = await enrichStep(admin(), tok); if (res !== "idle") console.log("enrich:", res); }
+      else console.warn("enrich: instância não encontrada", instName);
     } catch (e) { console.error("enrich erro:", e); }
+    const delay = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
+    setTimeout(tick, delay);
   };
-  setInterval(run, interval);
-  console.log(`enrich loop ON (instância=${instName}, ${interval}ms)`);
+  setTimeout(tick, 5000);
+  console.log(`enrich loop ON (instância=${instName}, ${min}-${max}ms rotacionando)`);
 }
 
 Deno.serve({ port }, async (req) => {
