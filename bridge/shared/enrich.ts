@@ -1,13 +1,15 @@
 // Enriquecimento de clientes (uazapi). Roda como loop no bridge (sempre-on, resumível).
 // Fase 1 (check, lote): on_whatsapp/jid/lid/verified_name. Fase 2 (details, 1 a 1): foto/nomes/grupos.
 import { instPost } from "./uazapi.ts";
+import { optionalEnv } from "./env.ts";
 import type { DbClient } from "./supabase.ts";
 
 type Json = Record<string, unknown>;
 
 export async function enrichStep(db: DbClient, token: string): Promise<string> {
-  // FASE 1: check em lote (on_whatsapp ainda nulo)
-  const { data: toCheck } = await db.from("clientes").select("phone").is("on_whatsapp", null).limit(40);
+  // FASE 1: check em lote (on_whatsapp ainda nulo). Lote menor = mais devagar/seguro.
+  const batch = Number(optionalEnv("ENRICH_CHECK_BATCH") ?? "10");
+  const { data: toCheck } = await db.from("clientes").select("phone").is("on_whatsapp", null).limit(batch);
   if (toCheck?.length) {
     const numbers = toCheck.map((c: Json) => c.phone as string);
     const r = await instPost("/chat/check", token, { numbers });
