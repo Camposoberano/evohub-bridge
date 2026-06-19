@@ -4,7 +4,7 @@
 //
 // Auth: o inbox é criado com webhook_url contendo ?token=<CHATWOOT_WEBHOOK_SECRET>.
 // Validamos esse token. TODO Fase 5: usar assinatura nativa se a versão suportar.
-import { admin } from "../shared/supabase.ts";
+import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
@@ -55,10 +55,15 @@ async function handleOutgoing(db: Db, p: Json) {
 
   if (!cwConversationId || (!content && !attachment)) return;
 
-  // Anti-loop: se a mensagem já está no banco (ex.: echo do aparelho que injetamos como
-  // outgoing no Chatwoot), NÃO reenviar pro Meta — senão duplica e re-entrega ao cliente.
   const cwMsgId = p.id as number | undefined;
   if (cwMsgId) {
+    // 1) Claim ATÔMICO: 2 webhooks do mesmo message_created (retry/concorrência) -> só 1 envia.
+    //    Evita o cliente receber a mensagem 2x (era a duplicação reportada).
+    if (!(await claimDelivery(db, `cw-out-${cwMsgId}`, "chatwoot"))) {
+      console.log("cw msg já reivindicada — não reenvia", cwMsgId);
+      return;
+    }
+    // 2) Anti-loop echo: mensagem já no banco (echo do aparelho que injetamos) -> não reenviar.
     const { data: dup } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
     if (dup) { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
   }

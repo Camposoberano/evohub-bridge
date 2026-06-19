@@ -83,7 +83,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-enrich-batch5",
+  build: "2026-06-16-dedup-atomico",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

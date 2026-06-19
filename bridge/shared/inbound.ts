@@ -1,6 +1,6 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
-import type { DbClient } from "./supabase.ts";
+import { claimDelivery, type DbClient } from "./supabase.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -37,12 +37,11 @@ export async function ingestInbound(
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
   if (msg.metaMessageId) {
-    const { data: existingMessages } = await db.from("messages")
-      .select("id")
-      .eq("meta_message_id", msg.metaMessageId)
-      .limit(1);
-    const existingMessage = existingMessages?.[0];
-    if (existingMessage?.id) return { inserted: false, reason: "duplicate", message_id: existingMessage.id as string };
+    // Claim ATÔMICO por (canal, wamid): impede a corrida (2 ingests concorrentes do mesmo
+    // wamid) de inserir 2 linhas. Cross-canal (mesmo wamid em 2 números) é OK -> chave inclui canal.
+    if (!(await claimDelivery(db, `wa-${channel.id}-${msg.metaMessageId}`, "wa"))) {
+      return { inserted: false, reason: "duplicate" };
+    }
   }
 
   const inboxId = channel.chatwoot_inbox_identifier as string;
