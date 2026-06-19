@@ -83,7 +83,7 @@ const version = {
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
   ],
-  build: "2026-06-16-enrich-0595-on",
+  build: "2026-06-16-enrich-40-60",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -151,8 +151,8 @@ function startEnrichLoop() {
   if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
   // Delay ROTACIONA aleatoriamente entre min e max (mais humano, anti-ban). Compat: se só
   // ENRICH_INTERVAL_MS estiver setado, usa ele como min e max (fixo).
-  const min = Number(optionalEnv("ENRICH_MIN_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "16000");
-  const max = Number(optionalEnv("ENRICH_MAX_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "28000");
+  const min = Number(optionalEnv("ENRICH_MIN_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "40000");
+  const max = Number(optionalEnv("ENRICH_MAX_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "60000");
   let tok = "";
   const tick = async () => {
     try {
