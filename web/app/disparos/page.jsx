@@ -43,10 +43,13 @@ export default function Disparos() {
   const [verInst, setVerInst] = useState(false);
 
   // público
+  const [fonte, setFonte] = useState("contatos"); // contatos (já conversou) | clientes (lista fria enriquecida via uazapi)
   const [uf, setUf] = useState("nenhum");
   const [manual, setManual] = useState("");
   const [importado, setImportado] = useState([]);
   const [contatos, setContatos] = useState([]);
+  const [clientesNums, setClientesNums] = useState([]);
+  const [clientesUfs, setClientesUfs] = useState([]);
 
   // timeline + opções
   const [passos, setPassos] = useState([{ id: _sid++, type: "text", text: "", file: "", choices: "", footerText: "", listButton: "Ver opções", selectableCount: 1, docName: "", waitMin: 0 }]);
@@ -64,12 +67,30 @@ export default function Disparos() {
     return { ok: res.ok, data: await res.json().catch(() => ({})) };
   }
 
+  async function get(path) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}${path}`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+    return { ok: res.ok, data: await res.json().catch(() => ({})) };
+  }
+
   const carregar = useCallback(async () => {
     const r = await api("instances");
     if (r.ok && r.data.instances) setInstancias(r.data.instances);
     const ct = await supabase.from("contacts").select("external_contact_id,phone,attributes,channels(type)").limit(5000);
     setContatos((ct.data || []).filter((c) => c.channels?.type === "whatsapp" && !(c.attributes || {}).dead));
+    // estados disponíveis na base de clientes enriquecidos (uazapi) -- pra fonte "clientes".
+    const cs = await get("/clientes?stats=1");
+    if (cs.ok) setClientesUfs((cs.data.por_uf || []).map((p) => p.uf));
   }, []);
+
+  // quando a fonte é "clientes" e um estado é escolhido, busca os telefones confirmados
+  // no WhatsApp (enrich.ts) direto da tabela clientes -- são prospects, não contatos.
+  useEffect(() => {
+    if (fonte !== "clientes" || uf === "nenhum") { setClientesNums([]); return; }
+    const params = new URLSearchParams({ export: "1" });
+    if (uf !== "todos") params.set("uf", uf);
+    get(`/clientes?${params}`).then((r) => { if (r.ok) setClientesNums(r.data.phones || []); });
+  }, [fonte, uf]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -88,10 +109,16 @@ export default function Disparos() {
     });
   }, [inst]);
 
-  const segmentoNums = useMemo(() => contatos.map((c) => String(c.phone || c.external_contact_id || "").replace(/\D/g, ""))
-    .filter((d) => d.length >= 12).filter((d) => uf !== "nenhum" && (uf === "todos" || ufFromPhone(d) === uf)), [contatos, uf]);
+  const segmentoNums = useMemo(() => {
+    if (fonte === "clientes") return clientesNums; // já vem filtrado por UF/on_whatsapp do bridge
+    return contatos.map((c) => String(c.phone || c.external_contact_id || "").replace(/\D/g, ""))
+      .filter((d) => d.length >= 12).filter((d) => uf !== "nenhum" && (uf === "todos" || ufFromPhone(d) === uf));
+  }, [fonte, contatos, clientesNums, uf]);
   const publicoUnico = useMemo(() => [...new Set([...segmentoNums, ...parseNumeros(manual), ...importado])], [segmentoNums, manual, importado]);
-  const ufsPresentes = useMemo(() => [...new Set(contatos.map((c) => ufFromPhone(c.phone || c.external_contact_id)).filter(Boolean))].sort(), [contatos]);
+  const ufsPresentes = useMemo(() => {
+    if (fonte === "clientes") return clientesUfs;
+    return [...new Set(contatos.map((c) => ufFromPhone(c.phone || c.external_contact_id)).filter(Boolean))].sort();
+  }, [fonte, contatos, clientesUfs]);
 
   function importarArquivo(e) {
     const f = e.target.files?.[0]; if (!f) return;
@@ -222,9 +249,13 @@ export default function Disparos() {
         <div className="section-title">Público ({publicoUnico.length})</div>
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+            <select value={fonte} onChange={(e) => { setFonte(e.target.value); setUf("nenhum"); }}>
+              <option value="contatos">Contatos (já conversou)</option>
+              <option value="clientes">Clientes (lista fria, confirmado no WhatsApp)</option>
+            </select>
             <select value={uf} onChange={(e) => setUf(e.target.value)}>
               <option value="nenhum">Não usar a base</option>
-              <option value="todos">Todos da base ({contatos.length})</option>
+              <option value="todos">Todos da base ({fonte === "clientes" ? "todos estados" : contatos.length})</option>
               {ufsPresentes.map((u) => <option key={u} value={u}>{u} — {UF_REGIAO[u]}</option>)}
             </select>
             <label style={{ fontSize: 13, color: "var(--text-dim)" }}>Importar: <input type="file" accept=".txt,.csv" onChange={importarArquivo} style={{ fontSize: 13 }} /></label>

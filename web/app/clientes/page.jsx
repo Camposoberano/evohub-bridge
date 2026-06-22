@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL } from "@/lib/supabase";
+import { UF_REGIAO } from "@/lib/ddd";
 import Nav from "@/components/Nav";
 
 export default function Clientes() {
@@ -14,6 +15,7 @@ export default function Clientes() {
   const [q, setQ] = useState("");
   const [wa, setWa] = useState(false);
   const [busca, setBusca] = useState(""); // termo aplicado (debounce manual via Enter)
+  const [fUf, setFUf] = useState("todos");
   const limit = 50;
 
   async function get(path) {
@@ -26,11 +28,12 @@ export default function Clientes() {
     const params = new URLSearchParams({ page: String(page), limit: String(limit) });
     if (busca) params.set("q", busca);
     if (wa) params.set("wa", "1");
+    if (fUf !== "todos") params.set("uf", fUf);
     const r = await get(`/clientes?${params}`);
     if (r.ok) { setRows(r.data.clientes || []); setTotal(r.data.total || 0); }
     const s = await get("/clientes?stats=1");
     if (s.ok) setStats(s.data);
-  }, [page, busca, wa]);
+  }, [page, busca, wa, fUf]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -40,6 +43,8 @@ export default function Clientes() {
   }, [router]);
   useEffect(() => { if (pronto) carregar(); }, [pronto, carregar]);
 
+  // UF já vem calculada do backend (escaneia a base toda, não só a página atual).
+  const porUf = stats?.por_uf ?? [];
   const pages = Math.ceil(total / limit) || 1;
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
 
@@ -58,26 +63,40 @@ export default function Clientes() {
           ))}
         </div>
 
+        {porUf.length > 0 && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+            <span style={{ fontSize: 12, color: "var(--text-faint)", alignSelf: "center" }}>Com WhatsApp por estado:</span>
+            {porUf.slice(0, 14).map(({ uf, count }) => (
+              <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => { setFUf(fUf === uf ? "todos" : uf); setPage(1); }}>
+                {uf} <span style={{ color: "var(--text-faint)" }}>{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { setPage(1); setBusca(q); } }}
             placeholder="Buscar nome ou número… (Enter)" style={{ flex: 1, minWidth: 220 }} />
           <label style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={wa} onChange={(e) => { setWa(e.target.checked); setPage(1); }} style={{ width: "auto" }} /> Só com WhatsApp
           </label>
+          {fUf !== "todos" && <span className="badge badge-gray">Estado: {fUf} — {UF_REGIAO[fUf]} <button className="btn-ghost mini" style={{ marginLeft: 6 }} onClick={() => { setFUf("todos"); setPage(1); }}>✕</button></span>}
           <button className="btn-ghost mini" onClick={() => { setPage(1); setBusca(q); }}>Buscar</button>
         </div>
 
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th></th><th>Nome</th><th>Número</th><th>WhatsApp</th><th>Origem</th><th>Grupos</th><th>Status</th></tr></thead>
+            <thead><tr><th></th><th>Nome</th><th>Número</th><th>Estado</th><th>WhatsApp</th><th>Já é contato</th><th>Origem</th><th>Grupos</th><th>Status</th></tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum cliente</td></tr> :
+              {rows.length === 0 ? <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum cliente</td></tr> :
                 rows.map((c) => (
                   <tr key={c.phone}>
                     <td style={{ width: 40 }}>{c.image_preview ? <img src={c.image_preview} alt="" style={{ width: 30, height: 30, borderRadius: 999, objectFit: "cover" }} /> : <span style={{ width: 30, height: 30, borderRadius: 999, background: "var(--surface-2)", display: "inline-block" }} />}</td>
                     <td>{c.wa_name || c.wa_contact_name || c.verified_name || <span style={{ color: "var(--text-faint)" }}>—</span>}</td>
                     <td style={{ fontVariantNumeric: "tabular-nums" }}>{c.phone}</td>
+                    <td>{c.uf ? <span className="badge badge-gray">{c.uf}</span> : <span style={{ color: "var(--text-faint)" }}>—</span>}</td>
                     <td>{c.on_whatsapp === true ? <span className="badge badge-green">sim</span> : c.on_whatsapp === false ? <span className="badge badge-red">não</span> : <span className="badge badge-gray">?</span>}</td>
+                    <td>{c.is_contact ? <span className="badge badge-amber">sim — já conversou</span> : <span style={{ color: "var(--text-faint)" }}>—</span>}</td>
                     <td style={{ fontSize: 12, color: "var(--text-dim)" }}>{c.source_number}</td>
                     <td>{c.common_groups ?? "—"}</td>
                     <td><span className="badge badge-gray">{c.enrich_status}</span></td>
