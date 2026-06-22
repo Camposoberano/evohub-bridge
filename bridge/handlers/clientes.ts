@@ -52,8 +52,8 @@ export async function handle(req: Request): Promise<Response> {
     const uf = (url.searchParams.get("uf") ?? "").toUpperCase();
     const { data } = await db.from("clientes").select("phone").eq("on_whatsapp", true).limit(UF_SCAN_CAP);
     const phones = (data ?? [])
-      .map((r) => (r as Json).phone as string)
-      .filter((phone) => !uf || ufFromPhone(phone) === uf);
+      .map((r: Json) => r.phone as string)
+      .filter((phone: string) => !uf || ufFromPhone(phone) === uf);
     return json({ phones, total: phones.length });
   }
 
@@ -99,7 +99,7 @@ export async function handle(req: Request): Promise<Response> {
   // campanha de prospecção pra quem já está em atendimento.
   const { data: contactRows } = await db.from("contacts").select("phone,external_contact_id").limit(20000);
   const contactSet = new Set(
-    (contactRows ?? []).map((c) => last11((c.phone as string) ?? (c.external_contact_id as string))),
+    (contactRows ?? []).map((c: Json) => last11((c.phone as string) ?? (c.external_contact_id as string))),
   );
   const clientes = rows.map((c) => ({ ...c, uf: ufFromPhone(c.phone as string), is_contact: contactSet.has(last11(c.phone as string)) }));
 
