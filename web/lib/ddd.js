@@ -28,8 +28,10 @@ export const UF_REGIAO = {
 export function dddFromPhone(raw) {
   if (!raw) return null;
   let d = String(raw).replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2); // tira código do país
-  if (d.length < 10) return null; // DDD(2) + número(8/9)
+  // remove código do país por TAMANHO, não por conteúdo -- "startsWith 55" é ambíguo
+  // (DDD 55 é Rio Grande do Sul; um número de RS sem código de país também começa com 55).
+  if (d.length === 12 || d.length === 13) d = d.slice(2);
+  if (d.length < 10 || d.length > 11) return null; // DDD(2) + número local (8 antigo ou 9 atual)
   const ddd = parseInt(d.slice(0, 2), 10);
   return Number.isFinite(ddd) ? ddd : null;
 }

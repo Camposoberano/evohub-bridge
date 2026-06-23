@@ -17,8 +17,11 @@ const DDD_UF: Record<number, string> = {
 export function ufFromPhone(raw?: string | null): string | null {
   if (!raw) return null;
   let d = String(raw).replace(/\D/g, "");
-  if (d.startsWith("55") && d.length >= 12) d = d.slice(2);
-  if (d.length < 10) return null;
+  // remove código do país por TAMANHO, não por conteúdo -- "startsWith 55" é ambíguo
+  // (DDD 55 é Rio Grande do Sul; um número de RS sem código de país também começa com 55).
+  if (d.length === 12 || d.length === 13) d = d.slice(2);
+  // sobrou DDD(2) + número local (8 dígitos antigo ou 9 dígitos atual) = 10 ou 11.
+  if (d.length < 10 || d.length > 11) return null;
   const ddd = parseInt(d.slice(0, 2), 10);
   return Number.isFinite(ddd) ? (DDD_UF[ddd] ?? null) : null;
 }
