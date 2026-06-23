@@ -17,7 +17,8 @@ export default function Clientes() {
   const [q, setQ] = useState("");
   const [wa, setWa] = useState(false);
   const [busca, setBusca] = useState(""); // termo aplicado (debounce manual via Enter)
-  const [fUf, setFUf] = useState("todos");
+  const [fUf, setFUf] = useState(null); // null = nenhum estado escolhido ainda
+  const [mostrar, setMostrar] = useState(false); // só busca/mostra a lista depois de uma ação explícita (estado ou busca)
   const [regiaoAberta, setRegiaoAberta] = useState(null); // qual região tá expandida mostrando os estados
   const [selecionados, setSelecionados] = useState(new Set()); // telefones marcados (persiste entre páginas)
   const [ficha, setFicha] = useState(null); // dado completo do modal
@@ -35,19 +36,25 @@ export default function Clientes() {
     const params = new URLSearchParams();
     if (busca) params.set("q", busca);
     if (wa) params.set("wa", "1");
-    if (fUf !== "todos") params.set("uf", fUf);
+    if (fUf) params.set("uf", fUf);
     return params;
   }
 
-  const carregar = useCallback(async () => {
+  const carregarStats = useCallback(async () => {
+    const s = await get("/clientes?stats=1");
+    if (s.ok) setStats(s.data);
+  }, []);
+
+  // só busca a lista depois de uma ação explícita (clicar estado ou Buscar) -- tela abre
+  // limpa, sem carregar tudo de cara (pesado e sem necessidade).
+  const carregarLista = useCallback(async () => {
+    if (!mostrar) return;
     const params = paramsAtuais();
     params.set("page", String(page));
     params.set("limit", String(limit));
     const r = await get(`/clientes?${params}`);
     if (r.ok) { setRows(r.data.clientes || []); setTotal(r.data.total || 0); }
-    const s = await get("/clientes?stats=1");
-    if (s.ok) setStats(s.data);
-  }, [page, busca, wa, fUf]);
+  }, [mostrar, page, busca, wa, fUf]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -55,7 +62,8 @@ export default function Clientes() {
       setPronto(true);
     });
   }, [router]);
-  useEffect(() => { if (pronto) carregar(); }, [pronto, carregar]);
+  useEffect(() => { if (pronto) carregarStats(); }, [pronto, carregarStats]);
+  useEffect(() => { if (pronto) carregarLista(); }, [pronto, carregarLista]);
 
   // UF já vem calculada do backend (escaneia a base toda, não só a página atual). Sem limite --
   // o Brasil tem 27 estados, não custa nada mostrar todos os que aparecerem.
@@ -146,7 +154,11 @@ export default function Clientes() {
             {regiaoAberta && (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingLeft: 16 }}>
                 {porRegiao.find((r) => r.reg === regiaoAberta)?.estados.map(({ uf, count }) => (
-                  <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => { setFUf(fUf === uf ? "todos" : uf); setPage(1); }}>
+                  <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => {
+                    if (fUf === uf) { setFUf(null); setMostrar(false); setRows([]); }
+                    else { setFUf(uf); setMostrar(true); }
+                    setPage(1);
+                  }}>
                     {uf} <span style={{ color: "var(--text-faint)" }}>{count}</span>
                   </button>
                 ))}
@@ -166,13 +178,13 @@ export default function Clientes() {
           <label style={{ fontSize: 13, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
             <input type="checkbox" checked={wa} onChange={(e) => { setWa(e.target.checked); setPage(1); }} style={{ width: "auto" }} /> Só com WhatsApp
           </label>
-          {fUf !== "todos" && <span className="badge badge-gray">Estado: {fUf} — {UF_REGIAO[fUf]} <button className="btn-ghost mini" style={{ marginLeft: 6 }} onClick={() => { setFUf("todos"); setPage(1); }}>✕</button></span>}
-          <button className="btn-ghost mini" onClick={() => { setPage(1); setBusca(q); }}>Buscar</button>
+          {fUf && <span className="badge badge-gray">Estado: {fUf} — {UF_REGIAO[fUf]} <button className="btn-ghost mini" style={{ marginLeft: 6 }} onClick={() => { setFUf(null); setMostrar(false); setRows([]); setPage(1); }}>✕</button></span>}
+          <button className="btn-ghost mini" onClick={() => { setPage(1); setBusca(q); setMostrar(true); }}>Buscar</button>
         </div>
 
         <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap", alignItems: "center", background: "var(--surface-2)", padding: 10, borderRadius: 10 }}>
           <span className="badge badge-gray">{selecionados.size} selecionado(s)</span>
-          <button className="btn-ghost mini" onClick={selecionarTodosFiltrados}>Selecionar todos os {total} filtrados</button>
+          <button className="btn-ghost mini" disabled={!mostrar} onClick={selecionarTodosFiltrados}>Selecionar todos os {total} filtrados</button>
           <button className="btn-ghost mini" onClick={limparSelecao}>Limpar seleção</button>
           <span style={{ flex: 1 }} />
           <button className="btn-mint mini" onClick={() => enviarPara("/disparos")}>Enviar pra Disparos</button>
@@ -187,7 +199,8 @@ export default function Clientes() {
               <th></th><th>Nome</th><th>Número</th><th>Estado</th><th>WhatsApp</th><th>Já é contato</th><th>Origem</th><th>Grupos</th><th>Status</th>
             </tr></thead>
             <tbody>
-              {rows.length === 0 ? <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum cliente</td></tr> :
+              {!mostrar ? <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Escolha um estado acima ou busque por nome/número pra ver a lista.</td></tr> :
+                rows.length === 0 ? <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum cliente</td></tr> :
                 rows.map((c) => (
                   <tr key={c.phone} style={{ cursor: "pointer" }} onClick={(e) => { if (e.target.type !== "checkbox") abrirFicha(c.phone); }}>
                     <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(c.phone)} onChange={() => toggleUm(c.phone)} /></td>
@@ -206,14 +219,16 @@ export default function Clientes() {
           </table>
         </div>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, fontSize: 13, color: "var(--text-dim)" }}>
-          <span>{total} clientes</span>
-          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button className="btn-ghost mini" disabled={page <= 1} onClick={() => setPage(page - 1)}>←</button>
-            página {page}/{pages}
-            <button className="btn-ghost mini" disabled={page >= pages} onClick={() => setPage(page + 1)}>→</button>
-          </span>
-        </div>
+        {mostrar && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, fontSize: 13, color: "var(--text-dim)" }}>
+            <span>{total} clientes</span>
+            <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button className="btn-ghost mini" disabled={page <= 1} onClick={() => setPage(page - 1)}>←</button>
+              página {page}/{pages}
+              <button className="btn-ghost mini" disabled={page >= pages} onClick={() => setPage(page + 1)}>→</button>
+            </span>
+          </div>
+        )}
       </div>
 
       {ficha && (
