@@ -257,7 +257,7 @@ export default function Disparos() {
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
             <select value={fonte} onChange={(e) => { setFonte(e.target.value); setUf("nenhum"); }}>
               <option value="contatos">Contatos (já conversou)</option>
-              <option value="clientes">Clientes (lista fria, confirmado no WhatsApp)</option>
+              <option value="clientes">Clientes (lista fria, já enriquecida)</option>
             </select>
             <select value={uf} onChange={(e) => setUf(e.target.value)}>
               <option value="nenhum">Não usar a base</option>

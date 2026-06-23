@@ -1,9 +1,11 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL } from "@/lib/supabase";
 import { UF_REGIAO } from "@/lib/ddd";
 import Nav from "@/components/Nav";
+
+const ORDEM_REGIOES = ["Sul", "Sudeste", "Centro-Oeste", "Norte", "Nordeste"];
 
 export default function Clientes() {
   const router = useRouter();
@@ -16,6 +18,7 @@ export default function Clientes() {
   const [wa, setWa] = useState(false);
   const [busca, setBusca] = useState(""); // termo aplicado (debounce manual via Enter)
   const [fUf, setFUf] = useState("todos");
+  const [regiaoAberta, setRegiaoAberta] = useState(null); // qual região tá expandida mostrando os estados
   const [selecionados, setSelecionados] = useState(new Set()); // telefones marcados (persiste entre páginas)
   const [ficha, setFicha] = useState(null); // dado completo do modal
   const [carregandoFicha, setCarregandoFicha] = useState(false);
@@ -57,6 +60,18 @@ export default function Clientes() {
   // UF já vem calculada do backend (escaneia a base toda, não só a página atual). Sem limite --
   // o Brasil tem 27 estados, não custa nada mostrar todos os que aparecerem.
   const porUf = stats?.por_uf ?? [];
+
+  // agrupa por região (5 botões) -- clica abre só os estados daquela região, sem poluir a tela.
+  const porRegiao = useMemo(() => {
+    const m = new Map(ORDEM_REGIOES.map((r) => [r, { estados: [], total: 0 }]));
+    for (const p of porUf) {
+      const reg = UF_REGIAO[p.uf];
+      const g = m.get(reg);
+      if (g) { g.estados.push(p); g.total += p.count; }
+    }
+    return ORDEM_REGIOES.map((reg) => ({ reg, ...m.get(reg) }));
+  }, [porUf]);
+
   const pages = Math.ceil(total / limit) || 1;
   const todaPaginaMarcada = rows.length > 0 && rows.every((c) => selecionados.has(c.phone));
 
@@ -119,13 +134,24 @@ export default function Clientes() {
         </div>
 
         {porUf.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-            <span style={{ fontSize: 12, color: "var(--text-faint)", alignSelf: "center" }}>Com WhatsApp por estado ({porUf.length}):</span>
-            {porUf.map(({ uf, count }) => (
-              <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => { setFUf(fUf === uf ? "todos" : uf); setPage(1); }}>
-                {uf} <span style={{ color: "var(--text-faint)" }}>{count}</span>
-              </button>
-            ))}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: regiaoAberta ? 8 : 0 }}>
+              <span style={{ fontSize: 12, color: "var(--text-faint)", alignSelf: "center" }}>Enriquecidos por região:</span>
+              {porRegiao.filter((r) => r.total > 0).map(({ reg, total: t }) => (
+                <button key={reg} className={"tab" + (regiaoAberta === reg ? " tab-active" : "")} onClick={() => setRegiaoAberta(regiaoAberta === reg ? null : reg)}>
+                  {reg} <span style={{ color: "var(--text-faint)" }}>{t}</span>
+                </button>
+              ))}
+            </div>
+            {regiaoAberta && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingLeft: 16 }}>
+                {porRegiao.find((r) => r.reg === regiaoAberta)?.estados.map(({ uf, count }) => (
+                  <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => { setFUf(fUf === uf ? "todos" : uf); setPage(1); }}>
+                    {uf} <span style={{ color: "var(--text-faint)" }}>{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

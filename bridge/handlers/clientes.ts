@@ -3,8 +3,10 @@
 //
 // Diferença pra "contatos": clientes = lista fria, ainda sem conversa, alvo de disparo.
 // contacts = quem já respondeu de verdade no canal oficial. Não se fundem -- mas um cliente
-// enriquecido (on_whatsapp=true) precisa poder ser usado como público de Disparos, por isso
-// o endpoint export=1 abaixo: devolve só os telefones confirmados, prontos pra campanha.
+// já enriquecido (enrich_status != "pending") precisa poder ser usado como público de
+// Disparos, por isso o endpoint export=1 abaixo: devolve os telefones já processados.
+// Não filtra por on_whatsapp=true: o check do uazapi pode estar errado/desatualizado,
+// e travar nele perde gente que na real continua tendo WhatsApp.
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { ufFromPhone } from "../shared/ddd.ts";
@@ -35,7 +37,9 @@ export async function handle(req: Request): Promise<Response> {
     // primeiro passo do loop (fase 1) -- some rápido, contava sempre ~0.
     const pending = Math.max(0, total - done - noWa);
 
-    const { data: waRows } = await db.from("clientes").select("phone").eq("on_whatsapp", true).limit(UF_SCAN_CAP);
+    // base de disparo = todo enriquecido (saiu de "pending"), não só on_whatsapp=true --
+    // o check do uazapi pode estar errado/desatualizado, não trava o público por causa disso.
+    const { data: waRows } = await db.from("clientes").select("phone").neq("enrich_status", "pending").limit(UF_SCAN_CAP);
     const porUfMap = new Map<string, number>();
     for (const r of waRows ?? []) {
       const uf = ufFromPhone((r as Json).phone as string);
@@ -46,11 +50,11 @@ export async function handle(req: Request): Promise<Response> {
     return json({ total, on_whatsapp: wa, enriquecidos: done, pendentes: pending, por_uf: porUf });
   }
 
-  // export (pra Disparos/Campanhas): só telefones confirmados no WhatsApp, opcionalmente por UF.
-  // Não devolve dado pessoal além do necessário pra disparar.
+  // export (pra Disparos/Campanhas): todo enriquecido (saiu de "pending"), opcionalmente por UF.
+  // Não filtra por on_whatsapp=true -- o check pode estar errado/desatualizado, não trava o público por causa disso.
   if (url.searchParams.get("export") === "1") {
     const uf = (url.searchParams.get("uf") ?? "").toUpperCase();
-    const { data } = await db.from("clientes").select("phone").eq("on_whatsapp", true).limit(UF_SCAN_CAP);
+    const { data } = await db.from("clientes").select("phone").neq("enrich_status", "pending").limit(UF_SCAN_CAP);
     const phones = (data ?? [])
       .map((r: Json) => r.phone as string)
       .filter((phone: string) => !uf || ufFromPhone(phone) === uf);
