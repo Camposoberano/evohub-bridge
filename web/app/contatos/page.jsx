@@ -7,6 +7,7 @@ import Nav from "@/components/Nav";
 
 const PLAT = { whatsapp: "WhatsApp", facebook: "Facebook", instagram: "Instagram" };
 const DAY = 86_400_000;
+const ORDEM_REGIOES = ["Sul", "Sudeste", "Centro-Oeste", "Norte", "Nordeste"];
 
 function quando(iso) {
   if (!iso) return "—";
@@ -27,6 +28,7 @@ export default function Contatos() {
   const [fUf, setFUf] = useState("todos");
   const [fJanela, setFJanela] = useState("todos");
   const [fMorto, setFMorto] = useState("vivos");
+  const [regiaoAberta, setRegiaoAberta] = useState(null);
 
   const carregar = useCallback(async () => {
     const [ct, cv] = await Promise.all([
@@ -92,8 +94,19 @@ export default function Contatos() {
   const porUf = useMemo(() => {
     const m = {};
     for (const c of enriquecidos) if (c.uf) m[c.uf] = (m[c.uf] || 0) + 1;
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    return Object.entries(m).sort((a, b) => b[1] - a[1]).map(([uf, count]) => ({ uf, count }));
   }, [enriquecidos]);
+
+  // agrupa por região (5 botões) -- igual feito em Clientes, menos poluído que listar 27 estados.
+  const porRegiao = useMemo(() => {
+    const m = new Map(ORDEM_REGIOES.map((r) => [r, { estados: [], total: 0 }]));
+    for (const p of porUf) {
+      const reg = UF_REGIAO[p.uf];
+      const g = m.get(reg);
+      if (g) { g.estados.push(p); g.total += p.count; }
+    }
+    return ORDEM_REGIOES.map((reg) => ({ reg, ...m.get(reg) }));
+  }, [porUf]);
 
   if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
 
@@ -109,12 +122,24 @@ export default function Contatos() {
         </div>
 
         {porUf.length > 0 && (
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-            {porUf.slice(0, 12).map(([uf, n]) => (
-              <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => setFUf(fUf === uf ? "todos" : uf)}>
-                {uf} <span style={{ color: "var(--text-faint)" }}>{n}</span>
-              </button>
-            ))}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: regiaoAberta ? 8 : 0 }}>
+              <span style={{ fontSize: 12, color: "var(--text-faint)", alignSelf: "center" }}>Por região:</span>
+              {porRegiao.filter((r) => r.total > 0).map(({ reg, total: t }) => (
+                <button key={reg} className={"tab" + (regiaoAberta === reg ? " tab-active" : "")} onClick={() => setRegiaoAberta(regiaoAberta === reg ? null : reg)}>
+                  {reg} <span style={{ color: "var(--text-faint)" }}>{t}</span>
+                </button>
+              ))}
+            </div>
+            {regiaoAberta && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", paddingLeft: 16 }}>
+                {porRegiao.find((r) => r.reg === regiaoAberta)?.estados.map(({ uf, count }) => (
+                  <button key={uf} className={"tab" + (fUf === uf ? " tab-active" : "")} onClick={() => setFUf(fUf === uf ? "todos" : uf)}>
+                    {uf} <span style={{ color: "var(--text-faint)" }}>{count}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

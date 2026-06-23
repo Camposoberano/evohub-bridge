@@ -57,6 +57,7 @@ export default function Disparos() {
   const [delayMax, setDelayMax] = useState(3);
   const [presenca, setPresenca] = useState(true);
   const [pularBloq, setPularBloq] = useState(true);
+  const [pularJaContato, setPularJaContato] = useState(true); // não manda campanha de prospecção pra quem já tá em atendimento
   const [etiquetas, setEtiquetas] = useState([]);
   const [etiqueta, setEtiqueta] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -120,6 +121,12 @@ export default function Disparos() {
     return contatos.map((c) => String(c.phone || c.external_contact_id || "").replace(/\D/g, ""))
       .filter((d) => d.length >= 12).filter((d) => uf !== "nenhum" && (uf === "todos" || ufFromPhone(d) === uf));
   }, [fonte, contatos, clientesNums, uf]);
+
+  // últimos 11 dígitos (DDD+número) de quem já é contato real -- pra não disparar campanha
+  // de prospecção (Clientes/lista importada/manual) em quem já tá em atendimento de verdade.
+  const contatoDigits = useMemo(() => new Set(
+    contatos.map((c) => String(c.phone || c.external_contact_id || "").replace(/\D/g, "").slice(-11)),
+  ), [contatos]);
   const publicoUnico = useMemo(() => [...new Set([...segmentoNums, ...parseNumeros(manual), ...importado])], [segmentoNums, manual, importado]);
   const ufsPresentes = useMemo(() => {
     if (fonte === "clientes") return clientesUfs;
@@ -194,12 +201,20 @@ export default function Disparos() {
       if (p.type === "carousel" && (p.cards || []).length === 0) return setMsg("Carrossel sem cards.");
     }
     setEnviando(true);
+    let puladosContato = 0;
+    if (pularJaContato) {
+      const antes = alvo.length;
+      alvo = alvo.filter((n) => !contatoDigits.has(n.slice(-11)));
+      puladosContato = antes - alvo.length;
+    }
+    if (alvo.length === 0) { setEnviando(false); return setMsg("Todo o público já é contato (em atendimento) -- nada pra disparar. Desmarque \"Pular quem já é contato\" se quiser mandar mesmo assim."); }
     if (pularBloq) {
       setMsg("Removendo bloqueados…");
       const r = await api("block_filter", { instance: inst, numbers: alvo });
       if (r.ok && r.data.allowed) { const rem = r.data.removed || 0; alvo = r.data.allowed; if (rem) setMsg(`${rem} bloqueados removidos.`); }
     }
-    if (!confirm(`Disparar ${passos.length} passo(s) pra ${alvo.length} números pela "${inst}"?`)) { setEnviando(false); return; }
+    const avisoContato = puladosContato > 0 ? ` (${puladosContato} pulados por já serem contato/atendimento)` : "";
+    if (!confirm(`Disparar ${passos.length} passo(s) pra ${alvo.length} números pela "${inst}"?${avisoContato}`)) { setEnviando(false); return; }
     let acumulado = 0;
     for (let i = 0; i < passos.length; i++) {
       const p = passos[i]; acumulado += Number(p.waitMin) || 0;
@@ -360,6 +375,7 @@ export default function Disparos() {
           <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 14, flexWrap: "wrap", fontSize: 13, color: "var(--text-dim)" }}>
             <label><input type="checkbox" checked={presenca} onChange={(e) => setPresenca(e.target.checked)} /> Simular digitando/gravando</label>
             <label><input type="checkbox" checked={pularBloq} onChange={(e) => setPularBloq(e.target.checked)} /> Pular bloqueados</label>
+            <label><input type="checkbox" checked={pularJaContato} onChange={(e) => setPularJaContato(e.target.checked)} /> Pular quem já é contato (em atendimento)</label>
             <label>Etiquetar quem recebeu:
               <select value={etiqueta} onChange={(e) => setEtiqueta(e.target.value)} style={{ marginLeft: 6 }}>
                 <option value="">— não —</option>
