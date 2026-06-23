@@ -41,13 +41,15 @@ export async function handle(req: Request): Promise<Response> {
     // o check do uazapi pode estar errado/desatualizado, não trava o público por causa disso.
     const { data: waRows } = await db.from("clientes").select("phone").neq("enrich_status", "pending").limit(UF_SCAN_CAP);
     const porUfMap = new Map<string, number>();
+    let semUf = 0;
     for (const r of waRows ?? []) {
       const uf = ufFromPhone((r as Json).phone as string);
       if (uf) porUfMap.set(uf, (porUfMap.get(uf) ?? 0) + 1);
+      else semUf++; // telefone em formato que não bate com nenhum DDD conhecido -- não desaparece, só não agrupa
     }
     const porUf = [...porUfMap.entries()].sort((a, b) => b[1] - a[1]).map(([uf, count]) => ({ uf, count }));
 
-    return json({ total, on_whatsapp: wa, enriquecidos: done, pendentes: pending, por_uf: porUf });
+    return json({ total, on_whatsapp: wa, enriquecidos: done, pendentes: pending, por_uf: porUf, sem_uf: semUf, enriquecidos_total: waRows?.length ?? 0 });
   }
 
   // export (pra Disparos/Campanhas): todo enriquecido (saiu de "pending"), opcionalmente por UF.

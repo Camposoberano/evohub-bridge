@@ -152,6 +152,11 @@ export default function Clientes() {
                 ))}
               </div>
             )}
+            {stats?.sem_uf > 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 6 }}>
+                {stats.enriquecidos_total} enriquecidos no total · {stats.sem_uf} sem telefone reconhecível (formato fora do padrão, não aparecem em nenhum estado)
+              </div>
+            )}
           </div>
         )}
 
