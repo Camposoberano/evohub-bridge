@@ -60,6 +60,12 @@ export default function Campanhas() {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true); carregar();
     });
+    // números enviados da tela Clientes (seleção em massa) -- lê 1x e limpa, não reaplica em reload.
+    const enviados = sessionStorage.getItem("soberano:importado-numeros");
+    if (enviados) {
+      try { setImportado(JSON.parse(enviados)); setMsg(`${JSON.parse(enviados).length} números recebidos de Clientes.`); } catch { /* ignora json malformado */ }
+      sessionStorage.removeItem("soberano:importado-numeros");
+    }
   }, [router, carregar]);
 
   const seg = useMemo(() => contatos.map((c) => String(c.phone || c.external_contact_id || "").replace(/\D/g, "")).filter((d) => d.length >= 12).filter((d) => uf !== "nenhum" && (uf === "todos" || ufFromPhone(d) === uf)), [contatos, uf]);

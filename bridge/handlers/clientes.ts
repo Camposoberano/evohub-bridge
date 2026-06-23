@@ -57,6 +57,34 @@ export async function handle(req: Request): Promise<Response> {
     return json({ phones, total: phones.length });
   }
 
+  // "selecionar todos os X filtrados" no painel -- só telefones, respeita os mesmos filtros da lista.
+  if (url.searchParams.get("allphones") === "1") {
+    const search = (url.searchParams.get("q") ?? "").trim();
+    const onlyWa = url.searchParams.get("wa") === "1";
+    const source = url.searchParams.get("source") ?? "";
+    const uf = (url.searchParams.get("uf") ?? "").toUpperCase();
+    let scan = db.from("clientes").select("phone").limit(UF_SCAN_CAP);
+    if (search) scan = scan.or(`phone.ilike.%${search}%,wa_name.ilike.%${search}%,wa_contact_name.ilike.%${search}%,verified_name.ilike.%${search}%`);
+    if (onlyWa) scan = scan.eq("on_whatsapp", true);
+    if (source) scan = scan.eq("source_number", source);
+    const { data, error } = await scan;
+    if (error) return json({ error: error.message }, 500);
+    const phones = ((data ?? []) as Json[]).map((r) => r.phone as string).filter((p) => !uf || ufFromPhone(p) === uf);
+    return json({ phones, total: phones.length });
+  }
+
+  // ficha completa de 1 cliente (modal ao clicar na linha) -- todas as colunas, inclusive raw.
+  const phoneParam = url.searchParams.get("phone");
+  if (phoneParam) {
+    const { data, error } = await db.from("clientes").select("*").eq("phone", phoneParam).maybeSingle();
+    if (error) return json({ error: error.message }, 500);
+    if (!data) return json({ error: "não encontrado" }, 404);
+    const { data: contactRow } = await db.from("contacts").select("id,name,phone,external_contact_id,last_seen_at").limit(20000);
+    const phoneDigits = last11(phoneParam);
+    const contato = (contactRow ?? []).find((c: Json) => last11((c.phone as string) ?? (c.external_contact_id as string)) === phoneDigits) ?? null;
+    return json({ ...(data as Json), uf: ufFromPhone(phoneParam), is_contact: !!contato, contato });
+  }
+
   const page = Math.max(1, Number(url.searchParams.get("page") ?? "1"));
   const limit = Math.min(100, Number(url.searchParams.get("limit") ?? "50"));
   const search = (url.searchParams.get("q") ?? "").trim();

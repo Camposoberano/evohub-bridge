@@ -97,6 +97,12 @@ export default function Disparos() {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true); carregar();
     });
+    // números enviados da tela Clientes (seleção em massa) -- lê 1x e limpa, não reaplica em reload.
+    const enviados = sessionStorage.getItem("soberano:importado-numeros");
+    if (enviados) {
+      try { setImportado(JSON.parse(enviados)); setMsg(`${JSON.parse(enviados).length} números recebidos de Clientes.`); } catch { /* ignora json malformado */ }
+      sessionStorage.removeItem("soberano:importado-numeros");
+    }
   }, [router, carregar]);
 
   // carrega etiquetas quando muda instância
