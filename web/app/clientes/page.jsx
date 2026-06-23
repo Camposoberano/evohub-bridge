@@ -202,7 +202,7 @@ export default function Clientes() {
               {!mostrar ? <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Escolha um estado acima ou busque por nome/número pra ver a lista.</td></tr> :
                 rows.length === 0 ? <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum cliente</td></tr> :
                 rows.map((c) => (
-                  <tr key={c.phone} style={{ cursor: "pointer" }} onClick={(e) => { if (e.target.type !== "checkbox") abrirFicha(c.phone); }}>
+                  <tr key={c.phone} className={selecionados.has(c.phone) ? "row-selected" : ""} style={{ cursor: "pointer" }} onClick={(e) => { if (e.target.type !== "checkbox") abrirFicha(c.phone); }}>
                     <td onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={selecionados.has(c.phone)} onChange={() => toggleUm(c.phone)} /></td>
                     <td style={{ width: 40 }}>{c.image_preview ? <img src={c.image_preview} alt="" style={{ width: 30, height: 30, borderRadius: 999, objectFit: "cover" }} /> : <span style={{ width: 30, height: 30, borderRadius: 999, background: "var(--surface-2)", display: "inline-block" }} />}</td>
                     <td>{c.wa_name || c.wa_contact_name || c.verified_name || <span style={{ color: "var(--text-faint)" }}>—</span>}</td>
