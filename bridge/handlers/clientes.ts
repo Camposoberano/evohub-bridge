@@ -13,8 +13,26 @@ import { ufFromPhone } from "../shared/ddd.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 type Json = Record<string, unknown>;
+// deno-lint-ignore no-explicit-any
+type QueryBuilder = PromiseLike<{ data: unknown; error: unknown }> & { range: (a: number, b: number) => any };
 
 const UF_SCAN_CAP = 30_000; // limite de linhas escaneadas pra UF/filtro -- acima disso vira lento
+
+// PostgREST limita a 1000 linhas por resposta por padrão, MESMO pedindo .limit() maior no
+// código -- corta sozinho. Pagina em lotes de 1000 até esgotar ou bater o cap.
+async function scanAll(build: (from: number, to: number) => QueryBuilder, cap = UF_SCAN_CAP): Promise<Json[]> {
+  const BATCH = 1000;
+  const out: Json[] = [];
+  for (let from = 0; from < cap; from += BATCH) {
+    const to = Math.min(from + BATCH, cap) - 1;
+    const { data, error } = await build(from, to);
+    if (error) throw error;
+    const rows = (data ?? []) as Json[];
+    out.push(...rows);
+    if (rows.length < (to - from + 1)) break; // última página, não veio lote cheio
+  }
+  return out;
+}
 
 export async function handle(req: Request): Promise<Response> {
   const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
@@ -39,27 +57,33 @@ export async function handle(req: Request): Promise<Response> {
 
     // base de disparo = todo enriquecido (saiu de "pending"), não só on_whatsapp=true --
     // o check do uazapi pode estar errado/desatualizado, não trava o público por causa disso.
-    const { data: waRows } = await db.from("clientes").select("phone").neq("enrich_status", "pending").limit(UF_SCAN_CAP);
+    let waRows: Json[];
+    try {
+      waRows = await scanAll((from, to) => db.from("clientes").select("phone").neq("enrich_status", "pending").range(from, to));
+    } catch (e) { return json({ error: String(e) }, 500); }
     const porUfMap = new Map<string, number>();
     let semUf = 0;
-    for (const r of waRows ?? []) {
-      const uf = ufFromPhone((r as Json).phone as string);
+    for (const r of waRows) {
+      const uf = ufFromPhone(r.phone as string);
       if (uf) porUfMap.set(uf, (porUfMap.get(uf) ?? 0) + 1);
       else semUf++; // telefone em formato que não bate com nenhum DDD conhecido -- não desaparece, só não agrupa
     }
     const porUf = [...porUfMap.entries()].sort((a, b) => b[1] - a[1]).map(([uf, count]) => ({ uf, count }));
 
-    return json({ total, on_whatsapp: wa, enriquecidos: done, pendentes: pending, por_uf: porUf, sem_uf: semUf, enriquecidos_total: waRows?.length ?? 0 });
+    return json({ total, on_whatsapp: wa, enriquecidos: done, pendentes: pending, por_uf: porUf, sem_uf: semUf, enriquecidos_total: waRows.length });
   }
 
   // export (pra Disparos/Campanhas): todo enriquecido (saiu de "pending"), opcionalmente por UF.
   // Não filtra por on_whatsapp=true -- o check pode estar errado/desatualizado, não trava o público por causa disso.
   if (url.searchParams.get("export") === "1") {
     const uf = (url.searchParams.get("uf") ?? "").toUpperCase();
-    const { data } = await db.from("clientes").select("phone").neq("enrich_status", "pending").limit(UF_SCAN_CAP);
-    const phones = (data ?? [])
-      .map((r: Json) => r.phone as string)
-      .filter((phone: string) => !uf || ufFromPhone(phone) === uf);
+    let data: Json[];
+    try {
+      data = await scanAll((from, to) => db.from("clientes").select("phone").neq("enrich_status", "pending").range(from, to));
+    } catch (e) { return json({ error: String(e) }, 500); }
+    const phones = data
+      .map((r) => r.phone as string)
+      .filter((phone) => !uf || ufFromPhone(phone) === uf);
     return json({ phones, total: phones.length });
   }
 
@@ -69,13 +93,17 @@ export async function handle(req: Request): Promise<Response> {
     const onlyWa = url.searchParams.get("wa") === "1";
     const source = url.searchParams.get("source") ?? "";
     const uf = (url.searchParams.get("uf") ?? "").toUpperCase();
-    let scan = db.from("clientes").select("phone").limit(UF_SCAN_CAP);
-    if (search) scan = scan.or(`phone.ilike.%${search}%,wa_name.ilike.%${search}%,wa_contact_name.ilike.%${search}%,verified_name.ilike.%${search}%`);
-    if (onlyWa) scan = scan.eq("on_whatsapp", true);
-    if (source) scan = scan.eq("source_number", source);
-    const { data, error } = await scan;
-    if (error) return json({ error: error.message }, 500);
-    const phones = ((data ?? []) as Json[]).map((r) => r.phone as string).filter((p) => !uf || ufFromPhone(p) === uf);
+    let data: Json[];
+    try {
+      data = await scanAll((from, to) => {
+        let scan = db.from("clientes").select("phone").range(from, to);
+        if (search) scan = scan.or(`phone.ilike.%${search}%,wa_name.ilike.%${search}%,wa_contact_name.ilike.%${search}%,verified_name.ilike.%${search}%`);
+        if (onlyWa) scan = scan.eq("on_whatsapp", true);
+        if (source) scan = scan.eq("source_number", source);
+        return scan;
+      });
+    } catch (e) { return json({ error: String(e) }, 500); }
+    const phones = data.map((r) => r.phone as string).filter((p) => !uf || ufFromPhone(p) === uf);
     return json({ phones, total: phones.length });
   }
 
@@ -85,8 +113,10 @@ export async function handle(req: Request): Promise<Response> {
     const { data, error } = await db.from("clientes").select("*").eq("phone", phoneParam).maybeSingle();
     if (error) return json({ error: error.message }, 500);
     if (!data) return json({ error: "não encontrado" }, 404);
-    const { data: contactRow } = await db.from("contacts").select("id,name,phone,external_contact_id,last_seen_at").limit(20000);
+    // busca direto pelo dígito (não escaneia a tabela toda) -- filtra no banco pelo sufixo do telefone.
     const phoneDigits = last11(phoneParam);
+    const { data: contactRow } = await db.from("contacts").select("id,name,phone,external_contact_id,last_seen_at")
+      .or(`phone.ilike.%${phoneDigits}%,external_contact_id.ilike.%${phoneDigits}%`);
     const contato = (contactRow ?? []).find((c: Json) => last11((c.phone as string) ?? (c.external_contact_id as string)) === phoneDigits) ?? null;
     return json({ ...(data as Json), uf: ufFromPhone(phoneParam), is_contact: !!contato, contato });
   }
@@ -102,17 +132,22 @@ export async function handle(req: Request): Promise<Response> {
   let total: number;
 
   if (uf) {
-    // UF não é coluna do banco (deriva do telefone) -- escaneia e pagina em memória.
-    let scan = db.from("clientes")
-      .select("phone,on_whatsapp,wa_name,wa_contact_name,verified_name,image_preview,source_number,common_groups,lead_tags,enrich_status")
-      .order("on_whatsapp", { ascending: false, nullsFirst: false })
-      .limit(UF_SCAN_CAP);
-    if (search) scan = scan.or(`phone.ilike.%${search}%,wa_name.ilike.%${search}%,wa_contact_name.ilike.%${search}%,verified_name.ilike.%${search}%`);
-    if (onlyWa) scan = scan.eq("on_whatsapp", true);
-    if (source) scan = scan.eq("source_number", source);
-    const { data, error } = await scan;
-    if (error) return json({ error: error.message }, 500);
-    const filtered = ((data ?? []) as Json[]).filter((c) => ufFromPhone(c.phone as string) === uf);
+    // UF não é coluna do banco (deriva do telefone) -- escaneia tudo (paginado em lotes de
+    // 1000, limite do PostgREST) e filtra/pagina em memória.
+    let data: Json[];
+    try {
+      data = await scanAll((from, to) => {
+        let scan = db.from("clientes")
+          .select("phone,on_whatsapp,wa_name,wa_contact_name,verified_name,image_preview,source_number,common_groups,lead_tags,enrich_status")
+          .order("on_whatsapp", { ascending: false, nullsFirst: false })
+          .range(from, to);
+        if (search) scan = scan.or(`phone.ilike.%${search}%,wa_name.ilike.%${search}%,wa_contact_name.ilike.%${search}%,verified_name.ilike.%${search}%`);
+        if (onlyWa) scan = scan.eq("on_whatsapp", true);
+        if (source) scan = scan.eq("source_number", source);
+        return scan;
+      });
+    } catch (e) { return json({ error: String(e) }, 500); }
+    const filtered = data.filter((c) => ufFromPhone(c.phone as string) === uf);
     total = filtered.length;
     rows = filtered.slice((page - 1) * limit, page * limit);
   } else {
@@ -130,10 +165,14 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   // marca quem já é contato real (já conversou via canal oficial) -- evita disparar
-  // campanha de prospecção pra quem já está em atendimento.
-  const { data: contactRows } = await db.from("contacts").select("phone,external_contact_id").limit(20000);
+  // campanha de prospecção pra quem já está em atendimento. Escaneia tudo (paginado, limite
+  // de 1000/req do PostgREST) -- só pra essa página de rows, então cap menor já basta.
+  let contactRows: Json[];
+  try {
+    contactRows = await scanAll((from, to) => db.from("contacts").select("phone,external_contact_id").range(from, to), 20_000);
+  } catch (e) { return json({ error: String(e) }, 500); }
   const contactSet = new Set(
-    (contactRows ?? []).map((c: Json) => last11((c.phone as string) ?? (c.external_contact_id as string))),
+    contactRows.map((c) => last11((c.phone as string) ?? (c.external_contact_id as string))),
   );
   const clientes = rows.map((c) => ({ ...c, uf: ufFromPhone(c.phone as string), is_contact: contactSet.has(last11(c.phone as string)) }));
 
