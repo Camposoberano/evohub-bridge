@@ -104,6 +104,11 @@ export async function ingestInbound(
     cwMsg = null;
   } else if (msg.outgoing) {
     // echo do aparelho -> mensagem de SAÍDA na conversa do cliente.
+    // debug temporário (duplicação de áudio): registra toda vez que um ECHO cria mensagem nova no Chatwoot.
+    db.from("events").insert({
+      source: "debug-audio-dup", event_type: "echo-createConversationMessage",
+      payload: { metaMessageId: msg.metaMessageId, msgType: msg.msgType, t: Date.now(), channelId: channel.id, convId: conv.id },
+    }).then(() => {}, () => {});
     cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
       content: msg.content,
       messageType: "outgoing",

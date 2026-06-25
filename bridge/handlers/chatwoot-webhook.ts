@@ -13,6 +13,17 @@ import { toVoiceOgg } from "../shared/audio.ts";
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
+// instrumentação TEMPORÁRIA pra caçar a duplicação de áudio reportada (audio sai 2x, formatos
+// diferentes, mesmo chatwoot_message_id) -- grava passo a passo em events, fire-and-forget,
+// pra ler via REST sem precisar de acesso ao log do container. Remover depois de achar a causa.
+function dbg(db: Db, cwMsgId: number | undefined, step: string, extra: Json) {
+  db.from("events").insert({
+    source: "debug-audio-dup",
+    event_type: step,
+    payload: { cwMsgId, t: Date.now(), ...extra },
+  }).then(() => {}, () => {});
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
 
@@ -53,18 +64,23 @@ async function handleOutgoing(db: Db, p: Json) {
   const attachments = (p.attachments ?? []) as Json[];
   const attachment = attachments[0];
 
-  if (!cwConversationId || (!content && !attachment)) return;
-
   const cwMsgId = p.id as number | undefined;
+  await dbg(db, cwMsgId, "entry", { cwConversationId, cwInboxId, hasContent: !!content, attachmentsLen: attachments.length });
+
+  if (!cwConversationId || (!content && !attachment)) { await dbg(db, cwMsgId, "early-return-no-content-no-attachment", {}); return; }
+
   if (cwMsgId) {
     // 1) Claim ATÔMICO: 2 webhooks do mesmo message_created (retry/concorrência) -> só 1 envia.
     //    Evita o cliente receber a mensagem 2x (era a duplicação reportada).
-    if (!(await claimDelivery(db, `cw-out-${cwMsgId}`, "chatwoot"))) {
+    const claimed = await claimDelivery(db, `cw-out-${cwMsgId}`, "chatwoot");
+    await dbg(db, cwMsgId, "claim-result", { claimed });
+    if (!claimed) {
       console.log("cw msg já reivindicada — não reenvia", cwMsgId);
       return;
     }
     // 2) Anti-loop echo: mensagem já no banco (echo do aparelho que injetamos) -> não reenviar.
     const { data: dup } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+    await dbg(db, cwMsgId, "anti-echo-check", { dupFound: !!dup, dupId: dup?.id ?? null });
     if (dup) { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
   }
 
@@ -118,7 +134,9 @@ async function handleOutgoing(db: Db, p: Json) {
         // áudio NÃO aceita caption; image/video/document aceitam.
         if (content && !captionUsed && msgType !== "audio") { mediaPayload.caption = content; captionUsed = true; }
         if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";
+        await dbg(db, cwMsgId, "before-sendMeta-attachment", { msgType, linkUrl, attachmentsTotal: attachments.length });
         res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload });
+        await dbg(db, cwMsgId, "after-sendMeta-attachment", { ok: res.ok, status: res.status });
       }
       // legenda que não coube na mídia → texto separado. Áudio puro NÃO manda texto extra
       // (Chatwoot costuma preencher content com placeholder tipo "áudio").
@@ -152,11 +170,12 @@ async function handleOutgoing(db: Db, p: Json) {
     }
   }
 
-  if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); return; }
+  if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); await dbg(db, cwMsgId, "no-res-nothing-sent", {}); return; }
   const d = res.data as Json;
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
     ((d?.message_id as string) ?? null);
 
+  await dbg(db, cwMsgId, "before-insert-messages", { msgType, mediaUrl, metaId });
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null,
     channel_id: channel.id,
