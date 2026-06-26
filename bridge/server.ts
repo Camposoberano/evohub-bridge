@@ -15,6 +15,7 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
+import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
@@ -43,6 +44,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
+  "/ryzeapi-webhook": ryzeapiWebhook,
   "/meta-templates": metaTemplates,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
