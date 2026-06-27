@@ -82,6 +82,15 @@ async function handleOutgoing(db: Db, p: Json) {
     const { data: dup } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
     await dbg(db, cwMsgId, "anti-echo-check", { dupFound: !!dup, dupId: dup?.id ?? null });
     if (dup) { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
+
+    // 3) Segunda checagem DEFENSIVA depois de um delay: foi observado (sem causa raiz achada)
+    // algum processo fora do nosso código inserindo uma linha pra esse mesmo chatwoot_message_id
+    // poucos ms depois do claim, sem passar pelo claimDelivery. Espera um pouco e confere de
+    // novo antes de mandar -- não resolve a causa, mas evita o cliente receber 2x.
+    await new Promise((r) => setTimeout(r, 600));
+    const { data: dupDelayed } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+    await dbg(db, cwMsgId, "anti-echo-check-delayed", { dupFound: !!dupDelayed, dupId: dupDelayed?.id ?? null });
+    if (dupDelayed) { console.log("msg apareceu durante o delay defensivo — não reenvia", cwMsgId); return; }
   }
 
   const { data: channel } = await db.from("channels").select("*").eq("chatwoot_inbox_id", cwInboxId!).maybeSingle();
