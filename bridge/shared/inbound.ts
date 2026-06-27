@@ -142,6 +142,15 @@ export async function ingestInbound(
     throw messageError;
   }
 
+  // Cliente respondeu (entrada real, não echo) -> para o funil de apresentação: cancela as
+  // peças ainda pendentes e marca a sequência como respondida. A IA/humano assume a partir daqui.
+  if (!msg.outgoing) {
+    db.from("scheduled_messages").update({ status: "cancelled" })
+      .eq("conversation_id", conv.id).eq("status", "pending").then(() => {}, () => {});
+    db.from("sales_sequences").update({ status: "replied" })
+      .eq("conversation_id", conv.id).eq("status", "running").then(() => {}, () => {});
+  }
+
   return { inserted: true, message_id: insertedMessage.id as string };
 }
 

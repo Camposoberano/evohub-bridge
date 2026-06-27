@@ -17,6 +17,7 @@ import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
+import { handle as funilEnroll } from "./handlers/funil-enroll.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
@@ -47,6 +48,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/uazapi-webhook": uazapiWebhook,
   "/ryzeapi-webhook": ryzeapiWebhook,
   "/send-outbound": sendOutbound,
+  "/funil-enroll": funilEnroll,
   "/meta-templates": metaTemplates,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
