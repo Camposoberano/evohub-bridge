@@ -25,8 +25,12 @@ export async function handle(req: Request): Promise<Response> {
   const db = admin();
   db.from("events").insert({ source: "ryzeapi", event_type: eventType, payload: p }).then(() => {}, () => {});
 
+  // Processa em BACKGROUND e responde 200 na hora — com mídia em base64 (pode ser pesada) +
+  // ingestInbound (banco + upload pro Chatwoot) facilmente passa de 2-3s. Esperar isso antes
+  // de responder faz o dispatcher de webhook da RyzeAPI achar que estamos lentos/fora e parar
+  // de entregar (suspeita forte do porquê a entrega parou no teste anterior).
   if (eventType === "message.exchange") {
-    try { await handleMessageExchange(db, p); } catch (e) { console.error("ryzeapi-webhook handleMessageExchange erro:", e); }
+    handleMessageExchange(db, p).catch((e) => console.error("ryzeapi-webhook handleMessageExchange erro:", e));
   }
   return new Response("ok", { status: 200 });
 }
