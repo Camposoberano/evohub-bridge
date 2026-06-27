@@ -7,7 +7,7 @@
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
-import { getChannelDetail, sendMeta } from "../shared/hub.ts";
+import { getChannelDetail, getMeta, sendMeta } from "../shared/hub.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
@@ -238,14 +238,32 @@ async function handleMessenger(db: Db, p: Json) {
       if (hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
       const text = (message.text as string) ?? "[anexo]"; // TODO Fase 3: mídia/attachments
 
+      // o webhook não manda o nome do remetente -- a Graph API devolve via GET /{id}?fields=name
+      // mesmo quando o evento não traz (comum no Instagram). Sem isso, Chatwoot cria nome
+      // aleatório tipo "fragrant-feather-524".
+      const name = await fetchSenderName(db, channel.id as string, sender);
+
       await ingestInbound(db, channel as Json, {
         from: sender,
-        name: undefined,
+        name,
         metaMessageId: (message.mid as string) ?? "",
         msgType: "text",
         content: text,
       });
     }
+  }
+}
+
+async function fetchSenderName(db: Db, channelId: string, senderId: string): Promise<string | undefined> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channelId).maybeSingle();
+  if (!secret?.channel_token) return undefined;
+  try {
+    const res = await getMeta(secret.channel_token, `${senderId}?fields=name`);
+    if (!res.ok) return undefined;
+    return (res.data as Json).name as string | undefined;
+  } catch (e) {
+    console.warn("fetchSenderName falhou", senderId, String(e).slice(0, 150));
+    return undefined;
   }
 }
 
