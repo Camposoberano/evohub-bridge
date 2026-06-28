@@ -54,7 +54,13 @@ export async function handle(req: Request): Promise<Response> {
 
   for (const channel of channels ?? []) {
     try {
-      const inbound = await syncInbound(db, channel as Json, { cutoffMs, conversationLimit, messageLimit });
+      // cursor real: desde a última msg já gravada deste canal (com 2min de superposição p/
+      // tolerar clock skew). since_minutes só vira o piso quando o canal não tem msg nenhuma
+      // ainda. Sem isso, um gap (deploy, instabilidade) maior que a janela perdia msg pra sempre.
+      const lastMs = await lastMessageMs(db, channel.id as string);
+      const channelCutoffMs = lastMs ? Math.min(lastMs - 120_000, cutoffMs) : cutoffMs;
+
+      const inbound = await syncInbound(db, channel as Json, { cutoffMs: channelCutoffMs, conversationLimit, messageLimit });
       totals.conversations_scanned += inbound.conversations_scanned;
       totals.inbound_found += inbound.inbound_found;
       totals.inserted += inbound.inserted;
@@ -65,7 +71,7 @@ export async function handle(req: Request): Promise<Response> {
       totals.media_repaired += inbound.media_repaired;
       totals.media_failed += inbound.media_failed;
 
-      const outgoing = await syncOutgoing(db, channel as Json, { cutoffMs, messageLimit });
+      const outgoing = await syncOutgoing(db, channel as Json, { cutoffMs: channelCutoffMs, messageLimit });
       totals.outgoing_found += outgoing.outgoing_found;
       totals.outgoing_sent += outgoing.outgoing_sent;
       totals.outgoing_duplicates += outgoing.outgoing_duplicates;
@@ -85,6 +91,15 @@ export async function handle(req: Request): Promise<Response> {
   });
 
   return json(totals);
+}
+
+async function lastMessageMs(db: Db, channelId: string): Promise<number | null> {
+  const { data } = await db.from("messages").select("sent_at")
+    .eq("channel_id", channelId).order("sent_at", { ascending: false }).limit(1).maybeSingle();
+  const sentAt = data?.sent_at as string | undefined;
+  if (!sentAt) return null;
+  const ms = Date.parse(sentAt);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 async function syncInbound(

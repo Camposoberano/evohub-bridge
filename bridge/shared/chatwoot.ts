@@ -184,6 +184,25 @@ export async function createConversationMessage(
   return await res.json();
 }
 
+export async function getConversationLabels(conversationId: number, acct: CwAcct = envAcct()): Promise<string[]> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/labels`, {
+    headers: appHeaders(acct),
+  });
+  if (!res.ok) throw new Error(`Chatwoot getConversationLabels ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  return (json.payload ?? []) as string[];
+}
+
+// substitui a lista INTEIRA de labels da conversa (Chatwoot não tem add/remove individual).
+export async function setConversationLabels(conversationId: number, labels: string[], acct: CwAcct = envAcct()): Promise<void> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/labels`, {
+    method: "POST",
+    headers: appHeaders(acct),
+    body: JSON.stringify({ labels }),
+  });
+  if (!res.ok) throw new Error(`Chatwoot setConversationLabels ${res.status}: ${await res.text()}`);
+}
+
 export async function listConversationMessages(conversationId: number, acct: CwAcct = envAcct()): Promise<Record<string, unknown>[]> {
   const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`, {
     headers: appHeaders(acct),

@@ -25,6 +25,7 @@ import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts"
 import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as syncChatwootOut } from "./handlers/sync-chatwoot-out.ts";
+import { handle as labelWindow } from "./handlers/label-window.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { env, optionalEnv } from "./shared/env.ts";
@@ -57,6 +58,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/clientes": clientes,
   "/sync-facebook": syncFacebook,
   "/sync-chatwoot-out": syncChatwootOut,
+  "/label-window": labelWindow,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
 };
@@ -101,7 +103,10 @@ const version = {
 const SYNC_LOOP_INTERVAL_MS = 30_000;
 function startSyncLoop() {
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/sync-facebook?token=${encodeURIComponent(token)}&since_minutes=10`;
+  // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
+  // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
+  // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
+  const url = `http://internal/sync-facebook?token=${encodeURIComponent(token)}&since_minutes=1440`;
 
   setInterval(async () => {
     try {
@@ -133,6 +138,24 @@ function startChatwootOutLoop() {
       console.error("sync-chatwoot-out (auto) erro:", e);
     }
   }, SYNC_OUT_INTERVAL_MS);
+}
+
+// Etiqueta de janela 24h por conversa (WA/FB/IG) — sem isso o atendente não sabe na tela
+// quem pode receber texto livre e quem só com template/dentro do prazo. 5min é granularidade
+// suficiente (o aviso "fechando" já dá 1h de antecedência).
+const LABEL_WINDOW_INTERVAL_MS = 5 * 60_000;
+function startLabelWindowLoop() {
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/label-window?token=${encodeURIComponent(token)}`;
+  setInterval(async () => {
+    try {
+      const res = await labelWindow(new Request(url));
+      const body = await res.json();
+      if (body.labeled > 0 || body.errors?.length) console.log("label-window (auto):", JSON.stringify(body));
+    } catch (e) {
+      console.error("label-window (auto) erro:", e);
+    }
+  }, LABEL_WINDOW_INTERVAL_MS);
 }
 
 // Rollup diário de daily_metrics — loop interno (sem cron externo). Roda a cada 24h
@@ -226,6 +249,7 @@ function startChannelSyncLoop() {
 
 startSyncLoop();
 startChatwootOutLoop();
+startLabelWindowLoop();
 startRollupLoop();
 startRetentionLoop();
 startEnrichLoop();
