@@ -9,7 +9,10 @@ import { env } from "../shared/env.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
-const DIA = 86_400; // segundos
+// Espaçamento entre os 4 blocos. 6h => funil inteiro cabe em ~18-20h, DENTRO da janela de 24h
+// do WhatsApp oficial (que conta da última msg do cliente). Assim nunca quebra a janela mesmo
+// se o lead não responder nada. (Nome "DIA" mantido por compat; o valor é o gap entre blocos.)
+const DIA = 21_600; // 6h em segundos
 
 // Roteiro fixo dos 4 dias. offset = segundos a partir do enroll. mídia ('image'|'audio'|'video')
 // puxa do slot na faixa; texto/interactive são inline.
