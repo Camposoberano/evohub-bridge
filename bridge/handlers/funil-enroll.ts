@@ -11,44 +11,53 @@ type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
 // Espaçamento entre os 4 blocos. 6h => funil inteiro cabe em ~18-20h, DENTRO da janela de 24h
 // do WhatsApp oficial (que conta da última msg do cliente). Assim nunca quebra a janela mesmo
-// se o lead não responder nada. (Nome "DIA" mantido por compat; o valor é o gap entre blocos.)
-const DIA = 21_600; // 6h em segundos
+// ESTRATÉGIA JANELA: número oficial tem janela de 24h (conta da última msg do cliente). Se
+// esperar o cliente responder em dias, perde a janela e o lead. Então TODO o conteúdo é
+// entregue DENTRO de ~14h30, num dia só. 5 acessos com offsets crescentes a partir da entrada:
+// na hora, +30min, +2h, +4h, +8h (cumulativo: 0 / 30min / 2h30 / 6h30 / 14h30). Tudo < 24h.
+const ACESSOS = [0, 1_800, 9_000, 23_400, 52_200]; // segundos: 0, 30min, 2h30, 6h30, 14h30
 
-// Roteiro fixo dos 4 dias. offset = segundos a partir do enroll. mídia ('image'|'audio'|'video')
-// puxa do slot na faixa; texto/interactive são inline.
 type Peca =
-  | { offset: number; kind: "text"; text: string }
-  | { offset: number; kind: "interactive"; text: string; buttons: { id: string; title: string }[]; headerSlot?: string }
-  | { offset: number; kind: "media"; mediaType: "image" | "audio" | "video"; slot: string; caption?: string };
+  | { day: number; offset: number; kind: "text"; text: string }
+  | { day: number; offset: number; kind: "interactive"; text: string; buttons: { id: string; title: string }[]; headerSlot?: string }
+  | { day: number; offset: number; kind: "media"; mediaType: "image" | "audio" | "video"; slot: string; caption?: string };
+
+// conteúdo de cada acesso (texto, legenda da imagem, pergunta+botões)
+const CONTEUDO: { text: string; imgCaption: string; pergunta: string; buttons: { id: string; title: string }[]; headerImg?: boolean }[] = [
+  { text: "Olá, tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾\n\nO senhor se interessou nas sementes do *Mega Sorgo Santa Elisa*?",
+    imgCaption: "Sou representante da *Campo Soberano* 🌾🚜\n\nEspecialistas no *Mega Sorgo Santa Elisa* 🔥",
+    pergunta: "O senhor já conhece o *Mega Sorgo Santa Elisa*?\n\nJá viu a alta produção dele? 🤔📈",
+    buttons: [ { id: "conhece_sim", title: "Já conheço ✅" }, { id: "conhece_nao", title: "Não conheço 🤔" }, { id: "tem_duvida", title: "Tenho dúvida ❓" } ], headerImg: true },
+  { text: "Olha que beleza! 🌱🔥\n\n🌾 Passa de *5 METROS* de altura!\n📈 Mais de *140 TONELADAS* por hectare!",
+    imgCaption: "🌾 *Mega Sorgo Santa Elisa* — Safra 2027 🏆",
+    pergunta: "O senhor trabalha com gado de leite ou de corte? 🐄",
+    buttons: [ { id: "gado_leite", title: "Leite 🥛" }, { id: "gado_corte", title: "Corte 🥩" }, { id: "gado_ambos", title: "Os dois 🐄" } ] },
+  { text: "Quer saber o segredo dele? 🤫\n\n🌽 Ele *REBROTA*! Rende mais que o milho\n🔥 E é *80% superior* ao Capiaçu na silagem!",
+    imgCaption: "Silagem de *alta qualidade* — seu gado come melhor 🐄",
+    pergunta: "Quer ver o vídeo da lavoura de perto? 🎬",
+    buttons: [ { id: "ver_video", title: "Sim, quero ver ▶️" } ] },
+  { text: "💪 Resistente a *praga* (lagarta, cigarrinha)\n☀️ E aguenta bem a *seca*!\n\nMenos dor de cabeça pra você! 🙌",
+    imgCaption: "🏆 Quem entende de resultado planta *Mega Sorgo Santa Elisa*!",
+    pergunta: "O senhor quer saber o preço? 💰",
+    buttons: [ { id: "quer_preco", title: "Quero o preço 💰" }, { id: "falar_vendedor", title: "Falar c/ vendedor 👨‍🌾" } ] },
+  { text: "🚨 *Última chamada!* 🌾\n\nA *Safra 2027* tá fechando os pedidos do *Mega Sorgo Santa Elisa*.\n\nNão fique de fora de quem vai ter a melhor silagem! 🚜",
+    imgCaption: "🏆 *Mega Sorgo Santa Elisa* — Garanta o seu! 🌾",
+    pergunta: "Vamos garantir as suas sementes? 🙌",
+    buttons: [ { id: "garantir", title: "Quero garantir 🚜" }, { id: "falar_agora", title: "Falar agora 📞" } ] },
+];
 
 function roteiro(): Peca[] {
   const pecas: Peca[] = [];
-  for (let dia = 1; dia <= 4; dia++) {
-    const base = (dia - 1) * DIA;
-    if (dia === 1) {
-      pecas.push({ offset: base, kind: "text", text: "Olá, tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾\n\nO senhor se interessou nas sementes do *Mega Sorgo Santa Elisa*?" });
-      pecas.push({ offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: "Sou representante da *Campo Soberano* 🌾🚜\n\nEspecialistas no *Mega Sorgo Santa Elisa* 🔥" });
-      pecas.push({ offset: base + 80, kind: "interactive", headerSlot: "image", text: "O senhor já conhece o *Mega Sorgo Santa Elisa*?\n\nJá viu a alta produção dele? 🤔📈", buttons: [
-        { id: "conhece_sim", title: "Já conheço ✅" }, { id: "conhece_nao", title: "Não conheço 🤔" }, { id: "tem_duvida", title: "Tenho dúvida ❓" } ] });
-    } else if (dia === 2) {
-      pecas.push({ offset: base, kind: "text", text: "Olha que beleza! 🌱🔥\n\n🌾 Passa de *5 METROS* de altura!\n📈 Mais de *140 TONELADAS* por hectare!" });
-      pecas.push({ offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Mega Sorgo Santa Elisa* — Safra 2027 🏆" });
-      pecas.push({ offset: base + 80, kind: "interactive", text: "O senhor trabalha com gado de leite ou de corte? 🐄", buttons: [
-        { id: "gado_leite", title: "Leite 🥛" }, { id: "gado_corte", title: "Corte 🥩" }, { id: "gado_ambos", title: "Os dois 🐄" } ] });
-    } else if (dia === 3) {
-      pecas.push({ offset: base, kind: "text", text: "Quer saber o segredo dele? 🤫\n\n🌽 Ele *REBROTA*! Rende mais que o milho\n🔥 E é *80% superior* ao Capiaçu na silagem!" });
-      pecas.push({ offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: "Silagem de *alta qualidade* — seu gado come melhor 🐄" });
-      pecas.push({ offset: base + 80, kind: "interactive", text: "Quer ver o vídeo da lavoura de perto? 🎬", buttons: [ { id: "ver_video", title: "Sim, quero ver ▶️" } ] });
-    } else {
-      pecas.push({ offset: base, kind: "text", text: "💪 Resistente a *praga* (lagarta, cigarrinha)\n☀️ E aguenta bem a *seca*!\n\n🚜 Garanta suas sementes pra *Safra 2027*!" });
-      pecas.push({ offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: "🏆 Quem entende de resultado planta *Mega Sorgo Santa Elisa*!" });
-      pecas.push({ offset: base + 80, kind: "interactive", text: "O senhor quer saber o preço? 💰", buttons: [
-        { id: "quer_preco", title: "Quero o preço 💰" }, { id: "falar_vendedor", title: "Falar c/ vendedor 👨‍🌾" } ] });
-    }
-    // áudios e vídeo de cada dia (da faixa, rotação)
-    pecas.push({ offset: base + 300, kind: "media", mediaType: "audio", slot: "audio1" });
-    pecas.push({ offset: base + 330, kind: "media", mediaType: "audio", slot: "audio2" });
-    pecas.push({ offset: base + 600, kind: "media", mediaType: "video", slot: "video", caption: "" });
+  for (let i = 0; i < ACESSOS.length; i++) {
+    const day = i + 1;
+    const base = ACESSOS[i];
+    const c = CONTEUDO[i];
+    pecas.push({ day, offset: base, kind: "text", text: c.text });
+    pecas.push({ day, offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: c.imgCaption });
+    pecas.push({ day, offset: base + 80, kind: "interactive", text: c.pergunta, buttons: c.buttons, ...(c.headerImg ? { headerSlot: "image" } : {}) });
+    pecas.push({ day, offset: base + 300, kind: "media", mediaType: "audio", slot: "audio1" });
+    pecas.push({ day, offset: base + 330, kind: "media", mediaType: "audio", slot: "audio2" });
+    pecas.push({ day, offset: base + 600, kind: "media", mediaType: "video", slot: "video", caption: "" });
   }
   return pecas;
 }
@@ -89,11 +98,8 @@ export async function handle(req: Request): Promise<Response> {
 
   const agora = Date.now();
   const rows: Json[] = [];
-  let dia = 0, lastBase = -1;
   for (const p of roteiro()) {
-    // descobre o dia pela base do offset (cada dia múltiplo de DIA)
-    if (p.offset % DIA === 0 && p.offset !== lastBase) { /* marcador */ }
-    dia = Math.floor(p.offset / DIA) + 1;
+    const dia = p.day;
     const sendAt = new Date(agora + p.offset * 1000).toISOString();
     if (p.kind === "text") {
       rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text", payload: { content: p.text }, send_at: sendAt });
