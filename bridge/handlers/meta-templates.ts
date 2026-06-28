@@ -23,6 +23,8 @@ export async function handle(req: Request): Promise<Response> {
   const waba = ch?.waba_id as string | undefined;
   if (!waba) return json({ error: "canal whatsapp sem waba_id" }, 404);
 
+  if (req.method === "POST") return create(req, token, waba);
+
   const res = await fetch(`https://graph.facebook.com/${GRAPH}/${waba}/message_templates?limit=100&fields=name,language,status,category,components`, {
     headers: { Authorization: `Bearer ${token}` },
   });
@@ -36,6 +38,31 @@ export async function handle(req: Request): Promise<Response> {
   }));
   const approved = templates.filter((t) => t.status === "APPROVED");
   return json({ total: templates.length, approved: approved.length, templates });
+}
+
+// POST { name, language, category, body, buttons? } -> submete pra aprovação na Meta.
+async function create(req: Request, token: string, waba: string): Promise<Response> {
+  const p = await req.json().catch(() => ({})) as Json;
+  const name = p.name as string | undefined;
+  const language = (p.language as string) || "pt_BR";
+  const category = (p.category as string) || "MARKETING";
+  const body = p.body as string | undefined;
+  const buttons = (p.buttons as { text: string }[] | undefined) ?? [];
+  if (!name || !body) return json({ error: "name e body obrigatórios" }, 400);
+
+  const components: Json[] = [{ type: "BODY", text: body }];
+  if (buttons.length > 0) {
+    components.push({ type: "BUTTONS", buttons: buttons.map((b) => ({ type: "QUICK_REPLY", text: b.text })) });
+  }
+
+  const res = await fetch(`https://graph.facebook.com/${GRAPH}/${waba}/message_templates`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ name, language, category, components }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return json({ error: "graph " + res.status, detail: data }, res.status);
+  return json({ ok: true, ...data as Json });
 }
 
 function json(obj: unknown, status = 200): Response {
