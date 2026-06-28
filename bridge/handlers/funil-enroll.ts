@@ -12,10 +12,26 @@ const FUNNEL = "mega-sorgo";
 // Espaçamento entre os 4 blocos. 6h => funil inteiro cabe em ~18-20h, DENTRO da janela de 24h
 // do WhatsApp oficial (que conta da última msg do cliente). Assim nunca quebra a janela mesmo
 // ESTRATÉGIA JANELA: número oficial tem janela de 24h (conta da última msg do cliente). Se
-// esperar o cliente responder em dias, perde a janela e o lead. Então TODO o conteúdo é
-// entregue DENTRO de ~14h30, num dia só. 5 acessos com offsets crescentes a partir da entrada:
-// na hora, +30min, +2h, +4h, +8h (cumulativo: 0 / 30min / 2h30 / 6h30 / 14h30). Tudo < 24h.
-const ACESSOS = [0, 1_800, 9_000, 23_400, 52_200]; // segundos: 0, 30min, 2h30, 6h30, 14h30
+// esperar resposta em dias, perde a janela e o lead. Então TODO o conteúdo vai num dia só.
+// 5 acessos; o intervalo conta a partir do ÚLTIMO disparo do acesso anterior (o vídeo, +10min):
+// +30min, +2h, +4h, +8h. Cada disparo respeita HORÁRIO COMERCIAL 6h-22h (BRT): o que cairia de
+// madrugada para e retoma às 6h, contando dali. Tudo fica abaixo de 24h (cabe na janela).
+const GAPS = [0, 1_800, 7_200, 14_400, 28_800]; // gap antes de cada acesso (s): -, 30min, 2h, 4h, 8h
+const FIM_ACESSO = 600;                          // último disparo do acesso (vídeo) = +10min
+const TZ_OFFSET = 3 * 3600 * 1000;               // BRT = UTC-3
+
+// Empurra um horário pro próximo 6h se ele (ou o acesso inteiro de `durSec`) cair fora de 6h-22h BRT.
+function clampBiz(ms: number, durSec = 0): number {
+  const brt = new Date(ms - TZ_OFFSET);
+  const startMin = brt.getUTCHours() * 60 + brt.getUTCMinutes();
+  const endMin = startMin + durSec / 60;
+  const OPEN = 6 * 60, CLOSE = 22 * 60;
+  if (startMin >= OPEN && endMin <= CLOSE) return ms;
+  const t = new Date(brt);
+  if (startMin >= CLOSE || endMin > CLOSE) t.setUTCDate(t.getUTCDate() + 1); // noite -> 6h do dia seguinte
+  t.setUTCHours(6, 0, 0, 0); // madrugada -> 6h do mesmo dia
+  return t.getTime() + TZ_OFFSET;
+}
 
 type Peca =
   | { day: number; offset: number; kind: "text"; text: string }
@@ -46,20 +62,34 @@ const CONTEUDO: { text: string; imgCaption: string; pergunta: string; buttons: {
     buttons: [ { id: "garantir", title: "Quero garantir 🚜" }, { id: "falar_agora", title: "Falar agora 📞" } ] },
 ];
 
+// offset = segundos DENTRO do acesso (relativo ao início dele). o handle calcula o início
+// real de cada acesso encadeando os GAPS + horário comercial.
 function roteiro(): Peca[] {
   const pecas: Peca[] = [];
-  for (let i = 0; i < ACESSOS.length; i++) {
+  for (let i = 0; i < CONTEUDO.length; i++) {
     const day = i + 1;
-    const base = ACESSOS[i];
     const c = CONTEUDO[i];
-    pecas.push({ day, offset: base, kind: "text", text: c.text });
-    pecas.push({ day, offset: base + 40, kind: "media", mediaType: "image", slot: "image", caption: c.imgCaption });
-    pecas.push({ day, offset: base + 80, kind: "interactive", text: c.pergunta, buttons: c.buttons, ...(c.headerImg ? { headerSlot: "image" } : {}) });
-    pecas.push({ day, offset: base + 300, kind: "media", mediaType: "audio", slot: "audio1" });
-    pecas.push({ day, offset: base + 330, kind: "media", mediaType: "audio", slot: "audio2" });
-    pecas.push({ day, offset: base + 600, kind: "media", mediaType: "video", slot: "video", caption: "" });
+    pecas.push({ day, offset: 0, kind: "text", text: c.text });
+    pecas.push({ day, offset: 40, kind: "media", mediaType: "image", slot: "image", caption: c.imgCaption });
+    pecas.push({ day, offset: 80, kind: "interactive", text: c.pergunta, buttons: c.buttons, ...(c.headerImg ? { headerSlot: "image" } : {}) });
+    pecas.push({ day, offset: 300, kind: "media", mediaType: "audio", slot: "audio1" });
+    pecas.push({ day, offset: 330, kind: "media", mediaType: "audio", slot: "audio2" });
+    pecas.push({ day, offset: 600, kind: "media", mediaType: "video", slot: "video", caption: "" });
   }
   return pecas;
+}
+
+// calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (vídeo) do
+// acesso anterior e aplica horário comercial. Garante que o acesso inteiro (até o vídeo) cabe.
+function iniciosDosAcessos(agora: number): number[] {
+  const inicios: number[] = [];
+  let fimAnterior = clampBiz(agora, FIM_ACESSO);
+  for (let i = 0; i < GAPS.length; i++) {
+    const ini = i === 0 ? fimAnterior : clampBiz(fimAnterior + GAPS[i] * 1000, FIM_ACESSO);
+    inicios.push(ini);
+    fimAnterior = ini + FIM_ACESSO * 1000;
+  }
+  return inicios;
 }
 
 export async function handle(req: Request): Promise<Response> {
@@ -97,10 +127,11 @@ export async function handle(req: Request): Promise<Response> {
   };
 
   const agora = Date.now();
+  const inicios = iniciosDosAcessos(agora);
   const rows: Json[] = [];
   for (const p of roteiro()) {
     const dia = p.day;
-    const sendAt = new Date(agora + p.offset * 1000).toISOString();
+    const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
     if (p.kind === "text") {
       rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text", payload: { content: p.text }, send_at: sendAt });
     } else if (p.kind === "interactive") {
