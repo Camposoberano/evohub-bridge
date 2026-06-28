@@ -55,7 +55,7 @@ function isOutgoing(p: Json): boolean {
   return t === "outgoing" || t === 1;
 }
 
-async function handleOutgoing(db: Db, p: Json) {
+export async function handleOutgoing(db: Db, p: Json) {
   const conversation = (p.conversation ?? {}) as Json;
   const inbox = (p.inbox ?? {}) as Json;
   const cwConversationId = (conversation.id ?? p.conversation_id) as number | undefined;

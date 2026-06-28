@@ -24,6 +24,7 @@ import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts";
 import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
+import { handle as syncChatwootOut } from "./handlers/sync-chatwoot-out.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { env, optionalEnv } from "./shared/env.ts";
@@ -55,6 +56,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/channel-sync": channelSync,
   "/clientes": clientes,
   "/sync-facebook": syncFacebook,
+  "/sync-chatwoot-out": syncChatwootOut,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
 };
@@ -112,6 +114,25 @@ function startSyncLoop() {
       console.error("sync-facebook (auto) erro:", e);
     }
   }, SYNC_LOOP_INTERVAL_MS);
+}
+
+// Saída do WhatsApp por PULL — fallback pro webhook do Chatwoot quando ele para de
+// disparar (Sidekiq travado / webhook pausado por downtime). Varre conversas WhatsApp e
+// entrega as msgs de saída pendentes. Idempotente (claim cw-out-<id> impede duplicar com
+// o webhook). Curto (20s) pra latência baixa do atendimento.
+const SYNC_OUT_INTERVAL_MS = 20_000;
+function startChatwootOutLoop() {
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/sync-chatwoot-out?token=${encodeURIComponent(token)}&since_minutes=30`;
+  setInterval(async () => {
+    try {
+      const res = await syncChatwootOut(new Request(url));
+      const body = await res.json();
+      if (body.dispatched > 0 || body.errors?.length) console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
+    } catch (e) {
+      console.error("sync-chatwoot-out (auto) erro:", e);
+    }
+  }, SYNC_OUT_INTERVAL_MS);
 }
 
 // Rollup diário de daily_metrics — loop interno (sem cron externo). Roda a cada 24h
@@ -204,6 +225,7 @@ function startChannelSyncLoop() {
 }
 
 startSyncLoop();
+startChatwootOutLoop();
 startRollupLoop();
 startRetentionLoop();
 startEnrichLoop();
