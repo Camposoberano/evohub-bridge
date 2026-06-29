@@ -74,14 +74,16 @@ function fase1(): Peca[] {
   ];
 }
 
+// Ordem padrão (combinada 29/06): imagem+legenda (texto de abertura) -> botão -> áudio1 ->
+// áudio2 -> vídeo -> lista de fechamento (SEMPRE por último).
 function fase2(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!" },
+    { offset: 0, kind: "media", mediaType: "image", slot: "image",
+      caption: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!" },
     { offset: 40, kind: "interactive", text: "O senhor trabalha com gado de leite ou de corte? 🐄",
       buttons: [{ id: "f2_leite", title: "Leite 🥛" }, { id: "f2_corte", title: "Corte 🥩" }, { id: "f2_ambos", title: "Os dois 🐄" }] },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 480, kind: "media", mediaType: "image", slot: "image" },
     { offset: 600, kind: "media", mediaType: "video", slot: "video" },
     { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 660 },
   ];
@@ -89,18 +91,17 @@ function fase2(): Peca[] {
 
 function fase3(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!" },
+    { offset: 0, kind: "media", mediaType: "image", slot: "image",
+      caption: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!" },
     { offset: 40, kind: "interactive", text: "Hoje o senhor planta o quê pra silagem?",
       buttons: [{ id: "f3_milho", title: "Milho 🌽" }, { id: "f3_capim", title: "Capim 🌿" }, { id: "f3_nao", title: "Não planto 🤷" }] },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 480, kind: "media", mediaType: "image", slot: "image" },
     { offset: 600, kind: "media", mediaType: "video", slot: "video" },
     { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 660 },
   ];
 }
 
-// Fase 4 não tem peça de imagem isolada (spec própria difere da estrutura genérica).
 function fase4(): Peca[] {
   return [
     { offset: 0, kind: "text_sequence", texts: [
@@ -111,7 +112,7 @@ function fase4(): Peca[] {
       buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }] },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 360, kind: "text", text: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
+    { offset: 480, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
     { offset: 600, kind: "media", mediaType: "video", slot: "video" },
     { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 660 },
   ];
@@ -120,12 +121,12 @@ function fase4(): Peca[] {
 // Fase 5: sem gancho (é a última) — fechamento é só o menu de dúvidas.
 function fase5(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃" },
+    { offset: 0, kind: "media", mediaType: "image", slot: "image",
+      caption: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃" },
     { offset: 40, kind: "interactive", text: "Posso te passar a *condição especial*? 💰",
       buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }] },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 480, kind: "media", mediaType: "image", slot: "image" },
     { offset: 600, kind: "media", mediaType: "video", slot: "video" },
     { ...closingList(null) as Peca, offset: 660 },
   ];
