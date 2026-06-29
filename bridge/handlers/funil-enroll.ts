@@ -15,7 +15,10 @@ const FUNNEL = "mega-sorgo";
 // +30min, +2h, +4h, +8h. Cada disparo respeita HORÁRIO COMERCIAL 6h-22h (BRT): o que cairia de
 // madrugada para e retoma às 6h, contando dali. Tudo fica abaixo de 24h (cabe na janela).
 const GAPS = [0, 1_800, 7_200, 14_400, 28_800]; // gap antes de cada acesso (s): -, 30min, 2h, 4h, 8h
-const FIM_ACESSO = 660;                          // último disparo do acesso (lista de fechamento) = +11min
+// Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
+// dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
+// mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
+const FIM_ACESSO = 520;                          // último disparo do acesso (lista de fechamento) = +8min40
 const TZ_OFFSET = 3 * 3600 * 1000;               // BRT = UTC-3
 
 // Empurra um horário pro próximo 6h se ele (ou o acesso inteiro de `durSec`) cair fora de 6h-22h BRT.
@@ -59,18 +62,18 @@ function closingList(gancho: { text: string; row: Botao } | null): Peca {
 // roteiro de cada fase. offset = segundos DENTRO do acesso (relativo ao início dele).
 function fase1(): Peca[] {
   return [
-    { offset: 0, kind: "text_sequence", texts: [
-      "Olá, amigo! Tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾",
-      "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜",
-    ] },
-    { offset: 40, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
+    { offset: 0, kind: "text", text: "Olá, amigo! Tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾" },
+    // logo é FIXA (slot "logo" só tem 1 mídia cadastrada — não rotaciona).
+    { offset: 70, kind: "media", mediaType: "image", slot: "logo",
+      caption: "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜" },
+    { offset: 140, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
       buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, { id: "f1_olhando", title: "Só olhando 👀" }],
       headerSlot: "image" },
-    { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 480, kind: "media", mediaType: "image", slot: "image" },
-    { offset: 600, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊", row: { id: "f1_continuar", title: "📈 Quanto produz?" } }) as Peca, offset: 660 },
+    { offset: 210, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 280, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 350, kind: "media", mediaType: "image", slot: "image" },
+    { offset: 420, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊", row: { id: "f1_continuar", title: "📈 Quanto produz?" } }) as Peca, offset: 490 },
   ];
 }
 
@@ -80,12 +83,12 @@ function fase2(): Peca[] {
   return [
     { offset: 0, kind: "media", mediaType: "image", slot: "image",
       caption: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!" },
-    { offset: 40, kind: "interactive", text: "O senhor trabalha com gado de leite ou de corte? 🐄",
+    { offset: 70, kind: "interactive", text: "O senhor trabalha com gado de leite ou de corte? 🐄",
       buttons: [{ id: "f2_leite", title: "Leite 🥛" }, { id: "f2_corte", title: "Corte 🥩" }, { id: "f2_ambos", title: "Os dois 🐄" }] },
-    { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 600, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 660 },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 350 },
   ];
 }
 
@@ -93,12 +96,12 @@ function fase3(): Peca[] {
   return [
     { offset: 0, kind: "media", mediaType: "image", slot: "image",
       caption: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!" },
-    { offset: 40, kind: "interactive", text: "Hoje o senhor planta o quê pra silagem?",
+    { offset: 70, kind: "interactive", text: "Hoje o senhor planta o quê pra silagem?",
       buttons: [{ id: "f3_milho", title: "Milho 🌽" }, { id: "f3_capim", title: "Capim 🌿" }, { id: "f3_nao", title: "Não planto 🤷" }] },
-    { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 600, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 660 },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 350 },
   ];
 }
 
@@ -108,13 +111,13 @@ function fase4(): Peca[] {
       "🐛 *Resistente às pragas!*\n\nLagarta e cigarrinha não derrubam o Mega Sorgo.",
       "☀️ *Aguenta a seca!*\n\nGarante a sua silagem mesmo no ano mais difícil.",
     ] },
-    { offset: 40, kind: "interactive", text: "O senhor já perdeu lavoura pra praga ou seca? 😟",
+    { offset: 70, kind: "interactive", text: "O senhor já perdeu lavoura pra praga ou seca? 😟",
       buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }] },
-    { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 480, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
-    { offset: 600, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 660 },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 280, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
+    { offset: 350, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 420 },
   ];
 }
 
@@ -123,12 +126,12 @@ function fase5(): Peca[] {
   return [
     { offset: 0, kind: "media", mediaType: "image", slot: "image",
       caption: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃" },
-    { offset: 40, kind: "interactive", text: "Posso te passar a *condição especial*? 💰",
+    { offset: 70, kind: "interactive", text: "Posso te passar a *condição especial*? 💰",
       buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }] },
-    { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 600, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList(null) as Peca, offset: 660 },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList(null) as Peca, offset: 350 },
   ];
 }
 

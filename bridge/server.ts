@@ -100,8 +100,10 @@ const version = {
     "text-sequence-pacing",
     "button-title-fix",
     "fase-ordem-imagem-legenda",
+    "logo-fixa-fase1",
+    "offsets-anti-batch-cron",
   ],
-  build: "2026-06-29-funil-v2-fix2",
+  build: "2026-06-29-funil-v2-fix3",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
