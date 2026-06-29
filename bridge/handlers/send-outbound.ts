@@ -4,12 +4,14 @@
 // (1) entrega no WhatsApp pelo canal certo e (2) registra no Chatwoot pro atendente ver
 // (registro via API não re-dispara webhook -> sem loop).
 //
-// Tipos: text | image | audio | video | interactive (botões).
+// Tipos: text | image | audio | video | interactive (botões) | list.
 // Body: { chatwoot_conversation_id, type, payload }
 //   text        -> { content }
 //   image/video -> { media_url, caption? }
 //   audio       -> { media_url }
 //   interactive -> { text, buttons:[{id,title}], header_image? }
+//   list        -> { text, button_label?, sections:[{title?, rows:[{id,title,description?}]}] }
+//                   FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { admin } from "../shared/supabase.ts";
@@ -81,6 +83,21 @@ export async function handle(req: Request): Promise<Response> {
     if (payload.header_image) interactive.header = { type: "image", image: { link: payload.header_image } };
     metaBody = { type: "interactive", interactive };
     registroTexto = text + " [" + buttons.map((b) => b.title).join(" / ") + "]";
+  } else if (type === "list") {
+    const text = (payload.text as string) ?? "";
+    const buttonLabel = (payload.button_label as string) ?? "Ver opções";
+    const sections = (payload.sections as { title?: string; rows: { id: string; title: string; description?: string }[] }[]) ?? [];
+    if (!text || sections.length === 0) return json({ error: "text e sections obrigatórios" }, 400);
+    metaBody = {
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text },
+        action: { button: buttonLabel, sections },
+      },
+    };
+    const allRows = sections.flatMap((s) => s.rows);
+    registroTexto = text + " [" + allRows.map((r) => r.title).join(" / ") + "]";
   } else {
     return json({ error: "tipo desconhecido: " + type }, 400);
   }

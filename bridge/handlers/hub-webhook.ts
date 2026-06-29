@@ -12,6 +12,7 @@ import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -164,7 +165,10 @@ async function handleWhatsApp(db: Db, p: Json) {
         const profileName = (contactsMeta.find((c) => (c.wa_id as string) === from)?.profile as Json)?.name as string | undefined;
 
         const type = m.type as string;
-        const { content, attachments } = await extractWaContent(m, type, metaToken, channel.id as string);
+        const menuClick = type === "interactive" ? interactiveReplyId(m) : null;
+        const { content, attachments } = menuClick
+          ? { content: menuClick.title, attachments: undefined }
+          : await extractWaContent(m, type, metaToken, channel.id as string);
 
         await ingestInbound(db, channel as Json, {
           from,
@@ -177,11 +181,73 @@ async function handleWhatsApp(db: Db, p: Json) {
           acct,
         });
 
+        // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
+        // hora, em qualquer fase, sem esperar o roteiro chegar lá.
+        if (menuClick?.id.startsWith("menu_")) {
+          try { await handleMenuClick(db, channel as Json, from, menuClick.id, acct); }
+          catch (e) { console.error("handleMenuClick erro:", e); }
+        }
+
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
         try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
       }
     }
   }
+}
+
+// Extrai o id+título da opção clicada (botão ou item de lista) de uma msg interactive.
+function interactiveReplyId(m: Json): { id: string; title: string } | null {
+  const interactive = m.interactive as Json | undefined;
+  const br = interactive?.button_reply as Json | undefined;
+  if (br?.id) return { id: br.id as string, title: (br.title as string) ?? (br.id as string) };
+  const lr = interactive?.list_reply as Json | undefined;
+  if (lr?.id) return { id: lr.id as string, title: (lr.title as string) ?? (lr.id as string) };
+  return null;
+}
+
+// Conteúdo do menu de ação (funil Mega Sorgo) — preço é real (igual já usado manualmente pelo
+// Cícero); plantio/nutrição/depoimento são placeholder até o material real chegar.
+const MENU_CONTENT: Record<string, string> = {
+  menu_preco: "🌱 *Tabela de preços — Mega Sorgo Santa Elisa®*\n\n📦 2 kg — R$ 179,90 (cobre 0,5 hectare)\n📦 4 kg — R$ 341,62 (cobre 1 hectare)\n📦 10 kg — de R$ 899,00 por R$ 764,15 (cobre 2 hectares)\n📦 20 kg — R$ 1.437,90 (cobre até 4 hectares)\n\n🚚 Frete grátis pra todo o Brasil!",
+  menu_plantio: "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
+  menu_nutricao: "🧪 Em breve te mando os dados nutricionais completos (comparativo com milho/Capiaçu). Qualquer dúvida me chama aqui! — Cícero",
+  menu_depoimento: "🎬 Em breve te mando os vídeos de quem já plantou e aprovou! Qualquer dúvida me chama aqui! — Cícero",
+  menu_humano: "🧑‍🌾 Já te conectei com o Cícero, ele te chama em breve!",
+};
+
+async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
+  const content = MENU_CONTENT[menuId];
+  if (!content) return;
+
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+
+  const r = await sendMeta(token, `${phone}/messages`, { messaging_product: "whatsapp", to: from, type: "text", text: { body: content } });
+  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  if (conv?.chatwoot_conversation_id) {
+    try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content, messageType: "outgoing" }, acct); }
+    catch (e) { console.warn("handleMenuClick: registro Chatwoot falhou", String(e).slice(0, 150)); }
+  }
+
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "text",
+    content,
+    meta_message_id: metaId,
+    status: r.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
+  });
 }
 
 // Erros da Meta que indicam número inexistente / não-WhatsApp (número morto).
