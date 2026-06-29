@@ -94,8 +94,11 @@ const version = {
     "multi-account-chatwoot",
     "fb-sync-cursor",
     "label-window",
+    "funil-v2",
+    "list-type",
+    "menu-acao",
   ],
-  build: "2026-06-28-fb-sync-cursor",
+  build: "2026-06-29-funil-v2",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
