@@ -77,31 +77,32 @@ function fase1(): Peca[] {
   ];
 }
 
-// Ordem padrão (combinada 29/06): imagem+legenda (texto de abertura) -> botão -> áudio1 ->
-// áudio2 -> vídeo -> lista de fechamento (SEMPRE por último).
+// Ordem padrão (combinada 29/06, corrigida 29/06 2): imagem e botão são UMA mensagem só
+// (header_image no interactive) -> áudio1 -> áudio2 -> vídeo -> lista de fechamento (sempre
+// por último). Nunca manda imagem solta separada do botão de abertura.
 function fase2(): Peca[] {
   return [
-    { offset: 0, kind: "media", mediaType: "image", slot: "image",
-      caption: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!" },
-    { offset: 70, kind: "interactive", text: "O senhor trabalha com gado de leite ou de corte? 🐄",
-      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, { id: "f2_corte", title: "Corte 🥩" }, { id: "f2_ambos", title: "Os dois 🐄" }] },
-    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 350 },
+    { offset: 0, kind: "interactive",
+      text: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
+      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, { id: "f2_corte", title: "Corte 🥩" }, { id: "f2_ambos", title: "Os dois 🐄" }],
+      headerSlot: "image" },
+    { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 210, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 280 },
   ];
 }
 
 function fase3(): Peca[] {
   return [
-    { offset: 0, kind: "media", mediaType: "image", slot: "image",
-      caption: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!" },
-    { offset: 70, kind: "interactive", text: "Hoje o senhor planta o quê pra silagem?",
-      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, { id: "f3_capim", title: "Capim 🌿" }, { id: "f3_nao", title: "Não planto 🤷" }] },
-    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 350 },
+    { offset: 0, kind: "interactive",
+      text: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
+      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, { id: "f3_capim", title: "Capim 🌿" }, { id: "f3_nao", title: "Não planto 🤷" }],
+      headerSlot: "image" },
+    { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 210, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 280 },
   ];
 }
 
@@ -112,7 +113,8 @@ function fase4(): Peca[] {
       "☀️ *Aguenta a seca!*\n\nGarante a sua silagem mesmo no ano mais difícil.",
     ] },
     { offset: 70, kind: "interactive", text: "O senhor já perdeu lavoura pra praga ou seca? 😟",
-      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }] },
+      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }],
+      headerSlot: "image" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 280, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
@@ -124,14 +126,14 @@ function fase4(): Peca[] {
 // Fase 5: sem gancho (é a última) — fechamento é só o menu de dúvidas.
 function fase5(): Peca[] {
   return [
-    { offset: 0, kind: "media", mediaType: "image", slot: "image",
-      caption: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃" },
-    { offset: 70, kind: "interactive", text: "Posso te passar a *condição especial*? 💰",
-      buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }] },
-    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList(null) as Peca, offset: 350 },
+    { offset: 0, kind: "interactive",
+      text: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
+      buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }],
+      headerSlot: "image" },
+    { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 210, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList(null) as Peca, offset: 280 },
   ];
 }
 
