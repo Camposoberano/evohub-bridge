@@ -34,6 +34,7 @@ function clampBiz(ms: number, durSec = 0): number {
 type Botao = { id: string; title: string };
 type Peca =
   | { offset: number; kind: "text"; text: string }
+  | { offset: number; kind: "text_sequence"; texts: string[] }
   | { offset: number; kind: "interactive"; text: string; buttons: Botao[]; headerSlot?: string }
   | { offset: number; kind: "media"; mediaType: "image" | "audio" | "video"; slot: string; caption?: string }
   | { offset: number; kind: "list"; text: string; buttonLabel: string; sections: { title?: string; rows: Botao[] }[] };
@@ -58,10 +59,12 @@ function closingList(gancho: { text: string; row: Botao } | null): Peca {
 // roteiro de cada fase. offset = segundos DENTRO do acesso (relativo ao início dele).
 function fase1(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "Olá, amigo! Tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾" },
-    { offset: 5, kind: "text", text: "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜" },
+    { offset: 0, kind: "text_sequence", texts: [
+      "Olá, amigo! Tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾",
+      "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜",
+    ] },
     { offset: 40, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
-      buttons: [{ id: "f1_sim", title: "Sim, quero saber mais ✅" }, { id: "f1_olhando", title: "Só olhando 👀" }],
+      buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, { id: "f1_olhando", title: "Só olhando 👀" }],
       headerSlot: "image" },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
@@ -100,10 +103,12 @@ function fase3(): Peca[] {
 // Fase 4 não tem peça de imagem isolada (spec própria difere da estrutura genérica).
 function fase4(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "🐛 *Resistente às pragas!*\n\nLagarta e cigarrinha não derrubam o Mega Sorgo." },
-    { offset: 5, kind: "text", text: "☀️ *Aguenta a seca!*\n\nGarante a sua silagem mesmo no ano mais difícil." },
+    { offset: 0, kind: "text_sequence", texts: [
+      "🐛 *Resistente às pragas!*\n\nLagarta e cigarrinha não derrubam o Mega Sorgo.",
+      "☀️ *Aguenta a seca!*\n\nGarante a sua silagem mesmo no ano mais difícil.",
+    ] },
     { offset: 40, kind: "interactive", text: "O senhor já perdeu lavoura pra praga ou seca? 😟",
-      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças a Deus 🙏" }] },
+      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }] },
     { offset: 300, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 330, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 360, kind: "text", text: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
@@ -184,6 +189,8 @@ export async function handle(req: Request): Promise<Response> {
       const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
       if (p.kind === "text") {
         rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text", payload: { content: p.text }, send_at: sendAt });
+      } else if (p.kind === "text_sequence") {
+        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text_sequence", payload: { texts: p.texts }, send_at: sendAt });
       } else if (p.kind === "interactive") {
         const header = p.headerSlot ? pick(dia, p.headerSlot) : null;
         const payload: Json = { text: p.text, buttons: p.buttons };

@@ -4,14 +4,17 @@
 // (1) entrega no WhatsApp pelo canal certo e (2) registra no Chatwoot pro atendente ver
 // (registro via API não re-dispara webhook -> sem loop).
 //
-// Tipos: text | image | audio | video | interactive (botões) | list.
+// Tipos: text | text_sequence | image | audio | video | interactive (botões) | list.
 // Body: { chatwoot_conversation_id, type, payload }
-//   text        -> { content }
-//   image/video -> { media_url, caption? }
-//   audio       -> { media_url }
-//   interactive -> { text, buttons:[{id,title}], header_image? }
-//   list        -> { text, button_label?, sections:[{title?, rows:[{id,title,description?}]}] }
-//                   FB/IG não suportam list -> cai pra texto simples (fallback automático).
+//   text          -> { content }
+//   text_sequence -> { texts:[...], delay_ms? } -- várias msgs com pausa real entre elas
+//                     (efeito "digitando"; cron de 1min não separa peças com gap curto)
+//   image/video   -> { media_url, caption? }
+//   audio         -> { media_url }
+//   interactive   -> { text, buttons:[{id,title}], header_image? } -- título do botão
+//                     máx 20 caracteres (limite da Meta), senão a msg INTEIRA é rejeitada.
+//   list          -> { text, button_label?, sections:[{title?, rows:[{id,title,description?}]}] }
+//                     FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { admin } from "../shared/supabase.ts";
@@ -51,6 +54,41 @@ export async function handle(req: Request): Promise<Response> {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const channelToken = secret?.channel_token as string | undefined;
   if (!channelToken) return json({ error: "canal sem token" }, 404);
+  const acct = await accountForChannel(channel.id as string);
+
+  // text_sequence: várias mensagens de texto com pausa real entre elas (efeito "digitando").
+  // Cron de 1min não separa peças com gap < 60s -> o pacing tem que ser feito aqui dentro,
+  // numa chamada só, em vez de depender do agendamento de cada peça.
+  if (type === "text_sequence") {
+    const texts = (payload.texts as string[] | undefined)?.filter((t) => t?.trim()) ?? [];
+    const delayMs = (payload.delay_ms as number | undefined) ?? 3500;
+    if (texts.length === 0) return json({ error: "texts obrigatório" }, 400);
+
+    const results: Json[] = [];
+    for (let i = 0; i < texts.length; i++) {
+      const content = texts[i];
+      const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
+      const metaPayload = isWhatsapp
+        ? { messaging_product: "whatsapp", to, type: "text", text: { body: content } }
+        : { recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE" };
+      const res = await sendMeta(channelToken, path, metaPayload);
+      const d = res.data as Json;
+      const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
+
+      let cwMsgId: number | undefined;
+      try { cwMsgId = (await createConversationMessage(cwConvId, { content, messageType: "outgoing" }, acct))?.id; }
+      catch (e) { console.warn("send-outbound: registro Chatwoot falhou (entrega ok):", String(e).slice(0, 150)); }
+
+      await db.from("messages").insert({
+        conversation_id: conv.id, channel_id: channel.id, direction: "out", msg_type: "text",
+        content, meta_message_id: metaId, chatwoot_message_id: cwMsgId ?? null, status: res.ok ? "sent" : "failed",
+      });
+      results.push({ ok: res.ok, meta_message_id: metaId });
+      if (!res.ok) console.error("send-outbound (text_sequence) falhou:", JSON.stringify(d).slice(0, 250));
+      if (i < texts.length - 1) await sleep(delayMs);
+    }
+    return json({ ok: results.every((r) => r.ok), results });
+  }
 
   // monta o payload Meta conforme o tipo (interactive/áudio/vídeo só fazem sentido no WhatsApp)
   let metaBody: Json | null = null;
@@ -112,7 +150,6 @@ export async function handle(req: Request): Promise<Response> {
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
 
   // registra no Chatwoot pro atendente ver (não re-dispara webhook).
-  const acct = await accountForChannel(channel.id as string);
   let cwMsgId: number | undefined;
   try {
     const cwMsg = await createConversationMessage(cwConvId, { content: registroTexto, messageType: "outgoing" }, acct);
@@ -135,6 +172,10 @@ export async function handle(req: Request): Promise<Response> {
 
   if (!res.ok) console.error("send-outbound falhou:", JSON.stringify(d).slice(0, 250));
   return json({ ok: res.ok, meta_message_id: metaId, status: res.status, error: res.ok ? undefined : (d as Json)?.error });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function json(obj: unknown, status = 200): Response {
