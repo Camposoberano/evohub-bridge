@@ -71,9 +71,10 @@ function fase1(): Peca[] {
       headerSlot: "image" },
     { offset: 210, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 280, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 350, kind: "media", mediaType: "image", slot: "image" },
-    { offset: 420, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊", row: { id: "f1_continuar", title: "📈 Quanto produz?" } }) as Peca, offset: 490 },
+    // imagem solta (slot "image") removida 30/06: a imagem já vai junto do botão de abertura
+    // (offset 140, headerSlot "image"). Padrão = botão-com-imagem, nunca imagem solta.
+    { offset: 350, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊", row: { id: "f1_continuar", title: "📈 Quanto produz?" } }) as Peca, offset: 420 },
   ];
 }
 
@@ -108,18 +109,17 @@ function fase3(): Peca[] {
 
 function fase4(): Peca[] {
   return [
-    { offset: 0, kind: "text_sequence", texts: [
-      "🐛 *Resistente às pragas!*\n\nLagarta e cigarrinha não derrubam o Mega Sorgo.",
-      "☀️ *Aguenta a seca!*\n\nGarante a sua silagem mesmo no ano mais difícil.",
-    ] },
-    { offset: 70, kind: "interactive", text: "O senhor já perdeu lavoura pra praga ou seca? 😟",
+    // abertura = botão-com-imagem (igual fases 2/3): os 2 textos de praga/seca foram fundidos
+    // no corpo do interactive -> uma mensagem só, abrindo com a imagem (header_image).
+    { offset: 0, kind: "interactive",
+      text: "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
       buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }],
       headerSlot: "image" },
-    { offset: 140, kind: "media", mediaType: "audio", slot: "audio1" },
-    { offset: 210, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 280, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
-    { offset: 350, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 420 },
+    { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
+    { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
+    { offset: 210, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
+    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 350 },
   ];
 }
 
