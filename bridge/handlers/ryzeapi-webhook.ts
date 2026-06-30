@@ -7,6 +7,7 @@ import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
+import { accountForChannel } from "../shared/accounts.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -71,6 +72,7 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   const messageId = (data.id as string) ?? undefined;
 
   const attachments = buildAttachment(message);
+  const acct = await accountForChannel(channel.id as string);
 
   await ingestInbound(db, channel as Json, {
     from,
@@ -80,6 +82,7 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
     content,
     attachments,
     sentAt: data.timestamp as string | undefined,
+    acct,
   });
 }
 
