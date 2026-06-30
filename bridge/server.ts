@@ -110,8 +110,9 @@ const version = {
     "ryzeapi-inbound-acct",
     "ryzeapi-outbound-bridge",
     "ryzeapi-inbox-webhook-repoint",
+    "ryzeapi-outbound-no-channel-secret",
   ],
-  build: "2026-06-30-ryzeapi-outbound",
+  build: "2026-06-30-ryzeapi-outbound-fix",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

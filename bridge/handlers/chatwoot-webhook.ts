@@ -105,14 +105,23 @@ export async function handleOutgoing(db: Db, p: Json) {
   const to = (conv?.contacts as Json)?.external_contact_id as string | undefined;
   if (!to) { console.warn("sem destinatário p/ conversa", cwConversationId); return; }
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).single();
-  const token = secret!.channel_token;
+  // canal ryzeapi (whatsapp não-oficial): sem phone_number_id e com external_id (nome da instância).
+  const isRyze = channel.type === "whatsapp" && Boolean(channel.external_id) && !channel.phone_number_id;
+
+  // channel_token só existe pra canais OFICIAIS (Meta). Canal ryzeapi não tem linha em
+  // channel_secrets -> .single() estoura (0 linhas) e secret!.channel_token dava TypeError,
+  // matando o envio ANTES do branch ryzeapi (e deixando o claim cw-out-<id> travado).
+  let token = "";
+  if (!isRyze) {
+    const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).single();
+    token = secret!.channel_token;
+  }
 
   // Envio por tipo de canal.
   let res;
   let msgType = "text";
   let mediaUrl: string | null = null;
-  if (channel.type === "whatsapp" && channel.external_id && !channel.phone_number_id) {
+  if (isRyze) {
     // canal ryzeapi (whatsapp não-oficial): a ponte nativa deles não entrega SAÍDA de forma
     // confiável (bug achado testando, igual a entrada) -- manda direto pela API deles.
     const instance = channel.external_id as string;
