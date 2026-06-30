@@ -23,8 +23,9 @@ export async function handle(req: Request): Promise<Response> {
   try { p = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
 
   const eventType = (p.event as string) ?? "ryzeapi_event";
+  const occurredAt = (p.data as Json | undefined)?.timestamp as string | undefined;
   const db = admin();
-  db.from("events").insert({ source: "ryzeapi", event_type: eventType, payload: p }).then(() => {}, () => {});
+  db.from("events").insert({ source: "ryzeapi", event_type: eventType, payload: p, occurred_at: occurredAt ?? null }).then(() => {}, () => {});
 
   // Processa em BACKGROUND e responde 200 na hora — com mídia em base64 (pode ser pesada) +
   // ingestInbound (banco + upload pro Chatwoot) facilmente passa de 2-3s. Esperar isso antes

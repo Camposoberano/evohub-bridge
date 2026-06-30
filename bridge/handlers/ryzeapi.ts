@@ -13,7 +13,7 @@
 import { env, optionalEnv } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { acctPost, instDelete, instGet, instPost, listInstances, ryzeapiConfigured, tokenForInstance } from "../shared/ryzeapi.ts";
-import { findInboxByName, type CwAcct } from "../shared/chatwoot.ts";
+import { findInboxByName, setInboxWebhook, type CwAcct } from "../shared/chatwoot.ts";
 import { acctByKey } from "../shared/accounts.ts";
 import { admin } from "../shared/supabase.ts";
 
@@ -38,6 +38,17 @@ async function applyChatwootConfig(instance: string, token: string, acct: CwAcct
   // a ponte nativa cria a inbox no Chatwoot por baixo (pode levar um instante) -- busca por nome.
   let inbox = await findInboxByName(inboxName, acct).catch(() => null);
   if (!inbox) { await sleep(2000); inbox = await findInboxByName(inboxName, acct).catch(() => null); }
+
+  // REPONTA o webhook_url da inbox pro NOSSO /chatwoot-webhook. A ponte nativa deles seta esse
+  // webhook_url pra si (ryzeapi.cloud/.../chatwoot/webhook), mas a SAÍDA dela é quebrada (achado
+  // testando, igual a entrada) -- então a saída tem que passar pelo nosso handler (que manda via
+  // REST da RyzeAPI direto). Sem isso, o painel "ligar saída" reverteria pra ponte nativa quebrada.
+  if (inbox) {
+    const base = env("BRIDGE_PUBLIC_BASE").replace(/\/+$/, "");
+    const wtoken = optionalEnv("RYZEAPI_WEBHOOK_TOKEN") ?? env("CHATWOOT_WEBHOOK_SECRET");
+    const hookUrl = `${base}/chatwoot-webhook?token=${encodeURIComponent(wtoken)}`;
+    await setInboxWebhook(acct.accountId, inbox.id, hookUrl, acct).catch((e) => console.error("ryzeapi repoint inbox webhook erro:", e));
+  }
 
   const db = admin();
   await db.from("channels").upsert({
