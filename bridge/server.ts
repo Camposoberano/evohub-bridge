@@ -103,8 +103,9 @@ const version = {
     "logo-fixa-fase1",
     "offsets-anti-batch-cron",
     "imagem-botao-combinados",
+    "ryzeapi-payload-fix",
   ],
-  build: "2026-06-29-funil-v2-fix4",
+  build: "2026-06-30-ryzeapi-fix",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
