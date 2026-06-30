@@ -36,19 +36,17 @@ export async function handle(req: Request): Promise<Response> {
 }
 
 async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
-  // Estrutura correta do webhook ryzeapi (docs v2):
+  // Estrutura real do webhook ryzeapi (confirmada via tabela `events`, payload de produção):
   //   p.data.id              = wamid (top-level)
-  //   p.data.message.*       = envelope da mensagem
-  //   p.data.message.direction   "incoming" | "outgoing"
-  //   p.data.message.chat.jid    JID do chat
-  //   p.data.message.sender.jid  JID do remetente
-  //   p.data.message.content.text  texto (objeto, não string)
-  //   p.data.message.media.*     mídia (type/url/base64/...)
-  //   p.data.message.timestamp   ISO timestamp
+  //   p.data.direction       "incoming" | "outgoing" (NÃO dentro de message)
+  //   p.data.chat.jid        JID do chat (NÃO dentro de message)
+  //   p.data.sender.jid      JID do remetente (NÃO dentro de message)
+  //   p.data.message.content    texto -- STRING direta, não objeto {text}
+  //   p.data.message.media.*    mídia (type/url/base64/...)
+  //   p.data.timestamp       ISO timestamp (NÃO dentro de message)
   const data = (p.data ?? {}) as Json;
-  const message = (data.message ?? {}) as Json;
-  if (message.direction !== "incoming") return; // saída já vai pela ponte nativa deles
-  const chat = (message.chat ?? {}) as Json;
+  if (data.direction !== "incoming") return; // saída já vai pela ponte nativa deles
+  const chat = (data.chat ?? {}) as Json;
   if (chat.type && chat.type !== "private") return; // grupo/newsletter -- fora de escopo por agora
 
   const instanceData = (p.instanceData ?? {}) as Json;
@@ -58,20 +56,19 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   const { data: channel } = await db.from("channels").select("*").eq("external_id", instanceName).maybeSingle();
   if (!channel) { console.warn("ryzeapi: sem canal cadastrado pra instância", instanceName); return; }
 
-  const sender = (message.sender ?? chat) as Json;
+  const message = (data.message ?? {}) as Json;
+  const sender = (data.sender ?? chat) as Json;
   const fromRaw = (sender.jid ?? chat.jid ?? sender.lid ?? chat.lid) as string | undefined;
   if (!fromRaw) return;
   const from = String(fromRaw).replace(/@.*/, ""); // "55119...@s.whatsapp.net" -> só os dígitos
 
-  // content é objeto {text: "..."}, não string direta
-  const contentObj = (message.content ?? {}) as Json;
-  const content = (contentObj.text as string) ?? "";
+  const content = (message.content as string) ?? "";
 
   // type determinado pela mídia presente (image/video/audio/document/sticker/ptt)
   const media = message.media as Json | undefined;
   const msgType = (media?.type as string) || (content ? "text" : "unknown");
 
-  const messageId = (message.id as string) ?? (data.id as string) ?? undefined;
+  const messageId = (data.id as string) ?? undefined;
 
   const attachments = buildAttachment(message);
 
@@ -82,7 +79,7 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
     msgType,
     content,
     attachments,
-    sentAt: message.timestamp as string | undefined,
+    sentAt: data.timestamp as string | undefined,
   });
 }
 
