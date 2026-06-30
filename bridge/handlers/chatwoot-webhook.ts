@@ -6,9 +6,10 @@
 // Validamos esse token. TODO Fase 5: usar assinatura nativa se a versão suportar.
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { env } from "../shared/env.ts";
+import { env, optionalEnv } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
+import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -29,9 +30,12 @@ export async function handle(req: Request): Promise<Response> {
 
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) {
-    return new Response("unauthorized", { status: 401 });
-  }
+  // canais ryzeapi usam o inbox webhook_url com o token deles (RYZEAPI_WEBHOOK_TOKEN) em vez
+  // do segredo principal -- assim a inbox roteada pra ryzeapi não precisa expor o segredo
+  // compartilhado dos canais oficiais.
+  const validToken = timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET")) ||
+    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN") ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!) : false);
+  if (!validToken) return new Response("unauthorized", { status: 401 });
 
   const raw = await req.text();
   let p: Json;
@@ -108,7 +112,33 @@ export async function handleOutgoing(db: Db, p: Json) {
   let res;
   let msgType = "text";
   let mediaUrl: string | null = null;
-  if (channel.type === "whatsapp") {
+  if (channel.type === "whatsapp" && channel.external_id && !channel.phone_number_id) {
+    // canal ryzeapi (whatsapp não-oficial): a ponte nativa deles não entrega SAÍDA de forma
+    // confiável (bug achado testando, igual a entrada) -- manda direto pela API deles.
+    const instance = channel.external_id as string;
+    const rzToken = await tokenForInstance(instance);
+    if (!rzToken) { console.warn("ryzeapi: instância não encontrada", instance); return; }
+    if (attachments.length > 0) {
+      for (const att of attachments) {
+        const aUrl = (att.data_url as string) ?? null;
+        if (!aUrl) { console.warn("anexo sem data_url", channel.id); continue; }
+        const attachType = metaAttachmentType(att.file_type as string | undefined);
+        msgType = attachType === "file" ? "document" : attachType;
+        mediaUrl = aUrl;
+        res = await instPost(`/message/media/${encodeURIComponent(instance)}`, rzToken, {
+          number: to,
+          mediaType: msgType,
+          mediaUrl: aUrl,
+          message: content || undefined,
+          fileName: msgType === "document" ? ((att.fallback_title as string) ?? "arquivo") : undefined,
+          isVoice: msgType === "audio",
+        });
+      }
+    } else {
+      res = await instPost(`/message/text/${encodeURIComponent(instance)}`, rzToken, { number: to, message: content });
+      msgType = "text";
+    }
+  } else if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
     const url = `${channel.phone_number_id}/messages`;
     // Disparo de template DE DENTRO DO CHAT: agente digita "/template <nome> [idioma]" (ou /tpl, /t).
@@ -182,7 +212,8 @@ export async function handleOutgoing(db: Db, p: Json) {
   if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); await dbg(db, cwMsgId, "no-res-nothing-sent", {}); return; }
   const d = res.data as Json;
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
-    ((d?.message_id as string) ?? null);
+    ((d?.message_id as string) ?? null) ??
+    (((d?.data as Json)?.messageId as string) ?? null);
 
   await dbg(db, cwMsgId, "before-insert-messages", { msgType, mediaUrl, metaId });
   await db.from("messages").insert({
