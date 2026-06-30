@@ -114,8 +114,9 @@ const version = {
     "funil-fase1-sem-imagem-solta",
     "funil-fase4-botao-imagem",
     "funil-enroll-force-token",
+    "anti-dup-lista-interativo",
   ],
-  build: "2026-06-30-funil-enroll-force",
+  build: "2026-06-30-anti-dup-lista",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

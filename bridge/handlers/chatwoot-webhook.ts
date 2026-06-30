@@ -73,6 +73,16 @@ export async function handleOutgoing(db: Db, p: Json) {
 
   if (!cwConversationId || (!content && !attachment)) { await dbg(db, cwMsgId, "early-return-no-content-no-attachment", {}); return; }
 
+  // Anti-duplicata de LISTA/INTERATIVO: o n8n do funil manda a lista interativa ("Ver opções")
+  // direto pela API do provedor e registra no Chatwoot como TEXTO no formato "<corpo> [op1 / op2
+  // / ...]". Esse registro NÃO passa pela nossa tabela messages, então o pull-loop sync-chatwoot-out
+  // lê e reenviaria como texto -> 2ª mensagem (colchetes) duplicada no WhatsApp. A lista real já
+  // foi entregue; reenviar o registro como texto é sempre errado. Detecta o padrão e não reenvia.
+  if (attachments.length === 0 && /\s\[[^\]]+\s\/\s[^\]]+\]\s*$/.test(content)) {
+    await dbg(db, cwMsgId, "skip-list-interactive-registration-echo", { content: content.slice(0, 60) });
+    return;
+  }
+
   if (cwMsgId) {
     // 1) Claim ATÔMICO: 2 webhooks do mesmo message_created (retry/concorrência) -> só 1 envia.
     //    Evita o cliente receber a mensagem 2x (era a duplicação reportada).
