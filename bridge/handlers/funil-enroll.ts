@@ -5,7 +5,7 @@
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { env } from "../shared/env.ts";
+import { env, optionalEnv } from "../shared/env.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -156,21 +156,31 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) return json({ error: "unauthorized" }, 401);
+  // aceita o segredo principal OU o RYZEAPI_WEBHOOK_TOKEN (pra disparo operacional via API
+  // sem precisar do segredo principal -- ex: re-teste do funil pelo painel/CLI).
+  const okToken = timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET")) ||
+    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN") ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!) : false);
+  if (!okToken) return json({ error: "unauthorized" }, 401);
 
   const body = await req.json().catch(() => ({})) as Json;
   const cwConvId = Number(body.chatwoot_conversation_id);
   if (!cwConvId) return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  const force = body.force === true || body.force === "true";
 
   const db = admin();
   const { data: conv } = await db.from("conversations").select("id, chatwoot_conversation_id")
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
 
-  // dedup: já está no funil?
+  // dedup: já está no funil? force=true -> limpa a sequência + a fila antiga e re-enfileira
+  // (re-teste). Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
   const { data: existing } = await db.from("sales_sequences").select("id")
     .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
-  if (existing) return json({ ok: true, already: true });
+  if (existing) {
+    if (!force) return json({ ok: true, already: true });
+    await db.from("scheduled_messages").delete().eq("conversation_id", conv.id);
+    await db.from("sales_sequences").delete().eq("conversation_id", conv.id).eq("funnel", FUNNEL);
+  }
 
   // carrega a faixa e agrupa por dia+slot pra sortear
   const { data: media } = await db.from("funnel_media").select("day,slot,url,caption,type")
