@@ -3,6 +3,8 @@
 //  * Client API pública (inbox_identifier + source_id): injeta mensagens de ENTRADA.
 import { env, optionalEnv } from "./env.ts";
 
+type Json = Record<string, unknown>;
+
 // Conta Chatwoot (instância): URL + token + account_id. Permite multi-cliente (outra
 // instância/URL/token). Default = conta principal do env.
 export type CwAcct = { url: string; token: string; accountId: string; adminToken?: string };
@@ -65,6 +67,28 @@ export async function createApiInbox(name: string, webhookUrl: string, acct: CwA
   });
   const full = await got.json();
   return { id: inbox.id, inbox_identifier: full?.inbox_identifier ?? full?.channel?.inbox_identifier };
+}
+
+// Acha uma inbox existente pelo nome (ex: ryzeapi nativo já criou a inbox por baixo e
+// só precisamos do inbox_identifier pra nosso ingestInbound postar na mesma conversa).
+export async function findInboxByName(name: string, acct: CwAcct = envAcct()): Promise<{
+  id: number;
+  inbox_identifier: string;
+} | null> {
+  const res = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/inboxes`, {
+    headers: appHeaders(acct),
+  });
+  if (!res.ok) throw new Error(`Chatwoot listInboxes ${res.status}: ${await res.text()}`);
+  const json = await res.json();
+  const payload = (json.payload ?? []) as Json[];
+  const found = payload.find((i) => i.name === name);
+  if (!found) return null;
+  if (found.inbox_identifier) return { id: found.id as number, inbox_identifier: found.inbox_identifier as string };
+  const got = await fetch(`${baseOf(acct)}/api/v1/accounts/${acct.accountId}/inboxes/${found.id}`, {
+    headers: appHeaders(acct),
+  });
+  const full = await got.json();
+  return { id: found.id as number, inbox_identifier: full?.inbox_identifier ?? full?.channel?.inbox_identifier };
 }
 
 // Seta o webhook_url de uma inbox API — usado p/ ligar a saída Chatwoot → uazapi.

@@ -16,6 +16,7 @@ import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
+import { handle as ryzeapi } from "./handlers/ryzeapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import { handle as funilEnroll } from "./handlers/funil-enroll.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
@@ -49,6 +50,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
   "/ryzeapi-webhook": ryzeapiWebhook,
+  "/ryzeapi": ryzeapi,
   "/send-outbound": sendOutbound,
   "/funil-enroll": funilEnroll,
   "/meta-templates": metaTemplates,
@@ -104,8 +106,9 @@ const version = {
     "offsets-anti-batch-cron",
     "imagem-botao-combinados",
     "ryzeapi-payload-fix",
+    "ryzeapi-painel",
   ],
-  build: "2026-06-30-ryzeapi-fix",
+  build: "2026-06-30-ryzeapi-painel",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
