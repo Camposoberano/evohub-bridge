@@ -15,6 +15,9 @@ const FUNNEL = "mega-sorgo";
 // +30min, +2h, +4h, +8h. Cada disparo respeita HORÁRIO COMERCIAL 6h-22h (BRT): o que cairia de
 // madrugada para e retoma às 6h, contando dali. Tudo fica abaixo de 24h (cabe na janela).
 const GAPS = [0, 1_800, 7_200, 14_400, 28_800]; // gap antes de cada acesso (s): -, 30min, 2h, 4h, 8h
+// modo TESTE (body.fast=true): fases fluem em sequência (~70s entre fases, sem horário comercial),
+// pra revisar o funil todo em ~30min sem clicar. Produção usa GAPS (30min-8h) pra caber na janela 24h.
+const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
@@ -141,11 +144,12 @@ const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
 
 // calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
 // fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
-function iniciosDosAcessos(agora: number): number[] {
+function iniciosDosAcessos(agora: number, gaps: number[], skipClamp: boolean): number[] {
+  const clamp = (ms: number) => skipClamp ? ms : clampBiz(ms, FIM_ACESSO);
   const inicios: number[] = [];
-  let fimAnterior = clampBiz(agora, FIM_ACESSO);
-  for (let i = 0; i < GAPS.length; i++) {
-    const ini = i === 0 ? fimAnterior : clampBiz(fimAnterior + GAPS[i] * 1000, FIM_ACESSO);
+  let fimAnterior = clamp(agora);
+  for (let i = 0; i < gaps.length; i++) {
+    const ini = i === 0 ? fimAnterior : clamp(fimAnterior + gaps[i] * 1000);
     inicios.push(ini);
     fimAnterior = ini + FIM_ACESSO * 1000;
   }
@@ -196,8 +200,9 @@ export async function handle(req: Request): Promise<Response> {
     return arr[Math.floor(Math.random() * arr.length)];
   };
 
+  const fast = body.fast === true || body.fast === "true";
   const agora = Date.now();
-  const inicios = iniciosDosAcessos(agora);
+  const inicios = iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast);
   const rows: Json[] = [];
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;
