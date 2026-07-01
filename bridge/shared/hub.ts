@@ -39,6 +39,29 @@ export function sendMetaMessage(channelToken: string, phoneNumberId: string, bod
   return sendMeta(channelToken, `${phoneNumberId}/messages`, body);
 }
 
+// Upload de mídia pro Meta (multipart) -> media_id. Necessário pra ÁUDIO virar VOZ gravada
+// (PTT): áudio por link renderiza como arquivo; só media_id (bytes subidos direto) vira bolha
+// de voz. path: /meta/<phone_number_id>/media.
+export async function uploadMetaMedia(
+  channelToken: string,
+  phoneNumberId: string,
+  bytes: Uint8Array,
+  mimeType: string,
+  filename: string,
+): Promise<{ ok: boolean; status: number; id: string | null; data: unknown }> {
+  const form = new FormData();
+  form.set("messaging_product", "whatsapp");
+  form.set("type", mimeType);
+  form.append("file", new Blob([bytes], { type: mimeType }), filename);
+  const res = await fetch(`${HUB()}/meta/${phoneNumberId}/media`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${channelToken}` }, // sem Content-Type: FormData põe o boundary
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, id: (data as { id?: string })?.id ?? null, data };
+}
+
 // Detalhe do canal no Hub. O webhook channel_connected é magro (sem meta_connection),
 // então buscamos a conexão aqui: facebook_connection / whatsapp_connection / instagram_connection.
 export async function getChannelDetail(hubChannelId: string): Promise<Record<string, unknown> | null> {

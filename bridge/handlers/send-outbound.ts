@@ -20,7 +20,7 @@
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
-import { sendMeta } from "../shared/hub.ts";
+import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
@@ -106,13 +106,25 @@ export async function handle(req: Request): Promise<Response> {
     metaBody = { type, [type]: caption ? { link, caption } : { link } };
     registroTexto = caption ?? `[${type}]`;
   } else if (type === "audio") {
-    let link = payload.media_url as string;
-    if (!link) return json({ error: "media_url obrigatório" }, 400);
-    // transcodifica pra ogg/opus -> WhatsApp mostra como VOZ gravada (PTT/waveform), não arquivo.
-    // (mesma coisa que o handleOutgoing faz na resposta manual; o funil não fazia -> vinha como arquivo.)
-    const ogg = await toVoiceOgg(link);
-    if (ogg) link = ogg;
-    metaBody = { type: "audio", audio: { link } }; // áudio não aceita caption
+    const src = payload.media_url as string;
+    if (!src) return json({ error: "media_url obrigatório" }, 400);
+    // VOZ gravada (PTT): transcodifica pra ogg/opus E envia por MEDIA_ID (não link). Áudio por
+    // link o WhatsApp mostra como ARQUIVO; só bytes subidos por media_id viram bolha de voz.
+    // Fallback pro link se transcode/upload falhar (pelo menos o áudio toca).
+    const oggUrl = await toVoiceOgg(src);
+    let audioObj: Json = { link: oggUrl ?? src };
+    if (oggUrl && channel.phone_number_id) {
+      try {
+        const ob = await fetch(oggUrl);
+        if (ob.ok) {
+          const bytes = new Uint8Array(await ob.arrayBuffer());
+          const up = await uploadMetaMedia(channelToken, channel.phone_number_id as string, bytes, "audio/ogg", "voz.ogg");
+          if (up.ok && up.id) audioObj = { id: up.id };
+          else console.warn("send-outbound: uploadMetaMedia falhou, usa link:", up.status, JSON.stringify(up.data).slice(0, 150));
+        }
+      } catch (e) { console.warn("send-outbound: media_id erro, usa link:", String(e).slice(0, 120)); }
+    }
+    metaBody = { type: "audio", audio: audioObj }; // áudio não aceita caption
     registroTexto = "[áudio]";
   } else if (type === "interactive") {
     const text = (payload.text as string) ?? "";
