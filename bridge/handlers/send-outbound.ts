@@ -23,6 +23,7 @@ import { env } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { toVoiceOgg } from "../shared/audio.ts";
 
 type Json = Record<string, unknown>;
 
@@ -105,8 +106,12 @@ export async function handle(req: Request): Promise<Response> {
     metaBody = { type, [type]: caption ? { link, caption } : { link } };
     registroTexto = caption ?? `[${type}]`;
   } else if (type === "audio") {
-    const link = payload.media_url as string;
+    let link = payload.media_url as string;
     if (!link) return json({ error: "media_url obrigatório" }, 400);
+    // transcodifica pra ogg/opus -> WhatsApp mostra como VOZ gravada (PTT/waveform), não arquivo.
+    // (mesma coisa que o handleOutgoing faz na resposta manual; o funil não fazia -> vinha como arquivo.)
+    const ogg = await toVoiceOgg(link);
+    if (ogg) link = ogg;
     metaBody = { type: "audio", audio: { link } }; // áudio não aceita caption
     registroTexto = "[áudio]";
   } else if (type === "interactive") {
