@@ -247,6 +247,11 @@ function json(obj: unknown, status = 200): Response {
   return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 }
 
+// normaliza pra comparação: minúsculo + sem acentos (NFD separa os diacríticos; regex remove).
+function fold(s: string): string {
+  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
 // Liga via env (desligado se não setar):
 //   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
@@ -262,7 +267,9 @@ export async function autoEnrollFunil(
   if (!alvo) return; // desligado por padrão
   if (channel.name !== alvo && channel.external_id !== alvo) return;
   const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
-  if (kw && !content.toLowerCase().includes(kw.toLowerCase())) return;
+  // match tolerante: ignora maiúscula/minúscula E acentos ("INFORMAÇÕES" == "informacoes"),
+  // e basta a palavra-chave estar CONTIDA na msg (lead pode escrever coisa a mais em volta).
+  if (kw && !fold(content).includes(fold(kw))) return;
 
   const { data: contact } = await db.from("contacts").select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();

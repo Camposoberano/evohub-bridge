@@ -122,8 +122,9 @@ const version = {
     "funil-clique-nao-trava",
     "funil-auto-enroll",
     "funil-send-failed-log",
+    "funil-keyword-sem-acento",
   ],
-  build: "2026-07-01-funil-producao",
+  build: "2026-07-01-keyword-fold",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
