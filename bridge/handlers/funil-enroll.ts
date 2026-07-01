@@ -201,8 +201,13 @@ export async function handle(req: Request): Promise<Response> {
   };
 
   const fast = body.fast === true || body.fast === "true";
+  const turbo = body.turbo === true || body.turbo === "true";
   const agora = Date.now();
-  const inicios = iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast);
+  // TURBO (teste): todas as fases começam AGORA -> as peças agrupam por offset e o funil todo
+  // sai em ~8min, mas FORA DE ORDEM (o cron de 1min dispara várias peças vencidas juntas). Só teste.
+  const inicios = turbo
+    ? new Array(FASES.length).fill(agora)
+    : iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast);
   const rows: Json[] = [];
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;
