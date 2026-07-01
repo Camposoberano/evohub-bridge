@@ -85,7 +85,14 @@ export async function handle(req: Request): Promise<Response> {
         content, meta_message_id: metaId, chatwoot_message_id: cwMsgId ?? null, status: res.ok ? "sent" : "failed",
       });
       results.push({ ok: res.ok, meta_message_id: metaId });
-      if (!res.ok) console.error("send-outbound (text_sequence) falhou:", JSON.stringify(d).slice(0, 250));
+      if (!res.ok) {
+        console.error("send-outbound (text_sequence) falhou:", JSON.stringify(d).slice(0, 250));
+        // rejeição fica consultável (Meta recusa em silêncio; Chatwoot mostra "sent" mesmo assim).
+        db.from("events").insert({
+          source: "funil", event_type: "send_failed",
+          payload: { conv: cwConvId, type: "text_sequence", status: res.status, error: (d as Json)?.error ?? d },
+        }).then(() => {}, () => {});
+      }
       if (i < texts.length - 1) await sleep(delayMs);
     }
     return json({ ok: results.every((r) => r.ok), results });
@@ -187,7 +194,15 @@ export async function handle(req: Request): Promise<Response> {
     status: res.ok ? "sent" : "failed",
   });
 
-  if (!res.ok) console.error("send-outbound falhou:", JSON.stringify(d).slice(0, 250));
+  if (!res.ok) {
+    console.error("send-outbound falhou:", JSON.stringify(d).slice(0, 250));
+    // rejeição fica consultável em events (Meta recusa em silêncio -- ex: janela 24h fechada;
+    // Chatwoot mostra "sent" mesmo assim). select * from events where source='funil'.
+    db.from("events").insert({
+      source: "funil", event_type: "send_failed",
+      payload: { conv: cwConvId, type, status: res.status, error: (d as Json)?.error ?? d },
+    }).then(() => {}, () => {});
+  }
   return json({ ok: res.ok, meta_message_id: metaId, status: res.status, error: res.ok ? undefined : (d as Json)?.error });
 }
 

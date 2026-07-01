@@ -13,6 +13,7 @@ import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
+import { autoEnrollFunil } from "./funil-enroll.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -190,6 +191,10 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
         try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
+
+        // entrada automática no funil (leads de anúncio) -- só age se FUNIL_AUTO_ENROLL_CHANNEL
+        // estiver setado e este for o canal alvo (+ FUNIL_KEYWORD, se configurada).
+        try { await autoEnrollFunil(db, channel as Json, from, content ?? ""); } catch (e) { console.error("autoEnrollFunil erro:", e); }
       }
     }
   }

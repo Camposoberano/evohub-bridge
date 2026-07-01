@@ -1,6 +1,7 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
 import { claimDelivery, type DbClient } from "./supabase.ts";
+import { optionalEnv } from "./env.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -142,9 +143,11 @@ export async function ingestInbound(
     throw messageError;
   }
 
-  // Cliente respondeu (entrada real, não echo) -> para o funil de apresentação: cancela as
-  // peças ainda pendentes e marca a sequência como respondida. A IA/humano assume a partir daqui.
-  if (!msg.outgoing) {
+  // Decisão 01/07: resposta/clique do cliente NÃO trava o funil. O Cícero recebe a resposta
+  // no Chatwoot e responde manualmente EM PARALELO; a sequência segue até o fim. (As sequências
+  // por botão -- preço, vídeos etc. -- serão desenvolvidas depois; aí volta o cancelamento
+  // seletivo.) Reativar o comportamento antigo: FUNIL_CANCEL_ON_REPLY=true.
+  if (!msg.outgoing && optionalEnv("FUNIL_CANCEL_ON_REPLY") === "true") {
     db.from("scheduled_messages").update({ status: "cancelled" })
       .eq("conversation_id", conv.id).eq("status", "pending").then(() => {}, () => {});
     db.from("sales_sequences").update({ status: "replied" })

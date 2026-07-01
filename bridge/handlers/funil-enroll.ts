@@ -246,3 +246,41 @@ export async function handle(req: Request): Promise<Response> {
 function json(obj: unknown, status = 200): Response {
   return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
 }
+
+// ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
+// Liga via env (desligado se não setar):
+//   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
+//   FUNIL_KEYWORD             = (opcional) só entra se a msg contiver a palavra-chave do anúncio
+// Chamado pelo hub-webhook a cada entrada. Dedup: 1 funil por conversa (sales_sequences).
+export async function autoEnrollFunil(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+  content: string,
+): Promise<void> {
+  const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
+  if (!alvo) return; // desligado por padrão
+  if (channel.name !== alvo && channel.external_id !== alvo) return;
+  const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
+  if (kw && !content.toLowerCase().includes(kw.toLowerCase())) return;
+
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (!contact) return;
+  const { data: conv } = await db.from("conversations").select("id, chatwoot_conversation_id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (!conv?.chatwoot_conversation_id) return;
+  const { data: existing } = await db.from("sales_sequences").select("id")
+    .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
+  if (existing) return; // já entrou (qualquer status) -> não re-dispara sozinho
+
+  // reusa o handle() interno (mesmo caminho do disparo manual, timing de produção).
+  const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
+  const res = await handle(new Request(`http://internal/funil-enroll?token=${token}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chatwoot_conversation_id: conv.chatwoot_conversation_id }),
+  }));
+  console.log("autoEnrollFunil: conv", conv.chatwoot_conversation_id, "->", res.status, await res.text());
+}
