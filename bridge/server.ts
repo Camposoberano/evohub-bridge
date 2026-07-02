@@ -25,6 +25,7 @@ import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts";
 import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
+import { handle as syncComments } from "./handlers/sync-comments.ts";
 import { handle as syncChatwootOut } from "./handlers/sync-chatwoot-out.ts";
 import { handle as labelWindow } from "./handlers/label-window.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
@@ -59,6 +60,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/channel-sync": channelSync,
   "/clientes": clientes,
   "/sync-facebook": syncFacebook,
+  "/sync-comments": syncComments,
   "/sync-chatwoot-out": syncChatwootOut,
   "/label-window": labelWindow,
   "/metrics-rollup": metricsRollup,
@@ -123,8 +125,9 @@ const version = {
     "funil-auto-enroll",
     "funil-send-failed-log",
     "funil-keyword-sem-acento",
+    "sync-comments-fb-ig",
   ],
-  build: "2026-07-01-keyword-fold",
+  build: "2026-07-02-sync-comments",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -150,6 +153,27 @@ function startSyncLoop() {
       console.error("sync-facebook (auto) erro:", e);
     }
   }, SYNC_LOOP_INTERVAL_MS);
+}
+
+// Comentários de posts/anúncios (FB Pages + Instagram) — Meta não manda webhook de comentário
+// pelo Hub, então é pull (Graph) a cada 5min. Cada comentário vira conversa no Chatwoot
+// (contato cmt-fb-*/cmt-ig-*). Kill-switch: COMMENTS_SYNC_ENABLED=false.
+const COMMENTS_INTERVAL_MS = 5 * 60_000;
+function startCommentsLoop() {
+  if (optionalEnv("COMMENTS_SYNC_ENABLED") === "false") return; // ligado por padrão
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/sync-comments?token=${encodeURIComponent(token)}&since_minutes=1440`;
+  const run = async () => {
+    try {
+      const res = await syncComments(new Request(url));
+      const body = await res.json();
+      if (body.inserted > 0 || body.errors?.length) console.log("sync-comments (auto):", JSON.stringify(body));
+    } catch (e) {
+      console.error("sync-comments (auto) erro:", e);
+    }
+  };
+  setTimeout(run, 90_000);
+  setInterval(run, COMMENTS_INTERVAL_MS);
 }
 
 // Saída do WhatsApp por PULL — fallback pro webhook do Chatwoot quando ele para de
@@ -279,6 +303,7 @@ function startChannelSyncLoop() {
 }
 
 startSyncLoop();
+startCommentsLoop();
 startChatwootOutLoop();
 startLabelWindowLoop();
 startRollupLoop();
