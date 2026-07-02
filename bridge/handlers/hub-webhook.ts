@@ -14,6 +14,7 @@ import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
+import { isPrecoIntent, transcribeAudio } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -197,6 +198,43 @@ async function handleWhatsApp(db: Db, p: Json) {
         // entrada automática no funil (leads de anúncio) -- só age se FUNIL_AUTO_ENROLL_CHANNEL
         // estiver setado e este for o canal alvo (+ FUNIL_KEYWORD, se configurada).
         try { await autoEnrollFunil(db, channel as Json, from, content ?? ""); } catch (e) { console.error("autoEnrollFunil erro:", e); }
+
+        // Intenção de PREÇO — três portas, mesma resposta do botão 💰 Preço:
+        //   botão   -> menu_preco (tratado acima)
+        //   texto   -> "preço/valor/quanto custa/orçamento..." (tolerante a acento/maiúscula)
+        //   áudio   -> transcrito via Whisper (só se OPENAI_API_KEY existir; sem chave, ignora)
+        // Auto-responde 1x/dia por contato (claim) — repetiu no mesmo dia, humano assume.
+        if (!menuClick) {
+          try {
+            let intentText = content ?? "";
+            let transcricao: string | null = null;
+            if (type === "audio" && attachments?.length) {
+              transcricao = await transcribeAudio(attachments[0].bytes, attachments[0].contentType);
+              if (transcricao) intentText = transcricao;
+            }
+            if (isPrecoIntent(intentText)) {
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-preco-${channel.id}-${from}-${dia}`, "intent")) {
+                await handleMenuClick(db, channel as Json, from, "menu_preco", acct);
+                // nota privada com o gatilho (transcrição do áudio ou frase) — contexto pro atendente.
+                if (transcricao) {
+                  const { data: ct } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+                  const { data: cv } = ct
+                    ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
+                    : { data: null };
+                  if (cv?.chatwoot_conversation_id) {
+                    try {
+                      await createConversationMessage(cv.chatwoot_conversation_id as number, {
+                        content: `🎙️ *Áudio transcrito (disparou tabela de preço automática):*\n\n"${transcricao.slice(0, 400)}"`,
+                        messageType: "outgoing", private: true,
+                      }, acct);
+                    } catch { /* nota é bônus */ }
+                  }
+                }
+              }
+            }
+          } catch (e) { console.error("intent-preco erro:", e); }
+        }
       }
     }
   }

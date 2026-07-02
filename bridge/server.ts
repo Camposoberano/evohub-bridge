@@ -132,8 +132,9 @@ const version = {
     "gate-pre-envio-nota-privada",
     "pricing-category-capture",
     "bsuid-proof-inbound",
+    "intent-preco-texto-audio",
   ],
-  build: "2026-07-02-janela-meta",
+  build: "2026-07-02-intent-preco",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
