@@ -276,22 +276,31 @@ function precoValidade(): string {
   return `${String(brt.getUTCDate()).padStart(2, "0")}/${String(brt.getUTCMonth() + 1).padStart(2, "0")}/${brt.getUTCFullYear()}`;
 }
 
-function precoTabela(): string {
-  return `🥳 *Promoção Safra-Safrinha 2026*\n📅 Válida até *${precoValidade()}*\n\n` +
-    `🌱 *2 kg* — cobre ½ hectare\n💰 *R$ 179,90* + frete grátis\n\n` +
-    `🌱 *4 kg* — cobre 1 hectare\n💰 De R$ 359,60 por *R$ 341,62* (5% off) + frete grátis\n\n` +
-    `🌱 *10 kg* — cobre 2 hectares\n💰 De R$ 899,00 por *R$ 764,15* (15% off) + frete grátis\n\n` +
-    `🌱 *20 kg* — cobre até 4 hectares\n💰 De R$ 1.798,00 por *R$ 1.437,90* (20% off) + frete grátis\n\n` +
-    `💳 PIX • boleto • cartão (Mercado Pago — compra garantida)\n🚚 Envio por Correios ou transportadora pra todo o Brasil`;
+// Cartão de preço POR PACOTE (decisão 02/07: tabelona completa confunde e atrasa a venda —
+// pergunta a ÁREA primeiro e entrega só o preço certo). Card + pagamento; frete vai em
+// mensagem separada; fechamento com botões.
+function precoCard(pacote: string, cobre: string, precoDe: string | null, precoPor: string, off: string | null): string {
+  const linhaPreco = precoDe
+    ? `💰 De ${precoDe} por *${precoPor}*${off ? ` _(${off} de desconto)_` : ""}`
+    : `💰 *${precoPor}*`;
+  return `🌱 *Pacote de ${pacote} — Mega Sorgo Santa Elisa®*\n📐 ${cobre}\n\n${linhaPreco}\n📅 Promoção válida até *${precoValidade()}*\n\n` +
+    `💳 *Formas de pagamento:*\n` +
+    `▪️ Direto com a empresa (PIX ou boleto no CNPJ)\n` +
+    `▪️ Pelo site, via *Mercado Pago* — banco oficial do Mercado Livre, compra 100% protegida`;
 }
 
-// recomendação por tamanho de área (clique na lista "Me ajuda a escolher").
-const TAMANHO_RECO: Record<string, string> = {
-  tam_2kg: "🌱 Pra *meio hectare*, o pacote ideal é o de *2 kg* — *R$ 179,90* com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
-  tam_4kg: "🌱 Pra *1 hectare*, o pacote ideal é o de *4 kg* — de R$ 359,60 por *R$ 341,62* (5% off) com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
-  tam_10kg: "🌱 Pra *2 hectares*, o pacote ideal é o de *10 kg* — de R$ 899,00 por *R$ 764,15* (15% off!) com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
-  tam_20kg: "🌱 Pra *4 hectares ou mais*, o melhor negócio é o de *20 kg* — de R$ 1.798,00 por *R$ 1.437,90* (20% off, o maior desconto!) com frete grátis.\n\nÁrea maior que isso? Me fala quantos hectares que eu monto uma condição especial! 🤝",
-};
+const FRETE_MSG = "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
+
+// função (não constante!): a validade é hoje+5 e precisa ser calculada NO ENVIO, não no boot.
+function tamanhoCard(id: string): string | null {
+  switch (id) {
+    case "tam_2kg": return precoCard("2 kg", "Cobre até ½ hectare (meio hectare)", null, "R$ 179,90", null);
+    case "tam_4kg": return precoCard("4 kg", "Cobre 1 hectare", "R$ 359,60", "R$ 341,62", "5%");
+    case "tam_10kg": return precoCard("10 kg", "Cobre 2 hectares", "R$ 899,00", "R$ 764,15", "15%");
+    case "tam_20kg": return precoCard("20 kg", "Cobre até 4 hectares", "R$ 1.798,00", "R$ 1.437,90", "20%");
+    default: return null;
+  }
+}
 
 async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
@@ -301,6 +310,8 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  // Fluxo v3 (decisão 02/07): tabelona confundia -> pergunta a ÁREA primeiro, entrega só o
+  // preço do pacote certo no clique (tam_* em handlePrecoClick).
   // 1) imagem/banner (slot 'preco' na faixa de mídia; sem mídia cadastrada -> pula, não trava)
   const { data: media } = await db.from("funnel_media").select("url,caption")
     .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1).maybeSingle();
@@ -308,28 +319,27 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   if (media?.url) {
     pecas.push({
       tipo: "image",
-      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "🌾 *Mega Sorgo Santa Elisa®* — sementes originais\n📈 Mais de 140 ton/ha • 🌱 Rebrota • ☀️ Aguenta a seca" } },
+      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "🌾 *Mega Sorgo Santa Elisa®* — Promoção Safra-Safrinha 2026\n📈 Mais de 140 ton/ha • 🌱 Rebrota • ☀️ Aguenta a seca" } },
       registro: "[imagem promoção] " + ((media.caption as string) ?? ""),
     });
   }
-  // 2) tabela com validade dinâmica
-  pecas.push({ tipo: "text", body: { type: "text", text: { body: precoTabela() } }, registro: precoTabela() });
-  // 3) botões de próximo passo
+  // 2) pergunta da área (lista) — o preço vem personalizado no clique.
   pecas.push({
     tipo: "interactive",
     body: {
       type: "interactive",
       interactive: {
-        type: "button",
-        body: { text: "Qual desses fica melhor pro senhor? 👇" },
-        action: { buttons: [
-          { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
-          { type: "reply", reply: { id: "preco_tamanho", title: "📦 Me ajuda a escolher" } },
-          { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
-        ] },
+        type: "list",
+        body: { text: "📐 Pra eu te passar o preço certinho: qual o tamanho da área que o senhor vai plantar? 👇" },
+        action: { button: "Escolher área", sections: [{ title: "Tamanho da área", rows: [
+          { id: "tam_2kg", title: "Até ½ hectare" },
+          { id: "tam_4kg", title: "1 hectare" },
+          { id: "tam_10kg", title: "2 hectares" },
+          { id: "tam_20kg", title: "4 hectares ou mais" },
+        ] } ] },
       },
     },
-    registro: "Qual desses fica melhor pro senhor? [🛒 Quero garantir / 📦 Me ajuda a escolher / 🧑‍🌾 Falar com Cícero]",
+    registro: "📐 Qual o tamanho da área que o senhor vai plantar? [Até ½ ha / 1 ha / 2 ha / 4+ ha]",
   });
 
   const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -402,11 +412,31 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
     return;
   }
 
-  const reco = TAMANHO_RECO[id];
-  if (reco) {
-    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, type: "text", text: { body: reco } });
-    await registra(reco);
-    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text", content: reco, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+  // Clique na área -> preço personalizado em 3 tempos: card (preço+pagamento) -> frete -> fechamento.
+  const card = tamanhoCard(id);
+  if (card) {
+    const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
+    const envia = async (body: Json, registro: string, tipo: string) => {
+      const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
+      await registra(registro);
+      await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo, content: registro, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+    };
+    await envia({ type: "text", text: { body: card } }, card, "text");
+    await pause(2500);
+    await envia({ type: "text", text: { body: FRETE_MSG } }, FRETE_MSG, "text");
+    await pause(2500);
+    await envia({
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "Posso garantir o seu? 👇" },
+        action: { buttons: [
+          { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
+          { type: "reply", reply: { id: "preco_tamanho", title: "📦 Outra área" } },
+          { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
+        ] },
+      },
+    }, "Posso garantir o seu? [🛒 Quero garantir / 📦 Outra área / 🧑‍🌾 Falar com Cícero]", "interactive");
   }
 }
 
