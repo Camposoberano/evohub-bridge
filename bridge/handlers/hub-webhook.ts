@@ -180,6 +180,8 @@ async function handleWhatsApp(db: Db, p: Json) {
           attachments,
           skipChatwoot: native,
           acct,
+          // CTWA/free entry point: lead clicou em anúncio -> janela de 72h (origem='anuncio').
+          referral: (m.referral as Json | undefined) ?? undefined,
         });
 
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
@@ -266,6 +268,11 @@ async function handleWhatsAppStatuses(db: Db, channel: Json, statuses: Json[]) {
 
     // ordem: não regredir read->delivered. Atualiza só se "avança" ou é failed.
     const patch: Json = { status };
+    // custo: categoria de cobrança da Meta (service/marketing/utility/authentication/
+    // referral_conversion). Base pra ver o gasto real quando a cobrança mudar (ago-out/2026).
+    const pricingCategory = ((s.pricing as Json | undefined)?.category as string | undefined) ??
+      ((s.conversation as Json | undefined)?.origin as Json | undefined)?.type as string | undefined;
+    if (pricingCategory) patch.pricing_category = pricingCategory;
     await db.from("messages").update(patch).eq("meta_message_id", wamid).eq("direction", "out");
 
     if (status === "failed") {

@@ -32,6 +32,7 @@ export async function ingestInbound(
     outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
     skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
     acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
+    referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
@@ -46,7 +47,11 @@ export async function ingestInbound(
   }
 
   const inboxId = channel.chatwoot_inbox_identifier as string;
-  const phone = channel.type === "whatsapp" ? `+${msg.from}` : null;
+  // BSUID-proof (usernames Meta 2026): `from` pode ser um BSUID, não telefone. Só trata como
+  // telefone se PARECER telefone (10-15 dígitos) — senão o Chatwoot rejeita o phone_number
+  // inválido e a criação do contato quebrava. Identidade continua sendo o `from` cru.
+  const pareceTelefone = /^\d{10,15}$/.test(String(msg.from).replace(/\D/g, "")) && String(msg.from).replace(/\D/g, "") === String(msg.from);
+  const phone = channel.type === "whatsapp" && pareceTelefone ? `+${msg.from}` : null;
 
   const { data: existing, error: contactQueryError } = await db
     .from("contacts").select("*")
@@ -93,9 +98,16 @@ export async function ingestInbound(
       contact_id: contact.id,
       chatwoot_conversation_id: cwConv?.id ?? null,
       status: "open",
+      origem: msg.referral ? "anuncio" : null,
+      referral: msg.referral ?? null,
     }).select().single();
     if (convInsertError) throw convInsertError;
     conv = insertedConv as Json;
+  } else if (msg.referral && !conv.origem) {
+    // conversa já existia e AGORA chegou referral de anúncio -> marca a origem (janela vira 72h).
+    db.from("conversations").update({ origem: "anuncio", referral: msg.referral })
+      .eq("id", conv.id).then(() => {}, () => {});
+    conv.origem = "anuncio";
   }
 
   const attachments = msg.attachments ?? [];

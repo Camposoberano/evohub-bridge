@@ -10,6 +10,9 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
+import { windowState } from "../shared/window.ts";
+import { createConversationMessage } from "../shared/chatwoot.ts";
+import { accountForChannel } from "../shared/accounts.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -163,6 +166,24 @@ export async function handleOutgoing(db: Db, p: Json) {
     // Disparo de template DE DENTRO DO CHAT: agente digita "/template <nome> [idioma]" (ou /tpl, /t).
     // Útil pra falar com cliente fora da janela 24h sem sair do Chatwoot.
     const tplCmd = content.trim().match(/^\/(?:template|tpl|t)\s+([a-z0-9_]+)(?:\s+([a-z_]+))?$/i);
+
+    // GATE de janela (Meta): mensagem LIVRE com janela fechada a Meta rejeita EM SILÊNCIO
+    // (Chatwoot mostrava "sent" e nada chegava). Agora: bloqueia o envio e avisa o atendente
+    // com NOTA PRIVADA na própria conversa. Template (/template) passa — é o caminho certo.
+    if (!tplCmd && conv) {
+      const win = await windowState(db, conv as Json, channel as Json);
+      if (!win.aberta) {
+        const acct = await accountForChannel(channel.id as string);
+        const nota = `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — mensagem NÃO enviada.*\n\n` +
+          `"${content.slice(0, 120)}${content.length > 120 ? "…" : ""}"\n\n` +
+          `O WhatsApp oficial só aceita mensagem livre até ${win.tipo} após a última mensagem do cliente. ` +
+          `Opções: enviar template aprovado (digite /template <nome>) ou aguardar o cliente responder.`;
+        try { await createConversationMessage(cwConversationId!, { content: nota, messageType: "outgoing", private: true }, acct); }
+        catch (e) { console.warn("nota privada janela falhou:", String(e).slice(0, 120)); }
+        await dbg(db, cwMsgId, "blocked-window-closed", { tipo: win.tipo });
+        return;
+      }
+    }
     if (tplCmd && attachments.length === 0) {
       const name = tplCmd[1];
       const lang = tplCmd[2] || "pt_BR";

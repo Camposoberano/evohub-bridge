@@ -128,8 +128,12 @@ const version = {
     "funil-keyword-sem-acento",
     "sync-comments-fb-ig",
     "avatar-sync-uazapi",
+    "janela-72h-ctwa",
+    "gate-pre-envio-nota-privada",
+    "pricing-category-capture",
+    "bsuid-proof-inbound",
   ],
-  build: "2026-07-02-avatar-sync",
+  build: "2026-07-02-janela-meta",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

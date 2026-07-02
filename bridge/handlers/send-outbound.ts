@@ -17,9 +17,10 @@
 //                     FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
-import { admin } from "../shared/supabase.ts";
+import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
+import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
@@ -56,6 +57,28 @@ export async function handle(req: Request): Promise<Response> {
   const channelToken = secret?.channel_token as string | undefined;
   if (!channelToken) return json({ error: "canal sem token" }, 404);
   const acct = await accountForChannel(channel.id as string);
+
+  // GATE de janela (Meta): funil/n8n mandando mensagem livre com janela fechada = rejeição
+  // silenciosa e custo perdido. Bloqueia e deixa NOTA PRIVADA na conversa (1x/dia por conversa,
+  // pra retry do cron não virar spam de nota).
+  if (isWhatsapp) {
+    const win = await windowState(db, conv as Json, channel as Json);
+    if (!win.aberta) {
+      const dia = new Date().toISOString().slice(0, 10);
+      if (await claimDelivery(db, `wnote-${cwConvId}-${dia}`, "window-note")) {
+        const nota = `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — envio automático (funil/campanha) bloqueado.*\n\n` +
+          `As próximas peças NÃO serão entregues até o cliente responder. ` +
+          `Opções: template aprovado (/template <nome>) ou aguardar resposta do cliente.`;
+        try { await createConversationMessage(cwConvId, { content: nota, messageType: "outgoing", private: true }, acct); }
+        catch (e) { console.warn("nota privada janela falhou:", String(e).slice(0, 120)); }
+      }
+      db.from("events").insert({
+        source: "funil", event_type: "send_blocked_window",
+        payload: { conv: cwConvId, type, janela: win.tipo },
+      }).then(() => {}, () => {});
+      return json({ ok: false, blocked: "janela-fechada", janela: win.tipo });
+    }
+  }
 
   // text_sequence: várias mensagens de texto com pausa real entre elas (efeito "digitando").
   // Cron de 1min não separa peças com gap < 60s -> o pacing tem que ser feito aqui dentro,

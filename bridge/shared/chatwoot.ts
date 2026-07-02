@@ -167,16 +167,18 @@ export async function createConversationMessage(
     content: string;
     messageType: "incoming" | "outgoing";
     attachments?: ChatwootAttachment[];
+    private?: boolean; // nota privada (só o time vê) — alertas tipo "janela fechada, envio bloqueado"
   },
   acct: CwAcct = envAcct(),
 ): Promise<Record<string, unknown> & { id?: number }> {
   const attachments = input.attachments ?? [];
+  const isPrivate = input.private === true;
 
   if (attachments.length > 0) {
     const form = new FormData();
     form.set("content", input.content);
     form.set("message_type", input.messageType);
-    form.set("private", "false");
+    form.set("private", isPrivate ? "true" : "false");
     form.set("content_type", "text");
 
     for (const attachment of attachments) {
@@ -199,7 +201,7 @@ export async function createConversationMessage(
     body: JSON.stringify({
       content: input.content,
       message_type: input.messageType,
-      private: false,
+      private: isPrivate,
       content_type: "text",
       content_attributes: {},
     }),

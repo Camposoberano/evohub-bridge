@@ -11,12 +11,17 @@ import { accountForChannel } from "../shared/accounts.ts";
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
-const WINDOW_MS = 24 * 60 * 60 * 1000;
-const CLOSING_SOON_MS = 60 * 60 * 1000; // <1h pra fechar
+const WINDOW_24H_MS = 24 * 60 * 60 * 1000;
+const WINDOW_72H_MS = 72 * 60 * 60 * 1000; // CTWA/anúncio (free entry point) = 72h
+const CLOSING_SOON_MS = 2 * 60 * 60 * 1000; // <2h pra fechar (regras Meta 2026: aviso antecipado)
 const LABEL_OPEN = "janela-aberta";
 const LABEL_CLOSING = "janela-fechando";
 const LABEL_CLOSED = "janela-fechada";
 const WINDOW_LABELS = new Set([LABEL_OPEN, LABEL_CLOSING, LABEL_CLOSED]);
+// etiquetas INFORMATIVAS (o time não mexe, só lê): origem e tipo de canal.
+const LABEL_ANUNCIO = "origem-anuncio";
+const LABEL_OFICIAL = "canal-oficial";
+const LABEL_NAO_OFICIAL = "canal-nao-oficial";
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) return json({ error: "method not allowed" }, 405);
@@ -27,7 +32,7 @@ export async function handle(req: Request): Promise<Response> {
   const db = admin();
 
   const { data: channels, error: chErr } = await db.from("channels")
-    .select("id,name,chatwoot_inbox_id")
+    .select("id,name,chatwoot_inbox_id,phone_number_id,external_id,type")
     .in("type", ["whatsapp", "facebook", "instagram"]).eq("status", "active");
   if (chErr) return json({ error: chErr.message }, 500);
 
@@ -35,12 +40,15 @@ export async function handle(req: Request): Promise<Response> {
 
   for (const ch of channels ?? []) {
     const { data: convs, error: convErr } = await db.from("conversations")
-      .select("id,chatwoot_conversation_id")
+      .select("id,chatwoot_conversation_id,origem")
       .eq("channel_id", ch.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(convLimit);
     if (convErr) { totals.errors.push(`${ch.name}: ${convErr.message}`); continue; }
 
     const acct = await accountForChannel(ch.id as string);
+    // canal oficial Meta = tem phone_number_id; não-oficial (ryzeapi/uazapi) = external_id sem phone.
+    const oficial = ch.type !== "whatsapp" || Boolean(ch.phone_number_id);
+    const canalLabel = oficial ? LABEL_OFICIAL : LABEL_NAO_OFICIAL;
 
     for (const conv of convs ?? []) {
       const cwConvId = conv.chatwoot_conversation_id as number | undefined;
@@ -53,16 +61,20 @@ export async function handle(req: Request): Promise<Response> {
       const lastInMs = lastIn?.sent_at ? Date.parse(lastIn.sent_at as string) : NaN;
       if (Number.isNaN(lastInMs)) { totals.skipped_no_inbound++; continue; }
 
+      // anúncio (CTWA/free entry point) = 72h; orgânico = 24h. Regras Meta ago-out/2026.
+      const windowMs = conv.origem === "anuncio" ? WINDOW_72H_MS : WINDOW_24H_MS;
       const elapsed = Date.now() - lastInMs;
-      const target = elapsed >= WINDOW_MS ? LABEL_CLOSED : (WINDOW_MS - elapsed <= CLOSING_SOON_MS ? LABEL_CLOSING : LABEL_OPEN);
+      const target = elapsed >= windowMs ? LABEL_CLOSED : (windowMs - elapsed <= CLOSING_SOON_MS ? LABEL_CLOSING : LABEL_OPEN);
 
       try {
         const current = await getConversationLabels(cwConvId, acct);
-        if (current.includes(target) && current.filter((l) => WINDOW_LABELS.has(l)).length === 1) {
+        const extras = [canalLabel, ...(conv.origem === "anuncio" ? [LABEL_ANUNCIO] : [])];
+        const jaTemExtras = extras.every((l) => current.includes(l));
+        if (current.includes(target) && current.filter((l) => WINDOW_LABELS.has(l)).length === 1 && jaTemExtras) {
           totals.unchanged++;
           continue;
         }
-        const next = [...current.filter((l) => !WINDOW_LABELS.has(l)), target];
+        const next = [...new Set([...current.filter((l) => !WINDOW_LABELS.has(l)), target, ...extras])];
         await setConversationLabels(cwConvId, next, acct);
         totals.labeled++;
       } catch (e) {
