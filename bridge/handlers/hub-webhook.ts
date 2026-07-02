@@ -191,6 +191,11 @@ async function handleWhatsApp(db: Db, p: Json) {
           try { await handleMenuClick(db, channel as Json, from, menuClick.id, acct); }
           catch (e) { console.error("handleMenuClick erro:", e); }
         }
+        // botões da sequência de preço (🛒 comprar / 📦 escolher tamanho / tam_*).
+        if (menuClick && (menuClick.id.startsWith("preco_") || menuClick.id.startsWith("tam_"))) {
+          try { await handlePrecoClick(db, channel as Json, from, menuClick.id, acct); }
+          catch (e) { console.error("handlePrecoClick erro:", e); }
+        }
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
         try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
@@ -260,7 +265,154 @@ const MENU_CONTENT: Record<string, string> = {
   menu_humano: "🧑‍🌾 Já te conectei com o Cícero, ele te chama em breve!",
 };
 
+// ── Sequência de PREÇO (v2, 02/07): imagem -> tabela c/ validade dinâmica -> botões ─────────
+// Material real do Cícero (promoção Safra-Safrinha). Validade SEMPRE hoje+5 dias (o formato
+// antigo usava data fixa e ficava vencida no ar). Descontos reais: 2kg sem / 4kg 5% / 10kg 15% / 20kg 20%.
+const PRECO_VALIDADE_DIAS = 5;
+
+function precoValidade(): string {
+  const d = new Date(Date.now() + PRECO_VALIDADE_DIAS * 24 * 60 * 60 * 1000);
+  const brt = new Date(d.getTime() - 3 * 3600 * 1000);
+  return `${String(brt.getUTCDate()).padStart(2, "0")}/${String(brt.getUTCMonth() + 1).padStart(2, "0")}/${brt.getUTCFullYear()}`;
+}
+
+function precoTabela(): string {
+  return `🥳 *Promoção Safra-Safrinha 2026*\n📅 Válida até *${precoValidade()}*\n\n` +
+    `🌱 *2 kg* — cobre ½ hectare\n💰 *R$ 179,90* + frete grátis\n\n` +
+    `🌱 *4 kg* — cobre 1 hectare\n💰 De R$ 359,60 por *R$ 341,62* (5% off) + frete grátis\n\n` +
+    `🌱 *10 kg* — cobre 2 hectares\n💰 De R$ 899,00 por *R$ 764,15* (15% off) + frete grátis\n\n` +
+    `🌱 *20 kg* — cobre até 4 hectares\n💰 De R$ 1.798,00 por *R$ 1.437,90* (20% off) + frete grátis\n\n` +
+    `💳 PIX • boleto • cartão (Mercado Pago — compra garantida)\n🚚 Envio por Correios ou transportadora pra todo o Brasil`;
+}
+
+// recomendação por tamanho de área (clique na lista "Me ajuda a escolher").
+const TAMANHO_RECO: Record<string, string> = {
+  tam_2kg: "🌱 Pra *meio hectare*, o pacote ideal é o de *2 kg* — *R$ 179,90* com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
+  tam_4kg: "🌱 Pra *1 hectare*, o pacote ideal é o de *4 kg* — de R$ 359,60 por *R$ 341,62* (5% off) com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
+  tam_10kg: "🌱 Pra *2 hectares*, o pacote ideal é o de *10 kg* — de R$ 899,00 por *R$ 764,15* (15% off!) com frete grátis.\n\nQuer garantir? É só clicar em *🛒 Quero garantir* ou me chamar aqui! 🤝",
+  tam_20kg: "🌱 Pra *4 hectares ou mais*, o melhor negócio é o de *20 kg* — de R$ 1.798,00 por *R$ 1.437,90* (20% off, o maior desconto!) com frete grátis.\n\nÁrea maior que isso? Me fala quantos hectares que eu monto uma condição especial! 🤝",
+};
+
+async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const path = `${phone}/messages`;
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // 1) imagem/banner (slot 'preco' na faixa de mídia; sem mídia cadastrada -> pula, não trava)
+  const { data: media } = await db.from("funnel_media").select("url,caption")
+    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1).maybeSingle();
+  const pecas: { body: Json; registro: string; tipo: string }[] = [];
+  if (media?.url) {
+    pecas.push({
+      tipo: "image",
+      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "🌾 *Mega Sorgo Santa Elisa®* — sementes originais\n📈 Mais de 140 ton/ha • 🌱 Rebrota • ☀️ Aguenta a seca" } },
+      registro: "[imagem promoção] " + ((media.caption as string) ?? ""),
+    });
+  }
+  // 2) tabela com validade dinâmica
+  pecas.push({ tipo: "text", body: { type: "text", text: { body: precoTabela() } }, registro: precoTabela() });
+  // 3) botões de próximo passo
+  pecas.push({
+    tipo: "interactive",
+    body: {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "Qual desses fica melhor pro senhor? 👇" },
+        action: { buttons: [
+          { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
+          { type: "reply", reply: { id: "preco_tamanho", title: "📦 Me ajuda a escolher" } },
+          { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
+        ] },
+      },
+    },
+    registro: "Qual desses fica melhor pro senhor? [🛒 Quero garantir / 📦 Me ajuda a escolher / 🧑‍🌾 Falar com Cícero]",
+  });
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  for (const [i, p] of pecas.entries()) {
+    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...p.body });
+    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    if (conv?.chatwoot_conversation_id) {
+      try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content: p.registro, messageType: "outgoing" }, acct); } catch { /* registro é bônus */ }
+    }
+    await db.from("messages").insert({
+      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out",
+      msg_type: p.tipo === "image" ? "image" : (p.tipo === "interactive" ? "interactive" : "text"),
+      content: p.registro, meta_message_id: metaId, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    });
+    if (i < pecas.length - 1) await pause(2500);
+  }
+}
+
+// clique nos botões da sequência de preço.
+async function handlePrecoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const path = `${phone}/messages`;
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  const registra = async (texto: string, priv = false) => {
+    if (conv?.chatwoot_conversation_id) {
+      try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct); } catch { /* bônus */ }
+    }
+  };
+
+  if (id === "preco_comprar") {
+    const texto = "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX, boleto ou cartão (Mercado Pago) — como preferir!";
+    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, type: "text", text: { body: texto } });
+    await registra(texto);
+    await registra("🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!", true);
+    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text", content: texto, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+    return;
+  }
+
+  if (id === "preco_tamanho") {
+    const body: Json = {
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar, que eu já te falo o pacote certo:" },
+        action: { button: "Escolher área", sections: [{ title: "Tamanho da área", rows: [
+          { id: "tam_2kg", title: "Até ½ hectare" },
+          { id: "tam_4kg", title: "1 hectare" },
+          { id: "tam_10kg", title: "2 hectares" },
+          { id: "tam_20kg", title: "4 hectares ou mais" },
+        ] } ] },
+      },
+    };
+    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
+    const reg = "📐 Me diz o tamanho da área [Até ½ ha / 1 ha / 2 ha / 4+ ha]";
+    await registra(reg);
+    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive", content: reg, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+    return;
+  }
+
+  const reco = TAMANHO_RECO[id];
+  if (reco) {
+    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, type: "text", text: { body: reco } });
+    await registra(reco);
+    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text", content: reco, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+  }
+}
+
 async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
+  // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
+  if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
   const content = MENU_CONTENT[menuId];
   if (!content) return;
 

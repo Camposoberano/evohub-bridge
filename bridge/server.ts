@@ -133,8 +133,9 @@ const version = {
     "pricing-category-capture",
     "bsuid-proof-inbound",
     "intent-preco-texto-audio",
+    "preco-sequencia-v2",
   ],
-  build: "2026-07-02-intent-preco",
+  build: "2026-07-02-preco-v2",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
