@@ -291,9 +291,13 @@ function precoCard(pacote: string, cobre: string, precoDe: string | null, precoP
 
 const PAGAMENTO_MSG = "💳 *Formas de pagamento — como o senhor preferir:*\n\n" +
   "▪️ *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia\n\n" +
-  "▪️ *Pelo site, com Mercado Pago* 🛡️ — o banco oficial do Mercado Livre\n" +
+  "▪️ *Cartão de crédito ou débito*\n" +
+  "*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n" +
   "Compra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. " +
-  "Se não chegar, o Mercado Pago devolve seu dinheiro. Segurança total pro senhor comprar tranquilo.";
+  "Se não chegar, o Mercado Pago devolve seu dinheiro. Segurança total pro senhor comprar tranquilo.\n\n" +
+  "▪️ *Boleto*\n" +
+  "Também pelo site, com a Garantia Mercado Pago.\n" +
+  "_Liberação do pedido em 2 dias após a confirmação do pagamento._";
 
 const FRETE_MSG = "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
 
