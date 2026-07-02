@@ -34,6 +34,7 @@ import { env, optionalEnv } from "./shared/env.ts";
 import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
+import { avatarStep } from "./shared/avatar-sync.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -126,8 +127,9 @@ const version = {
     "funil-send-failed-log",
     "funil-keyword-sem-acento",
     "sync-comments-fb-ig",
+    "avatar-sync-uazapi",
   ],
-  build: "2026-07-02-sync-comments",
+  build: "2026-07-02-avatar-sync",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -272,6 +274,27 @@ function startEnrichLoop() {
   console.log(`enrich loop ON (instância=${instName}, ${min}-${max}ms rotacionando)`);
 }
 
+// Avatar dos contatos — a API oficial Meta não expõe foto de perfil; a instância uazapi de
+// trabalho (mesma do enrich) consulta a foto de qualquer número e o loop grava no Chatwoot.
+// 1 contato por tick, 60-90s aleatório (anti-ban). Kill-switch: AVATAR_SYNC_ENABLED=false.
+function startAvatarLoop() {
+  if (optionalEnv("AVATAR_SYNC_ENABLED") === "false") return; // ligado por padrão
+  const instName = optionalEnv("ENRICH_INSTANCE") ?? "0595";
+  if (!uazapiConfigured()) { console.warn("avatar-sync: uazapi não configurado"); return; }
+  let tok = "";
+  const tick = async () => {
+    try {
+      if (!tok) tok = (await tokenForInstance(instName)) ?? "";
+      if (tok) { const r = await avatarStep(admin(), tok); if (r !== "idle") console.log("avatar-sync:", r); }
+      else console.warn("avatar-sync: instância não encontrada", instName);
+    } catch (e) { console.error("avatar-sync erro:", e); }
+    const delay = 60_000 + Math.floor(Math.random() * 30_000);
+    setTimeout(tick, delay);
+  };
+  setTimeout(tick, 30_000);
+  console.log(`avatar-sync loop ON (instância=${instName})`);
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -304,6 +327,7 @@ function startChannelSyncLoop() {
 
 startSyncLoop();
 startCommentsLoop();
+startAvatarLoop();
 startChatwootOutLoop();
 startLabelWindowLoop();
 startRollupLoop();
