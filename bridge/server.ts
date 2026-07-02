@@ -135,8 +135,9 @@ const version = {
     "intent-preco-texto-audio",
     "preco-sequencia-v2",
     "preco-v3-area-primeiro",
+    "preco-v4-anti-dup-pagamento",
   ],
-  build: "2026-07-02-preco-v3",
+  build: "2026-07-02-preco-v4",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

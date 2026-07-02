@@ -279,25 +279,31 @@ function precoValidade(): string {
 // Cartão de preço POR PACOTE (decisão 02/07: tabelona completa confunde e atrasa a venda —
 // pergunta a ÁREA primeiro e entrega só o preço certo). Card + pagamento; frete vai em
 // mensagem separada; fechamento com botões.
+// Card enxuto (decisão 02/07 v4): foco em "X kg atende Y hectares" + preço + desconto E
+// frete grátis SEMPRE juntos como promoção. Pagamento vai em mensagem DEDICADA (confiança).
 function precoCard(pacote: string, cobre: string, precoDe: string | null, precoPor: string, off: string | null): string {
-  const linhaPreco = precoDe
-    ? `💰 De ${precoDe} por *${precoPor}*${off ? ` _(${off} de desconto)_` : ""}`
-    : `💰 *${precoPor}*`;
-  return `🌱 *Pacote de ${pacote} — Mega Sorgo Santa Elisa®*\n📐 ${cobre}\n\n${linhaPreco}\n📅 Promoção válida até *${precoValidade()}*\n\n` +
-    `💳 *Formas de pagamento:*\n` +
-    `▪️ Direto com a empresa (PIX ou boleto no CNPJ)\n` +
-    `▪️ Pelo site, via *Mercado Pago* — banco oficial do Mercado Livre, compra 100% protegida`;
+  const linhaPreco = precoDe ? `💰 De ${precoDe} por *${precoPor}*` : `💰 *${precoPor}*`;
+  const promo = off
+    ? `💸 *${off} de desconto + FRETE GRÁTIS* — tudo dentro da promoção!`
+    : `💸 *FRETE GRÁTIS* dentro da promoção!`;
+  return `🌱 *Pacote de ${pacote} — atende ${cobre}*\n\n${linhaPreco}\n${promo}\n📅 Promoção válida até *${precoValidade()}*`;
 }
+
+const PAGAMENTO_MSG = "💳 *Formas de pagamento — como o senhor preferir:*\n\n" +
+  "▪️ *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia\n\n" +
+  "▪️ *Pelo site, com Mercado Pago* 🛡️ — o banco oficial do Mercado Livre\n" +
+  "Compra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. " +
+  "Se não chegar, o Mercado Pago devolve seu dinheiro. Segurança total pro senhor comprar tranquilo.";
 
 const FRETE_MSG = "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
 
 // função (não constante!): a validade é hoje+5 e precisa ser calculada NO ENVIO, não no boot.
 function tamanhoCard(id: string): string | null {
   switch (id) {
-    case "tam_2kg": return precoCard("2 kg", "Cobre até ½ hectare (meio hectare)", null, "R$ 179,90", null);
-    case "tam_4kg": return precoCard("4 kg", "Cobre 1 hectare", "R$ 359,60", "R$ 341,62", "5%");
-    case "tam_10kg": return precoCard("10 kg", "Cobre 2 hectares", "R$ 899,00", "R$ 764,15", "15%");
-    case "tam_20kg": return precoCard("20 kg", "Cobre até 4 hectares", "R$ 1.798,00", "R$ 1.437,90", "20%");
+    case "tam_2kg": return precoCard("2 kg", "½ hectare (meio hectare)", null, "R$ 179,90", null);
+    case "tam_4kg": return precoCard("4 kg", "1 hectare", "R$ 359,60", "R$ 341,62", "5%");
+    case "tam_10kg": return precoCard("10 kg", "2 hectares", "R$ 899,00", "R$ 764,15", "15%");
+    case "tam_20kg": return precoCard("20 kg", "até 4 hectares", "R$ 1.798,00", "R$ 1.437,90", "20%");
     default: return null;
   }
 }
@@ -351,13 +357,20 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   for (const [i, p] of pecas.entries()) {
     const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...p.body });
     const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    // chatwoot_message_id no insert é OBRIGATÓRIO: sem ele o pull-loop sync-chatwoot-out acha a
+    // msg "órfã" no Chatwoot e reenvia como texto (duplicação vista no teste v3).
+    let cwMsgId: number | null = null;
     if (conv?.chatwoot_conversation_id) {
-      try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content: p.registro, messageType: "outgoing" }, acct); } catch { /* registro é bônus */ }
+      try {
+        const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: p.registro, messageType: "outgoing" }, acct);
+        cwMsgId = (cw?.id as number) ?? null;
+      } catch { /* registro é bônus */ }
     }
     await db.from("messages").insert({
       conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out",
       msg_type: p.tipo === "image" ? "image" : (p.tipo === "interactive" ? "interactive" : "text"),
-      content: p.registro, meta_message_id: metaId, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      content: p.registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
     });
     if (i < pecas.length - 1) await pause(2500);
   }
@@ -376,23 +389,36 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
     ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
-  const registra = async (texto: string, priv = false) => {
-    if (conv?.chatwoot_conversation_id) {
-      try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct); } catch { /* bônus */ }
-    }
+  // registra no Chatwoot e DEVOLVE o id — o id precisa ir pro insert em messages
+  // (chatwoot_message_id), senão o pull-loop sync-chatwoot-out acha a msg "órfã" no Chatwoot
+  // e REENVIA como texto (causa da duplicação do card/frete vista no teste v3).
+  const registra = async (texto: string, priv = false): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+  const envia = async (body: Json, registro: string, tipo: string) => {
+    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
+    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const cwMsgId = await registra(registro);
+    await db.from("messages").insert({
+      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
+      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    });
   };
 
   if (id === "preco_comprar") {
-    const texto = "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX, boleto ou cartão (Mercado Pago) — como preferir!";
-    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, type: "text", text: { body: texto } });
-    await registra(texto);
+    const texto = "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
+    await envia({ type: "text", text: { body: texto } }, texto, "text");
     await registra("🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!", true);
-    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text", content: texto, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
     return;
   }
 
   if (id === "preco_tamanho") {
-    const body: Json = {
+    await envia({
       type: "interactive",
       interactive: {
         type: "list",
@@ -404,24 +430,17 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
           { id: "tam_20kg", title: "4 hectares ou mais" },
         ] } ] },
       },
-    };
-    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
-    const reg = "📐 Me diz o tamanho da área [Até ½ ha / 1 ha / 2 ha / 4+ ha]";
-    await registra(reg);
-    await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive", content: reg, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
+    }, "📐 Me diz o tamanho da área [Até ½ ha / 1 ha / 2 ha / 4+ ha]", "interactive");
     return;
   }
 
-  // Clique na área -> preço personalizado em 3 tempos: card (preço+pagamento) -> frete -> fechamento.
+  // Clique na área -> 4 tempos: card do pacote -> pagamento (dedicada, confiança) -> frete -> fechamento.
   const card = tamanhoCard(id);
   if (card) {
     const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
-    const envia = async (body: Json, registro: string, tipo: string) => {
-      const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
-      await registra(registro);
-      await db.from("messages").insert({ conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo, content: registro, status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString() });
-    };
     await envia({ type: "text", text: { body: card } }, card, "text");
+    await pause(2500);
+    await envia({ type: "text", text: { body: PAGAMENTO_MSG } }, PAGAMENTO_MSG, "text");
     await pause(2500);
     await envia({ type: "text", text: { body: FRETE_MSG } }, FRETE_MSG, "text");
     await pause(2500);
@@ -433,10 +452,10 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
         action: { buttons: [
           { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
           { type: "reply", reply: { id: "preco_tamanho", title: "📦 Outra área" } },
-          { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
+          { type: "reply", reply: { id: "menu_humano", title: "❓ Tenho dúvidas" } },
         ] },
       },
-    }, "Posso garantir o seu? [🛒 Quero garantir / 📦 Outra área / 🧑‍🌾 Falar com Cícero]", "interactive");
+    }, "Posso garantir o seu? [🛒 Quero garantir / 📦 Outra área / ❓ Tenho dúvidas]", "interactive");
   }
 }
 
@@ -460,9 +479,14 @@ async function handleMenuClick(db: Db, channel: Json, from: string, menuId: stri
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
+  // chatwoot_message_id no insert é OBRIGATÓRIO — sem ele o pull-loop sync-chatwoot-out acha
+  // a msg "órfã" no Chatwoot e reenvia como texto (duplicação).
+  let cwMsgId: number | null = null;
   if (conv?.chatwoot_conversation_id) {
-    try { await createConversationMessage(conv.chatwoot_conversation_id as number, { content, messageType: "outgoing" }, acct); }
-    catch (e) { console.warn("handleMenuClick: registro Chatwoot falhou", String(e).slice(0, 150)); }
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content, messageType: "outgoing" }, acct);
+      cwMsgId = (cw?.id as number) ?? null;
+    } catch (e) { console.warn("handleMenuClick: registro Chatwoot falhou", String(e).slice(0, 150)); }
   }
 
   await db.from("messages").insert({
@@ -472,6 +496,7 @@ async function handleMenuClick(db: Db, channel: Json, from: string, menuId: stri
     msg_type: "text",
     content,
     meta_message_id: metaId,
+    chatwoot_message_id: cwMsgId,
     status: r.ok ? "sent" : "failed",
     sent_at: new Date().toISOString(),
   });
