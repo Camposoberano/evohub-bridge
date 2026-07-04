@@ -529,11 +529,11 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
 
 // ── Sequência de VÍDEOS (5 vídeos com pausa entre eles) ─────────────────────
 const VIDEO_CAPTIONS: Record<string, string> = {
-  video_1: "🌿 [ VÍDEO 01 ] O que é o Mega Sorgo Santa Elisa?\n\n🔸 Uma semente de alto rendimento\n🔸 Ideal para silagem e pastagem de qualidade\n\n📲 Assista agora: https://youtu.be/Q7IDP7PuYd4",
-  video_2: "🌾 [ VÍDEO 02 ] Como plantar o Mega Sorgo Santa Elisa\n\n🔸 Plantio simples e sem complicação\n🔸 Dicas práticas de espaçamento e época ideal\n\n📲 Assista agora: https://youtu.be/mkzRsa8RaKw",
-  video_3: "📊 [ VÍDEO 03 ] Resultados reais no campo\n\n🔸 Produtividade comprovada por produtores\n🔸 Comparativo com outras forrageiras\n\n📲 Assista agora: https://youtu.be/J6xJyYDukhw",
-  video_4: "🌽 [ VÍDEO 04 ] Mega Sorgo Santa Elisa: Silagem com qualidade e volume o ano inteiro\n\n🔸 Versatilidade para silagem e pastagem\n🔸 Alta produção de massa verde\n\n📲 Assista agora: https://youtu.be/Z-HrHiMsUIE",
-  video_5: "🛡️ [ VÍDEO 05 ] Gaste menos e produza mais com o Mega Sorgo Santa Elisa\n\n🔸 Resistência natural a pragas (cigarrinha, lagarta, pulgão)\n🔸 Redução de custos na silagem e pastagem\n\n📲 Assista agora: https://youtu.be/rbfOQBoRX5Y",
+  video_1: "🌿 *VÍDEO 01 — O que é o Mega Sorgo Santa Elisa?*\n\n✅ Semente de *alto rendimento* que produz silagem e pastagem de qualidade o ano inteiro\n✅ Cresce rápido, rebrota forte e aguenta seca\n\n👉 _Assista e descubra por que milhares de produtores já plantam:_\nhttps://youtu.be/Q7IDP7PuYd4",
+  video_2: "🌾 *VÍDEO 02 — Como plantar o Mega Sorgo Santa Elisa*\n\n✅ Plantio *simples*, sem segredo — até quem nunca plantou consegue\n✅ Dicas de *espaçamento, época ideal e adubação*\n\n👉 _Veja o passo a passo completo:_\nhttps://youtu.be/mkzRsa8RaKw",
+  video_3: "📊 *VÍDEO 03 — Resultados reais no campo*\n\n✅ Produtores mostram *na prática* o que colheram\n✅ Comparativo com milho e outras forrageiras — os números impressionam\n\n👉 _Confira os resultados com os próprios olhos:_\nhttps://youtu.be/J6xJyYDukhw",
+  video_4: "🌽 *VÍDEO 04 — Silagem com qualidade e volume o ano inteiro*\n\n✅ *Até 3 cortes por safra* — alta produção de massa verde\n✅ Versatilidade: serve pra silagem, pastejo direto e fenação\n\n👉 _Veja como garantir volume na sua propriedade:_\nhttps://youtu.be/Z-HrHiMsUIE",
+  video_5: "🛡️ *VÍDEO 05 — Gaste menos e produza mais!*\n\n✅ *Resistência natural* a cigarrinha, lagarta e pulgão — menos veneno, menos custo\n✅ Redução real nos gastos com silagem e pastagem\n\n👉 _Descubra como economizar na sua produção:_\nhttps://youtu.be/rbfOQBoRX5Y",
 };
 const VIDEO_PAUSE_MS = 8_000;
 
@@ -571,8 +571,8 @@ async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: C
 
   // intro
   await envia(
-    { type: "text", text: { body: "📹 *Separei 5 vídeos rápidos sobre o Mega Sorgo Santa Elisa pra você!*\n\nVou enviar um por um — assista com calma 👇" } },
-    "📹 Separei 5 vídeos rápidos — vou enviar um por um", "text",
+    { type: "text", text: { body: "📹 *Preparei 5 vídeos curtos pra você conhecer o Mega Sorgo Santa Elisa!*\n\nÉ rápido — cada um mostra um ponto importante pra sua decisão.\n\nVou mandar um por um, assista com calma 👇" } },
+    "📹 Preparei 5 vídeos curtos — vou mandar um por um", "text",
   );
   await pause(3000);
 
@@ -608,18 +608,18 @@ async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: C
   }
 
   // CTA final
-  await pause(3000);
+  await pause(4000);
   await envia({
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: "Gostou do que viu? 🌱\n\nPosso te passar os preços e condições especiais!" },
+      body: { text: "✅ *Esses são os 5 pontos que todo produtor precisa saber antes de plantar!*\n\nQuer saber o preço e as condições especiais da promoção?" },
       action: { buttons: [
-        { type: "reply", reply: { id: "menu_preco", title: "💰 Quero o preço" } },
+        { type: "reply", reply: { id: "menu_preco", title: "💰 Ver preço" } },
         { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
       ] },
     },
-  }, "Gostou? [💰 Quero o preço / 🧑‍🌾 Falar com Cícero]", "interactive");
+  }, "✅ 5 pontos importantes! [💰 Ver preço / 🧑‍🌾 Falar com Cícero]", "interactive");
 
   await registra("🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.", true);
 }
