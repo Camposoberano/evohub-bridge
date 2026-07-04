@@ -341,7 +341,7 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
       interactive: {
         type: "list",
         body: { text: "📐 Pra eu te passar o preço certinho: qual o tamanho da área que o senhor vai plantar? 👇" },
-        action: { button: "Escolher área", sections: [{ title: "Tamanho da área", rows: [
+        action: { button: "Saber o preço", sections: [{ title: "Tamanho da área", rows: [
           { id: "tam_2kg", title: "Até ½ hectare" },
           { id: "tam_4kg", title: "1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
@@ -427,7 +427,7 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
       interactive: {
         type: "list",
         body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar, que eu já te falo o pacote certo:" },
-        action: { button: "Escolher área", sections: [{ title: "Tamanho da área", rows: [
+        action: { button: "Saber o preço", sections: [{ title: "Tamanho da área", rows: [
           { id: "tam_2kg", title: "Até ½ hectare" },
           { id: "tam_4kg", title: "1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
@@ -438,10 +438,21 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
     return;
   }
 
-  // Clique na área -> 4 tempos: card do pacote -> pagamento (dedicada, confiança) -> frete -> fechamento.
+  // Clique na área -> 5 tempos: imagem pacote -> card texto -> pagamento -> frete -> fechamento.
   const card = tamanhoCard(id);
   if (card) {
     const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
+    // imagem do pacote (funnel_media slot preco_2kg/preco_4kg/preco_10kg/preco_20kg)
+    const imgSlot = `preco_${id.replace("tam_", "")}`;
+    const { data: imgMedia } = await db.from("funnel_media").select("url,caption")
+      .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true).limit(1).maybeSingle();
+    if (imgMedia?.url) {
+      await envia(
+        { type: "image", image: { link: imgMedia.url, caption: (imgMedia.caption as string) || "" } },
+        `[imagem ${imgSlot}]`, "image",
+      );
+      await pause(2500);
+    }
     await envia({ type: "text", text: { body: card } }, card, "text");
     await pause(2500);
     await envia({ type: "text", text: { body: PAGAMENTO_MSG } }, PAGAMENTO_MSG, "text");
