@@ -238,25 +238,24 @@ async function handleWhatsApp(db: Db, p: Json) {
                 }
               }
             } else if (isVideoIntent(intentText)) {
-              // TODO: reativar dedup 1x/dia depois dos testes
-              // const dia = new Date().toISOString().slice(0, 10);
-              // if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${dia}`, "intent")) {
-              await handleVideoSequence(db, channel as Json, from, acct);
-              if (transcricao) {
-                const { data: ct2 } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-                const { data: cv2 } = ct2
-                  ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct2.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
-                  : { data: null };
-                if (cv2?.chatwoot_conversation_id) {
-                  try {
-                    await createConversationMessage(cv2.chatwoot_conversation_id as number, {
-                      content: `🎙️ *Áudio transcrito (disparou sequência de vídeos automática):*\n\n"${transcricao.slice(0, 400)}"`,
-                      messageType: "outgoing", private: true,
-                    }, acct);
-                  } catch { /* nota é bônus */ }
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${dia}`, "intent")) {
+                await handleVideoSequence(db, channel as Json, from, acct);
+                if (transcricao) {
+                  const { data: ct2 } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+                  const { data: cv2 } = ct2
+                    ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct2.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
+                    : { data: null };
+                  if (cv2?.chatwoot_conversation_id) {
+                    try {
+                      await createConversationMessage(cv2.chatwoot_conversation_id as number, {
+                        content: `🎙️ *Áudio transcrito (disparou sequência de vídeos automática):*\n\n"${transcricao.slice(0, 400)}"`,
+                        messageType: "outgoing", private: true,
+                      }, acct);
+                    } catch { /* nota é bônus */ }
+                  }
                 }
               }
-              // }
             }
           } catch (e) { console.error("intent erro:", e); }
         }
