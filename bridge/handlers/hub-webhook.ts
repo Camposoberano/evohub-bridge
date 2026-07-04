@@ -535,7 +535,9 @@ const VIDEO_CAPTIONS: Record<string, string> = {
   video_4: "🌽 *VÍDEO 04 — Silagem com qualidade e volume o ano inteiro*\n\n✅ *Até 3 cortes por safra* — alta produção de massa verde\n✅ Versatilidade: serve pra silagem, pastejo direto e fenação\n\n👉 _Veja como garantir volume na sua propriedade:_\nhttps://youtu.be/Z-HrHiMsUIE",
   video_5: "🛡️ *VÍDEO 05 — Gaste menos e produza mais!*\n\n✅ *Resistência natural* a cigarrinha, lagarta e pulgão — menos veneno, menos custo\n✅ Redução real nos gastos com silagem e pastagem\n\n👉 _Descubra como economizar na sua produção:_\nhttps://youtu.be/rbfOQBoRX5Y",
 };
-const VIDEO_PAUSE_MS = 60_000;
+// Pausa entre vídeos (ms): tempo de cada vídeo + margem pra carregar.
+// v1: 3:00 | v2: 2:30 | v3: 1:50 | v4: 2:50 | v5: fim
+const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
 
 async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
@@ -604,7 +606,7 @@ async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: C
     } else {
       await envia({ type: "text", text: { body: caption } }, caption, "text");
     }
-    if (i < slots.length - 1) await pause(VIDEO_PAUSE_MS);
+    if (i < slots.length - 1) await pause(VIDEO_PAUSES_MS[i]);
   }
 
   // CTA final
