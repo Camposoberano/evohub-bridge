@@ -192,7 +192,7 @@ async function handleWhatsApp(db: Db, p: Json) {
           catch (e) { console.error("handleMenuClick erro:", e); }
         }
         // botões da sequência de preço (🛒 comprar / 📦 escolher tamanho / tam_*).
-        if (menuClick && (menuClick.id.startsWith("preco_") || menuClick.id.startsWith("tam_"))) {
+        if (menuClick && (menuClick.id.startsWith("preco_") || menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_"))) {
           try { await handlePrecoClick(db, channel as Json, from, menuClick.id, acct); }
           catch (e) { console.error("handlePrecoClick erro:", e); }
         }
@@ -320,30 +320,27 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  // Fluxo v5 (04/07): texto intro -> banner -> lista de área -> imagem pacote -> card -> frete -> botões.
+  // Fluxo v5.2 (04/07): banner -> lista de área -> imagem pacote -> card -> frete -> botões.
   const pecas: { body: Json; registro: string; tipo: string }[] = [];
-  // 1) texto introdutório
-  const intro = "🌾 *Mega Sorgo Santa Elisa®*\n\nVou passar os valores pro senhor, mas primeiro preciso saber o tamanho da área.\n\n👇 *Clique no botão abaixo* e escolha o tamanho da sua área de plantio:";
-  pecas.push({ tipo: "text", body: { type: "text", text: { body: intro } }, registro: intro });
-  // 2) banner promoção (funnel_media slot 'preco'; sem mídia -> pula)
+  // 1) banner promoção (funnel_media slot 'preco'; sem mídia -> pula)
   const { data: media } = await db.from("funnel_media").select("url,caption")
     .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1).maybeSingle();
   if (media?.url) {
     pecas.push({
       tipo: "image",
-      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "" } },
+      body: { type: "image", image: { link: media.url, caption: "Vou te passar os valores! 👇" } },
       registro: "[imagem promoção]",
     });
   }
-  // 3) lista de área (botão "Clique aqui")
+  // 2) lista de área (botão "Quer saber o preço?")
   pecas.push({
     tipo: "interactive",
     body: {
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text: "📐 Qual o tamanho da área que o senhor vai plantar?" },
-        action: { button: "Clique aqui", sections: [{ title: "Tamanho da área", rows: [
+        body: { text: "📐 Pra te passar o preço certinho, preciso saber: qual o tamanho da área que o senhor vai plantar?" },
+        action: { button: "Quer saber o preço?", sections: [{ title: "Tamanho da área", rows: [
           { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
           { id: "tam_4kg", title: "Até 1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
@@ -417,7 +414,39 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
   };
 
   if (id === "preco_pagamento") {
-    await envia({ type: "text", text: { body: PAGAMENTO_MSG } }, PAGAMENTO_MSG, "text");
+    await envia({
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "💳 *Como o senhor prefere pagar?*" },
+        action: { buttons: [
+          { type: "reply", reply: { id: "pag_pix", title: "PIX" } },
+          { type: "reply", reply: { id: "pag_cartao", title: "Cartão" } },
+          { type: "reply", reply: { id: "pag_boleto", title: "Boleto" } },
+        ] },
+      },
+    }, "Como prefere pagar? [PIX / Cartão / Boleto]", "interactive");
+    return;
+  }
+
+  if (id === "pag_pix") {
+    await envia({ type: "text", text: { body: "💰 *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia!\n\nO Cícero vai te enviar a chave PIX pra concluir o pedido." } },
+      "PIX direto com a empresa", "text");
+    await registra("🔥 *LEAD QUENTE — escolheu PIX.* Enviar chave e fechar!", true);
+    return;
+  }
+
+  if (id === "pag_cartao") {
+    await envia({ type: "text", text: { body: "💳 *Cartão de crédito ou débito*\n\n*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n\nCompra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. Se não chegar, o Mercado Pago devolve seu dinheiro.\n\nO Cícero vai te enviar o link do site pra concluir!" } },
+      "Cartão de crédito/débito via Mercado Pago", "text");
+    await registra("🔥 *LEAD QUENTE — escolheu Cartão.* Enviar link Mercado Pago!", true);
+    return;
+  }
+
+  if (id === "pag_boleto") {
+    await envia({ type: "text", text: { body: "📄 *Boleto bancário*\n\nTambém pelo site, com a *Garantia Mercado Pago* 🛡️.\n\n_Liberação do pedido em 2 dias após a confirmação do pagamento._\n\nO Cícero vai te enviar o link pra gerar o boleto!" } },
+      "Boleto via Mercado Pago", "text");
+    await registra("🔥 *LEAD QUENTE — escolheu Boleto.* Enviar link Mercado Pago!", true);
     return;
   }
 
@@ -434,7 +463,7 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
       interactive: {
         type: "list",
         body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar:" },
-        action: { button: "Clique aqui", sections: [{ title: "Tamanho da área", rows: [
+        action: { button: "Quer saber o preço?", sections: [{ title: "Tamanho da área", rows: [
           { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
           { id: "tam_4kg", title: "Até 1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
