@@ -140,7 +140,7 @@ const version = {
     "preco-v5-imagem-por-pacote",
     "video-sequence-5-videos",
   ],
-  build: "2026-07-04-video-v1.1",
+  build: "2026-07-04-video-v1.2",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

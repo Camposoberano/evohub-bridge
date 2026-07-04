@@ -19,10 +19,9 @@ export function isPrecoIntent(text: string): boolean {
   return PRECO_RE.test(t);
 }
 
-// "vídeo", "videos", "informação", "informações", "saber mais", "quero saber", "como funciona",
-// "como planta", "como plantar", "me explica", "me fala", "quero ver", "mandar vídeo".
-// NÃO match se a frase também contém intenção de preço (para não colidir).
-const VIDEO_RE = /(\bvideos?\b|\binformacoes?\b|\binformacao\b|\bsaber\s+mais\b|\bquero\s+saber\b|\bcomo\s+funciona\b|\bcomo\s+planta[r]?\b|\bme\s+(explica|fala|conta)\b|\bquero\s+ver\b|\bmand[ae]\s+videos?\b)/;
+// Só dispara se a palavra "vídeo" (ou "video", "vídeos", "videos") aparecer na frase.
+// Frases sem "vídeo" NÃO disparam, mesmo que peçam "informação" ou "saber mais".
+const VIDEO_RE = /\bvideos?\b/;
 
 export function isVideoIntent(text: string): boolean {
   const t = fold(text ?? "");
