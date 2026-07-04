@@ -51,7 +51,7 @@ const MENU_ROWS: Botao[] = [
   { id: "menu_preco", title: "💰 Preço" },
   { id: "menu_plantio", title: "🌱 Como plantar" },
   { id: "menu_nutricao", title: "🧪 Info nutricional" },
-  { id: "menu_depoimento", title: "🎬 Quem já plantou" },
+  { id: "menu_depoimento", title: "🎬 Assistir vídeos" },
   { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
 ];
 
