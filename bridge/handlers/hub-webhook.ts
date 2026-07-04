@@ -320,36 +320,38 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  // Fluxo v3 (decisão 02/07): tabelona confundia -> pergunta a ÁREA primeiro, entrega só o
-  // preço do pacote certo no clique (tam_* em handlePrecoClick).
-  // 1) imagem/banner (slot 'preco' na faixa de mídia; sem mídia cadastrada -> pula, não trava)
+  // Fluxo v5 (04/07): texto intro -> banner -> lista de área -> imagem pacote -> card -> frete -> botões.
+  const pecas: { body: Json; registro: string; tipo: string }[] = [];
+  // 1) texto introdutório
+  const intro = "🌾 *Mega Sorgo Santa Elisa®*\n\nVou passar os valores pro senhor, mas primeiro preciso saber o tamanho da área.\n\n👇 *Clique no botão abaixo* e escolha o tamanho da sua área de plantio:";
+  pecas.push({ tipo: "text", body: { type: "text", text: { body: intro } }, registro: intro });
+  // 2) banner promoção (funnel_media slot 'preco'; sem mídia -> pula)
   const { data: media } = await db.from("funnel_media").select("url,caption")
     .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1).maybeSingle();
-  const pecas: { body: Json; registro: string; tipo: string }[] = [];
   if (media?.url) {
     pecas.push({
       tipo: "image",
-      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "🌾 *Mega Sorgo Santa Elisa®* — Promoção Safra-Safrinha 2026\n📈 Mais de 140 ton/ha • 🌱 Rebrota • ☀️ Aguenta a seca" } },
-      registro: "[imagem promoção] " + ((media.caption as string) ?? ""),
+      body: { type: "image", image: { link: media.url, caption: (media.caption as string) || "" } },
+      registro: "[imagem promoção]",
     });
   }
-  // 2) pergunta da área (lista) — o preço vem personalizado no clique.
+  // 3) lista de área (botão "Clique aqui")
   pecas.push({
     tipo: "interactive",
     body: {
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text: "📐 Pra eu te passar o preço certinho: qual o tamanho da área que o senhor vai plantar? 👇" },
-        action: { button: "Saber o preço", sections: [{ title: "Tamanho da área", rows: [
-          { id: "tam_2kg", title: "Até ½ hectare" },
-          { id: "tam_4kg", title: "1 hectare" },
+        body: { text: "📐 Qual o tamanho da área que o senhor vai plantar?" },
+        action: { button: "Clique aqui", sections: [{ title: "Tamanho da área", rows: [
+          { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
+          { id: "tam_4kg", title: "Até 1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
           { id: "tam_20kg", title: "4 hectares ou mais" },
         ] } ] },
       },
     },
-    registro: "📐 Qual o tamanho da área que o senhor vai plantar? [Até ½ ha / 1 ha / 2 ha / 4+ ha]",
+    registro: "📐 Qual o tamanho da área? [½ ha / 1 ha / 2 ha / 4+ ha]",
   });
 
   const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -414,6 +416,11 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
     });
   };
 
+  if (id === "preco_pagamento") {
+    await envia({ type: "text", text: { body: PAGAMENTO_MSG } }, PAGAMENTO_MSG, "text");
+    return;
+  }
+
   if (id === "preco_comprar") {
     const texto = "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
     await envia({ type: "text", text: { body: texto } }, texto, "text");
@@ -426,19 +433,19 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
       type: "interactive",
       interactive: {
         type: "list",
-        body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar, que eu já te falo o pacote certo:" },
-        action: { button: "Saber o preço", sections: [{ title: "Tamanho da área", rows: [
-          { id: "tam_2kg", title: "Até ½ hectare" },
-          { id: "tam_4kg", title: "1 hectare" },
+        body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar:" },
+        action: { button: "Clique aqui", sections: [{ title: "Tamanho da área", rows: [
+          { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
+          { id: "tam_4kg", title: "Até 1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
           { id: "tam_20kg", title: "4 hectares ou mais" },
         ] } ] },
       },
-    }, "📐 Me diz o tamanho da área [Até ½ ha / 1 ha / 2 ha / 4+ ha]", "interactive");
+    }, "📐 Me diz o tamanho da área [½ ha / 1 ha / 2 ha / 4+ ha]", "interactive");
     return;
   }
 
-  // Clique na área -> 5 tempos: imagem pacote -> card texto -> pagamento -> frete -> fechamento.
+  // Clique na área -> 4 tempos: imagem pacote -> card texto -> frete -> botões (pagamento virou botão).
   const card = tamanhoCard(id);
   if (card) {
     const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
@@ -455,8 +462,6 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
     }
     await envia({ type: "text", text: { body: card } }, card, "text");
     await pause(2500);
-    await envia({ type: "text", text: { body: PAGAMENTO_MSG } }, PAGAMENTO_MSG, "text");
-    await pause(2500);
     await envia({ type: "text", text: { body: FRETE_MSG } }, FRETE_MSG, "text");
     await pause(2500);
     await envia({
@@ -466,11 +471,11 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
         body: { text: "Posso garantir o seu? 👇" },
         action: { buttons: [
           { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
+          { type: "reply", reply: { id: "preco_pagamento", title: "💳 Pagamento" } },
           { type: "reply", reply: { id: "preco_tamanho", title: "📦 Outra área" } },
-          { type: "reply", reply: { id: "menu_humano", title: "❓ Tenho dúvidas" } },
         ] },
       },
-    }, "Posso garantir o seu? [🛒 Quero garantir / 📦 Outra área / ❓ Tenho dúvidas]", "interactive");
+    }, "Posso garantir o seu? [🛒 Quero garantir / 💳 Pagamento / 📦 Outra área]", "interactive");
   }
 }
 
