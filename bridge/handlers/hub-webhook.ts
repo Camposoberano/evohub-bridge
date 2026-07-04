@@ -14,7 +14,7 @@ import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
-import { isPrecoIntent, transcribeAudio } from "../shared/intent.ts";
+import { isPrecoIntent, isVideoIntent, transcribeAudio } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -237,8 +237,27 @@ async function handleWhatsApp(db: Db, p: Json) {
                   }
                 }
               }
+            } else if (isVideoIntent(intentText)) {
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${dia}`, "intent")) {
+                await handleVideoSequence(db, channel as Json, from, acct);
+                if (transcricao) {
+                  const { data: ct2 } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+                  const { data: cv2 } = ct2
+                    ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct2.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
+                    : { data: null };
+                  if (cv2?.chatwoot_conversation_id) {
+                    try {
+                      await createConversationMessage(cv2.chatwoot_conversation_id as number, {
+                        content: `🎙️ *Áudio transcrito (disparou sequência de vídeos automática):*\n\n"${transcricao.slice(0, 400)}"`,
+                        messageType: "outgoing", private: true,
+                      }, acct);
+                    } catch { /* nota é bônus */ }
+                  }
+                }
+              }
             }
-          } catch (e) { console.error("intent-preco erro:", e); }
+          } catch (e) { console.error("intent erro:", e); }
         }
       }
     }
@@ -508,9 +527,107 @@ async function handlePrecoClick(db: Db, channel: Json, from: string, id: string,
   }
 }
 
+// ── Sequência de VÍDEOS (5 vídeos com pausa entre eles) ─────────────────────
+const VIDEO_CAPTIONS: Record<string, string> = {
+  video_1: "🌿 [ VÍDEO 01 ] O que é o Mega Sorgo Santa Elisa?\n\n🔸 Uma semente de alto rendimento\n🔸 Ideal para silagem e pastagem de qualidade\n\n📲 Assista agora: https://youtu.be/Q7IDP7PuYd4",
+  video_2: "🌾 [ VÍDEO 02 ] Como plantar o Mega Sorgo Santa Elisa\n\n🔸 Plantio simples e sem complicação\n🔸 Dicas práticas de espaçamento e época ideal\n\n📲 Assista agora: https://youtu.be/mkzRsa8RaKw",
+  video_3: "📊 [ VÍDEO 03 ] Resultados reais no campo\n\n🔸 Produtividade comprovada por produtores\n🔸 Comparativo com outras forrageiras\n\n📲 Assista agora: https://youtu.be/J6xJyYDukhw",
+  video_4: "🌽 [ VÍDEO 04 ] Mega Sorgo Santa Elisa: Silagem com qualidade e volume o ano inteiro\n\n🔸 Versatilidade para silagem e pastagem\n🔸 Alta produção de massa verde\n\n📲 Assista agora: https://youtu.be/Z-HrHiMsUIE",
+  video_5: "🛡️ [ VÍDEO 05 ] Gaste menos e produza mais com o Mega Sorgo Santa Elisa\n\n🔸 Resistência natural a pragas (cigarrinha, lagarta, pulgão)\n🔸 Redução de custos na silagem e pastagem\n\n📲 Assista agora: https://youtu.be/rbfOQBoRX5Y",
+};
+const VIDEO_PAUSE_MS = 8_000;
+
+async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const msgPath = `${phone}/messages`;
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registra = async (texto: string, priv = false): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+  const envia = async (body: Json, registro: string, tipo: string) => {
+    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
+    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const cwMsgId = await registra(registro);
+    await db.from("messages").insert({
+      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
+      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    });
+  };
+
+  // intro
+  await envia(
+    { type: "text", text: { body: "📹 *Separei 5 vídeos rápidos sobre o Mega Sorgo Santa Elisa pra você!*\n\nVou enviar um por um — assista com calma 👇" } },
+    "📹 Separei 5 vídeos rápidos — vou enviar um por um", "text",
+  );
+  await pause(3000);
+
+  // busca vídeos do funnel_media (slots video_1..video_5)
+  const slots = ["video_1", "video_2", "video_3", "video_4", "video_5"];
+  const { data: videos } = await db.from("funnel_media").select("slot,url,caption")
+    .eq("funnel", "mega-sorgo").in("slot", slots).eq("active", true);
+
+  const videoMap = new Map((videos ?? []).map((v: Json) => [v.slot as string, v]));
+
+  for (const [i, slot] of slots.entries()) {
+    const media = videoMap.get(slot) as Json | undefined;
+    const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
+
+    if (media?.url) {
+      const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "video", video: { link: media.url, caption } });
+      if (r.ok) {
+        const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+        const cwMsgId = await registra(`[vídeo ${i + 1}] ${caption.slice(0, 80)}...`);
+        await db.from("messages").insert({
+          conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "video",
+          content: `[vídeo ${i + 1}]`, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+          status: "sent", sent_at: new Date().toISOString(),
+        });
+      } else {
+        // fallback: vídeo grande demais ou erro -> envia caption como texto
+        await envia({ type: "text", text: { body: caption } }, caption, "text");
+      }
+    } else {
+      await envia({ type: "text", text: { body: caption } }, caption, "text");
+    }
+    if (i < slots.length - 1) await pause(VIDEO_PAUSE_MS);
+  }
+
+  // CTA final
+  await pause(3000);
+  await envia({
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "Gostou do que viu? 🌱\n\nPosso te passar os preços e condições especiais!" },
+      action: { buttons: [
+        { type: "reply", reply: { id: "menu_preco", title: "💰 Quero o preço" } },
+        { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
+      ] },
+    },
+  }, "Gostou? [💰 Quero o preço / 🧑‍🌾 Falar com Cícero]", "interactive");
+
+  await registra("🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.", true);
+}
+
 async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
   // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
   if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
+  if (menuId === "menu_depoimento") return await handleVideoSequence(db, channel, from, acct);
   const content = MENU_CONTENT[menuId];
   if (!content) return;
 

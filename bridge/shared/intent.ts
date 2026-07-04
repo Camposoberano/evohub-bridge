@@ -19,6 +19,18 @@ export function isPrecoIntent(text: string): boolean {
   return PRECO_RE.test(t);
 }
 
+// "vídeo", "videos", "informação", "informações", "saber mais", "quero saber", "como funciona",
+// "como planta", "como plantar", "me explica", "me fala", "quero ver", "mandar vídeo".
+// NÃO match se a frase também contém intenção de preço (para não colidir).
+const VIDEO_RE = /(\bvideos?\b|\binformacoes?\b|\binformacao\b|\bsaber\s+mais\b|\bquero\s+saber\b|\bcomo\s+funciona\b|\bcomo\s+planta[r]?\b|\bme\s+(explica|fala|conta)\b|\bquero\s+ver\b|\bmand[ae]\s+videos?\b)/;
+
+export function isVideoIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  if (PRECO_RE.test(t)) return false;
+  return VIDEO_RE.test(t);
+}
+
 // Transcreve áudio curto via OpenAI Whisper. null se sem chave, áudio grande demais ou erro
 // (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;

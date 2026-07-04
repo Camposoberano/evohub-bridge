@@ -138,8 +138,9 @@ const version = {
     "preco-v4-anti-dup-pagamento",
     "preco-v4-1-pagamento-cartao-boleto",
     "preco-v5-imagem-por-pacote",
+    "video-sequence-5-videos",
   ],
-  build: "2026-07-04-preco-v5",
+  build: "2026-07-04-video-v1",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
