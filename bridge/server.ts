@@ -144,7 +144,7 @@ const version = {
     "plantio-pdf-resumos-lista",
     "nutricao-bromatologica-lista",
   ],
-  build: "2026-07-05-relatorio-v1",
+  build: "2026-07-05-relatorio-v2-analitico",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
