@@ -241,7 +241,9 @@ export async function handleOutgoing(db: Db, p: Json) {
       .maybeSingle();
     const commentId = lastInbound?.meta_message_id as string | undefined;
     if (!commentId) { console.warn("reply comment: sem comment_id inbound na conversa", cwConversationId); return; }
+    await dbg(db, cwMsgId, "comment-reply-attempt", { commentId, to });
     res = await sendMeta(token, `${commentId}/replies`, { message: content });
+    await dbg(db, cwMsgId, "comment-reply-result", { ok: res.ok, status: res.status, data: JSON.stringify(res.data).slice(0, 200) });
     msgType = "text";
   } else {
     // facebook / instagram (Messenger): texto e anexo são mensagens separadas (não há caption).
@@ -269,7 +271,8 @@ export async function handleOutgoing(db: Db, p: Json) {
   const d = res.data as Json;
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
     ((d?.message_id as string) ?? null) ??
-    (((d?.data as Json)?.messageId as string) ?? null);
+    (((d?.data as Json)?.messageId as string) ?? null) ??
+    ((d?.id as string) ?? null);
 
   await dbg(db, cwMsgId, "before-insert-messages", { msgType, mediaUrl, metaId });
   await db.from("messages").insert({
