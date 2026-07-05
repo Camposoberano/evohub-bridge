@@ -143,8 +143,10 @@ const version = {
     "video-sequence-5-videos",
     "plantio-pdf-resumos-lista",
     "nutricao-bromatologica-lista",
+    "data-cleanup-30d",
+    "comment-reply-fase2",
   ],
-  build: "2026-07-05-relatorio-v2-analitico",
+  build: "2026-07-05-cleanup-comments-fase2",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -310,6 +312,21 @@ function startAvatarLoop() {
   console.log(`avatar-sync loop ON (instância=${instName})`);
 }
 
+// Limpeza de events e deliveries antigos (>30 dias). Roda 1x/dia, 3min após subir.
+function startDataCleanupLoop() {
+  const run = async () => {
+    const db = admin();
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    try {
+      const { count: evDel } = await db.from("events").delete({ count: "exact" }).lt("received_at", cutoff);
+      const { count: dlDel } = await db.from("deliveries").delete({ count: "exact" }).lt("received_at", cutoff);
+      if ((evDel ?? 0) > 0 || (dlDel ?? 0) > 0) console.log(`data-cleanup: events=${evDel} deliveries=${dlDel} (antes de ${cutoff.slice(0, 10)})`);
+    } catch (e) { console.error("data-cleanup erro:", e); }
+  };
+  setTimeout(run, 180_000);
+  setInterval(run, 24 * 60 * 60 * 1000);
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -349,4 +366,5 @@ startRollupLoop();
 startRetentionLoop();
 startEnrichLoop();
 startChannelSyncLoop();
+startDataCleanupLoop();
 console.log(`bridge ouvindo na porta ${port}`);

@@ -226,9 +226,25 @@ export async function handleOutgoing(db: Db, p: Json) {
     } else {
       res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
     }
+  } else if (to.startsWith("cmt-fb-") || to.startsWith("cmt-ig-")) {
+    // Fase 2: responder COMENTÁRIO no FB/IG (Graph API /{comment-id}/replies).
+    // O contato de comentário tem external_contact_id = "cmt-fb-<uid>" / "cmt-ig-<username>".
+    // Pra responder, precisamos do comment_id mais recente da conversa (meta_message_id da última msg inbound).
+    if (!content) { console.warn("reply comment sem texto — anexos não suportados em comments"); return; }
+    const { data: lastInbound } = await db.from("messages")
+      .select("meta_message_id")
+      .eq("conversation_id", conv?.id)
+      .eq("direction", "in")
+      .not("meta_message_id", "is", null)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const commentId = lastInbound?.meta_message_id as string | undefined;
+    if (!commentId) { console.warn("reply comment: sem comment_id inbound na conversa", cwConversationId); return; }
+    res = await sendMeta(token, `${commentId}/replies`, { message: content });
+    msgType = "text";
   } else {
     // facebook / instagram (Messenger): texto e anexo são mensagens separadas (não há caption).
-    // Manda cada anexo e, se houver texto, manda também — antes só ia um dos dois.
     for (const att of attachments) {
       const aUrl = (att.data_url as string) ?? null;
       if (!aUrl) { console.warn("anexo sem data_url", channel.id); continue; }
