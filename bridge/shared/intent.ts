@@ -39,6 +39,16 @@ export function isPlantioIntent(text: string): boolean {
   return PLANTIO_RE.test(t);
 }
 
+// "nutricional", "nutrição", "bromatológica", "análise bromatológica", "composição nutricional", "tabela nutricional".
+const NUTRICAO_RE = /(\bnutri[cç][aã]o\b|\bnutricional\b|\bbromatol[oó]gica\b|\bcomposi[cç][aã]o\s+nutricional\b|\btabela\s+nutricional\b)/;
+
+export function isNutricaoIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  if (PRECO_RE.test(t)) return false;
+  return NUTRICAO_RE.test(t);
+}
+
 // Transcreve áudio curto via OpenAI Whisper. null se sem chave, áudio grande demais ou erro
 // (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;

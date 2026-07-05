@@ -14,7 +14,7 @@ import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
-import { isPrecoIntent, isVideoIntent, isPlantioIntent, transcribeAudio } from "../shared/intent.ts";
+import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -201,6 +201,11 @@ async function handleWhatsApp(db: Db, p: Json) {
           try { await handlePlantioClick(db, channel as Json, from, menuClick.id, acct); }
           catch (e) { console.error("handlePlantioClick erro:", e); }
         }
+        // botões da sequência nutricional (nutricao_1..nutricao_10).
+        if (menuClick?.id.startsWith("nutricao_")) {
+          try { await handleNutricaoClick(db, channel as Json, from, menuClick.id, acct); }
+          catch (e) { console.error("handleNutricaoClick erro:", e); }
+        }
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
         try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
@@ -266,6 +271,11 @@ async function handleWhatsApp(db: Db, p: Json) {
               if (await claimDelivery(db, `intent-plantio-${channel.id}-${from}-${dia}`, "intent")) {
                 await handlePlantioSequence(db, channel as Json, from, acct);
               }
+            } else if (isNutricaoIntent(intentText)) {
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${dia}`, "intent")) {
+                await handleNutricaoSequence(db, channel as Json, from, acct);
+              }
             }
           } catch (e) { console.error("intent erro:", e); }
         }
@@ -289,7 +299,7 @@ function interactiveReplyId(m: Json): { id: string; title: string } | null {
 const MENU_CONTENT: Record<string, string> = {
   menu_preco: "🌱 *Tabela de preços — Mega Sorgo Santa Elisa®*\n\n📦 2 kg — R$ 179,90 (cobre 0,5 hectare)\n📦 4 kg — R$ 341,62 (cobre 1 hectare)\n📦 10 kg — de R$ 899,00 por R$ 764,15 (cobre 2 hectares)\n📦 20 kg — R$ 1.437,90 (cobre até 4 hectares)\n\n🚚 Frete grátis pra todo o Brasil!",
   menu_plantio: "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
-  menu_nutricao: "🧪 Em breve te mando os dados nutricionais completos (comparativo com milho/Capiaçu). Qualquer dúvida me chama aqui! — Cícero",
+  menu_nutricao: "🧪 Análise bromatológica do Mega Sorgo — dados do Laboratório Prado.",
   menu_depoimento: "🎬 Em breve te mando os vídeos de quem já plantou e aprovou! Qualquer dúvida me chama aqui! — Cícero",
   menu_humano: "🧑‍🌾 Já te conectei com o Cícero, ele te chama em breve!",
 };
@@ -849,11 +859,216 @@ async function handlePlantioClick(db: Db, channel: Json, from: string, id: strin
   });
 }
 
+// ── Info Nutricional — dados do Laboratório Prado (amostra 2025-12-05) ──
+const NUTRICAO_ROWS = [
+  { id: "nutricao_1", title: "🔬 Visão geral", description: "Matéria seca, umidade e pH" },
+  { id: "nutricao_2", title: "💪 Proteína", description: "Proteína bruta e aminoácidos" },
+  { id: "nutricao_3", title: "⚡ Energia (NDT)", description: "Nutrientes digestíveis totais" },
+  { id: "nutricao_4", title: "🌾 Fibras", description: "FDN, FDA e lignina" },
+  { id: "nutricao_5", title: "🧪 Minerais", description: "Cálcio, fósforo, magnésio..." },
+  { id: "nutricao_6", title: "🫧 Gordura", description: "Extrato etéreo e ácidos graxos" },
+  { id: "nutricao_7", title: "🔄 Digestibilidade", description: "DFDN em 12h, 24h, 48h..." },
+  { id: "nutricao_8", title: "🧫 Fermentação", description: "Ácido lático, acético e pH" },
+  { id: "nutricao_9", title: "🥛 Produção estimada", description: "Leite e carne por tonelada" },
+  { id: "nutricao_10", title: "📊 Comparativo", description: "Mega Sorgo vs referência" },
+];
+
+const NUTRICAO_RESUMOS: Record<string, string> = {
+  nutricao_1:
+    "🔬 *Visão Geral da Silagem*\n\n" +
+    "• Matéria Seca: *32,91%* (ideal é entre 30-35%)\n" +
+    "• Umidade: *67,09%*\n" +
+    "• pH: *4,13* (ótimo! Silagem bem fermentada)\n\n" +
+    "👉 Quanto mais perto de 33% de matéria seca, melhor a qualidade da silagem.\n" +
+    "pH abaixo de 4,2 = fermentação excelente!",
+
+  nutricao_2:
+    "💪 *Proteína*\n\n" +
+    "• Proteína Bruta (PB): *9,65%* da matéria seca\n" +
+    "• Proteína Solúvel: *51,09%* da PB\n" +
+    "• Aminoácidos Totais: *80,93%* da PB\n" +
+    "• Lisina: *3,11%* | Metionina: *1,66%*\n\n" +
+    "👉 Proteína bruta *acima de 9%* é excelente pra sorgo!\n" +
+    "O gado aproveita bem — a proteína é de alta qualidade.",
+
+  nutricao_3:
+    "⚡ *Energia — NDT (Nutrientes Digestíveis Totais)*\n\n" +
+    "• NDT: *65,22%* (método OARDC)\n" +
+    "• Energia Líquida Lactação: *1,48 Mcal/kg*\n" +
+    "• Energia Líquida Ganho: *0,95 Mcal/kg*\n" +
+    "• Energia Líquida Manutenção: *1,55 Mcal/kg*\n\n" +
+    "👉 NDT acima de 65% = *alta energia*.\n" +
+    "Mais energia na silagem = mais leite e mais engorda!",
+
+  nutricao_4:
+    "🌾 *Fibras*\n\n" +
+    "• FDN (Fibra em Detergente Neutro): *49,94%*\n" +
+    "• FDA (Fibra em Detergente Ácido): *32,31%*\n" +
+    "• Lignina: *3,40%* (7,06% do FDN)\n" +
+    "• FDN efetivo (aFDNmo): *48,14%*\n\n" +
+    "👉 FDN abaixo de 50% = gado come mais e rumina melhor.\n" +
+    "FDA baixo = mais digestível. Lignina baixa = fibra macia!",
+
+  nutricao_5:
+    "🧪 *Minerais*\n\n" +
+    "• Cinza (Matéria Mineral): *6,24%*\n" +
+    "• Cálcio: *0,35%*\n" +
+    "• Fósforo: *0,26%*\n" +
+    "• Magnésio: *0,18%*\n" +
+    "• Potássio: *1,55%*\n" +
+    "• Enxofre: *0,14%*\n\n" +
+    "👉 Minerais dentro da faixa ideal.\n" +
+    "Cálcio e fósforo equilibrados = osso forte e boa produção.",
+
+  nutricao_6:
+    "🫧 *Gordura (Extrato Etéreo)*\n\n" +
+    "• Extrato Etéreo (EE): *3,10%*\n" +
+    "• Ácidos Graxos Totais: *1,93%*\n" +
+    "• Linoleico (ômega 6): *43,01%* dos AG\n" +
+    "• Oleico (ômega 9): *23,83%* dos AG\n" +
+    "• Linolênico (ômega 3): *8,81%* dos AG\n\n" +
+    "👉 Gordura boa = mais energia pro animal.\n" +
+    "Perfil de ômega favorável pra saúde do rebanho!",
+
+  nutricao_7:
+    "🔄 *Digestibilidade da Fibra (DFDN)*\n\n" +
+    "• Em 12 horas: *25,63%*\n" +
+    "• Em 24 horas: *53,22%*\n" +
+    "• Em 30 horas: *56,31%*\n" +
+    "• Em 48 horas: *60,64%*\n" +
+    "• Em 240 horas (máxima): *70,57%*\n\n" +
+    "👉 Mais de *60% em 48h* = fibra altamente digestível.\n" +
+    "O gado aproveita a maior parte do que come!",
+
+  nutricao_8:
+    "🧫 *Fermentação da Silagem*\n\n" +
+    "• pH: *4,13* ✅ (excelente!)\n" +
+    "• Ácido Lático: *2,81%* (o principal — fermenta bem)\n" +
+    "• Ácido Acético: *1,73%* (normal)\n" +
+    "• Ácido Propiônico: *0,44%* (baixo = sem deterioração)\n" +
+    "• Amônia (NH3): *0,68%* (muito baixo = proteína preservada)\n\n" +
+    "👉 Silagem com fermentação *nota 10*.\n" +
+    "Pouca amônia = proteína conservada, sem perda!",
+
+  nutricao_9:
+    "🥛 *Produção Estimada por Tonelada de MS*\n\n" +
+    "• Leite: *1.535 kg* por tonelada de matéria seca\n" +
+    "• Carne: *98 kg* por tonelada de matéria seca\n" +
+    "• Amido: *17,31%* (fonte de energia rápida)\n" +
+    "• Digestibilidade do Amido em 7h: *73,93%*\n" +
+    "• Açúcar: *4,06%*\n\n" +
+    "👉 Cada tonelada de MS produz mais de *1.500 litros de leite*!\n" +
+    "Retorno real do investimento na silagem.",
+
+  nutricao_10:
+    "📊 *Comparativo — Mega Sorgo vs Referência*\n\n" +
+    "• PB: *9,65%* (ref: 5,80-9,00%) ✅ *Acima*\n" +
+    "• NDT: *65,22%* ✅ *Alta energia*\n" +
+    "• FDN: *49,94%* (ref: 31,6-49,2%) — *dentro do topo*\n" +
+    "• FDA: *32,31%* (ref: 19,9-30,5%) — *aceitável*\n" +
+    "• Lignina: *3,40%* (ref: 2,43-4,43%) ✅ *Baixa*\n" +
+    "• Amido: *17,31%* (ref: 19,2-41,9%)\n" +
+    "• Leite/ton MS: *1.535 kg*\n\n" +
+    "👉 *Proteína acima da média*, energia alta, fibra digestível.\n" +
+    "Resultado comprovado em laboratório! 🏆",
+};
+
+async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const msgPath = `${phone}/messages`;
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registra = async (texto: string): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+  const envia = async (body: Json, registro: string, tipo: string) => {
+    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
+    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const cwMsgId = await registra(registro);
+    await db.from("messages").insert({
+      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
+      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    });
+  };
+
+  await envia({
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "🧪 *Análise Bromatológica — Mega Sorgo Santa Elisa®*\n\nResultados do *Laboratório Prado* (análise de silagem).\n\nEscolha abaixo o que quer saber — te explico de um jeito fácil de entender!" },
+      action: { button: "Ver os temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
+    },
+  }, "🧪 Lista de info nutricional [10 temas]", "interactive");
+}
+
+async function handleNutricaoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+  const resumo = NUTRICAO_RESUMOS[id];
+  if (!resumo) return;
+
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const msgPath = `${phone}/messages`;
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registra = async (texto: string): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+
+  const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
+  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  const cwMsgId = await registra(resumo);
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
+    content: resumo, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+    status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+  });
+
+  const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
+  await pause(2000);
+  const r2 = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "interactive", interactive: {
+    type: "list",
+    body: { text: "Quer ver outro dado nutricional? 👇" },
+    action: { button: "Ver mais temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
+  } });
+  const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  const cwMsgId2 = await registra("Quer ver outro dado nutricional? [lista 10 temas]");
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
+    content: "Quer ver outro dado? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
+    status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+  });
+}
+
 async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
   // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
   if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
   if (menuId === "menu_depoimento") return await handleVideoSequence(db, channel, from, acct);
   if (menuId === "menu_plantio") return await handlePlantioSequence(db, channel, from, acct);
+  if (menuId === "menu_nutricao") return await handleNutricaoSequence(db, channel, from, acct);
   const content = MENU_CONTENT[menuId];
   if (!content) return;
 

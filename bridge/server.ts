@@ -140,8 +140,9 @@ const version = {
     "preco-v5-imagem-por-pacote",
     "video-sequence-5-videos",
     "plantio-pdf-resumos-lista",
+    "nutricao-bromatologica-lista",
   ],
-  build: "2026-07-04-plantio-v1.1",
+  build: "2026-07-04-nutricao-v1",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
