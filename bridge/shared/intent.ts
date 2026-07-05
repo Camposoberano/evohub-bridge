@@ -49,6 +49,20 @@ export function isNutricaoIntent(text: string): boolean {
   return NUTRICAO_RE.test(t);
 }
 
+// "bom dia", "boa tarde", "boa noite", "olá", "oi", "eai", "e aí", "vida boa", "opa", "hey".
+// Saudações genéricas que não casam com nenhum outro intent.
+const SAUDACAO_RE = /^(\s)*(bom\s+dia|boa\s+(tarde|noite)|ola|oi|eai|e\s+ai|vida\s+boa|opa|hey|hi|hello|pode\s+sim|tudo\s+bem|boa)(\s|[!?,.])*$/;
+
+export function isSaudacaoIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  if (PRECO_RE.test(t)) return false;
+  if (VIDEO_RE.test(t)) return false;
+  if (PLANTIO_RE.test(t)) return false;
+  if (NUTRICAO_RE.test(t)) return false;
+  return SAUDACAO_RE.test(t);
+}
+
 // Transcreve áudio curto via OpenAI Whisper. null se sem chave, áudio grande demais ou erro
 // (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;

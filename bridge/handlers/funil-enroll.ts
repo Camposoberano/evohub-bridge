@@ -65,8 +65,7 @@ function closingList(gancho: { text: string; row: Botao } | null): Peca {
 // roteiro de cada fase. offset = segundos DENTRO do acesso (relativo ao início dele).
 function fase1(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "Olá, amigo! Tudo bem? 😊👋\n\nAqui é o *Cícero Sobreira* 👨‍🌾" },
-    // logo é FIXA (slot "logo" só tem 1 mídia cadastrada — não rotaciona).
+    { offset: 0, kind: "text", text: "Vida boa! 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾" },
     { offset: 70, kind: "media", mediaType: "image", slot: "logo",
       caption: "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜" },
     { offset: 140, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
@@ -271,6 +270,14 @@ export async function autoEnrollFunil(
   // e basta a palavra-chave estar CONTIDA na msg (lead pode escrever coisa a mais em volta).
   if (kw && !fold(content).includes(fold(kw))) return;
 
+  await enrollIfNew(db, channel, from);
+}
+
+export async function enrollIfNew(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+): Promise<void> {
   const { data: contact } = await db.from("contacts").select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
   if (!contact) return;
@@ -280,14 +287,13 @@ export async function autoEnrollFunil(
   if (!conv?.chatwoot_conversation_id) return;
   const { data: existing } = await db.from("sales_sequences").select("id")
     .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
-  if (existing) return; // já entrou (qualquer status) -> não re-dispara sozinho
+  if (existing) return;
 
-  // reusa o handle() interno (mesmo caminho do disparo manual, timing de produção).
   const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
   const res = await handle(new Request(`http://internal/funil-enroll?token=${token}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ chatwoot_conversation_id: conv.chatwoot_conversation_id }),
   }));
-  console.log("autoEnrollFunil: conv", conv.chatwoot_conversation_id, "->", res.status, await res.text());
+  console.log("enrollIfNew: conv", conv.chatwoot_conversation_id, "->", res.status, await res.text());
 }

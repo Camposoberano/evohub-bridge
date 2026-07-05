@@ -13,8 +13,8 @@ import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
-import { autoEnrollFunil } from "./funil-enroll.ts";
-import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
+import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
+import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, isSaudacaoIntent, transcribeAudio } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -275,6 +275,11 @@ async function handleWhatsApp(db: Db, p: Json) {
               const dia = new Date().toISOString().slice(0, 10);
               if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${dia}`, "intent")) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
+              }
+            } else if (isSaudacaoIntent(intentText)) {
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-saudacao-${channel.id}-${from}-${dia}`, "intent")) {
+                await handleSaudacao(db, channel as Json, from, acct);
               }
             }
           } catch (e) { console.error("intent erro:", e); }
@@ -1074,6 +1079,12 @@ async function handleNutricaoClick(db: Db, channel: Json, from: string, id: stri
     content: "Quer ver outro dado? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
     status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
   });
+}
+
+async function handleSaudacao(db: Db, channel: Json, from: string, _acct?: CwAcct): Promise<void> {
+  // saudação dispara o funil em QUALQUER canal (não depende de FUNIL_AUTO_ENROLL_CHANNEL).
+  // A fase 1 peça 0 já abre com "Vida boa!" — não manda texto separado pra não duplicar.
+  try { await enrollIfNew(db, channel, from); } catch (e) { console.error("saudacao enroll erro:", e); }
 }
 
 async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
