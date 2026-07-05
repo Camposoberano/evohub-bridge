@@ -866,7 +866,7 @@ const NUTRICAO_ROWS = [
   { id: "nutricao_3", title: "⚡ Energia (NDT)", description: "Nutrientes digestíveis totais" },
   { id: "nutricao_4", title: "🌾 Fibras", description: "FDN, FDA e lignina" },
   { id: "nutricao_5", title: "🧪 Minerais", description: "Cálcio, fósforo, magnésio..." },
-  { id: "nutricao_6", title: "🫧 Gordura", description: "Extrato etéreo e ácidos graxos" },
+  { id: "nutricao_6", title: "🧈 Gordura", description: "Extrato etéreo e ácidos graxos" },
   { id: "nutricao_7", title: "🔄 Digestibilidade", description: "DFDN em 12h, 24h, 48h..." },
   { id: "nutricao_8", title: "🧫 Fermentação", description: "Ácido lático, acético e pH" },
   { id: "nutricao_9", title: "🥛 Produção estimada", description: "Leite e carne por tonelada" },
@@ -921,7 +921,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "Cálcio e fósforo equilibrados = osso forte e boa produção.",
 
   nutricao_6:
-    "🫧 *Gordura (Extrato Etéreo)*\n\n" +
+    "🧈 *Gordura (Extrato Etéreo)*\n\n" +
     "• Extrato Etéreo (EE): *3,10%*\n" +
     "• Ácidos Graxos Totais: *1,93%*\n" +
     "• Linoleico (ômega 6): *43,01%* dos AG\n" +
@@ -979,6 +979,7 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
   const phone = channel.phone_number_id as string | undefined;
   if (!token || !phone) return;
   const msgPath = `${phone}/messages`;
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
@@ -1004,11 +1005,23 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
     });
   };
 
+  // 1) PDF do laudo
+  const { data: pdfMedia } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", "nutricao_pdf").eq("active", true).limit(1).maybeSingle();
+  if (pdfMedia?.url) {
+    await envia(
+      { type: "document", document: { link: pdfMedia.url, caption: "🧪 *Análise Bromatológica Completa* — Mega Sorgo Santa Elisa\nLaboratório Prado (dez/2025)", filename: "Analise-Bromatologica-Mega-Sorgo.pdf" } },
+      "[PDF Análise Bromatológica]", "document",
+    );
+    await pause(3000);
+  }
+
+  // 2) Lista interativa
   await envia({
     type: "interactive",
     interactive: {
       type: "list",
-      body: { text: "🧪 *Análise Bromatológica — Mega Sorgo Santa Elisa®*\n\nResultados do *Laboratório Prado* (análise de silagem).\n\nEscolha abaixo o que quer saber — te explico de um jeito fácil de entender!" },
+      body: { text: "📋 *Quer entender os dados do laudo?*\n\nEscolha abaixo o que quer saber — te explico de um jeito fácil de entender!" },
       action: { button: "Ver os temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
     },
   }, "🧪 Lista de info nutricional [10 temas]", "interactive");
