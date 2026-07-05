@@ -20,7 +20,6 @@ export function isPrecoIntent(text: string): boolean {
 }
 
 // Só dispara se a palavra "vídeo" (ou "video", "vídeos", "videos") aparecer na frase.
-// Frases sem "vídeo" NÃO disparam, mesmo que peçam "informação" ou "saber mais".
 const VIDEO_RE = /\bvideos?\b/;
 
 export function isVideoIntent(text: string): boolean {
@@ -28,6 +27,16 @@ export function isVideoIntent(text: string): boolean {
   if (!t.trim()) return false;
   if (PRECO_RE.test(t)) return false;
   return VIDEO_RE.test(t);
+}
+
+// "como plantar", "como planta", "plantio", "manejo", "instrução de plantio".
+const PLANTIO_RE = /(\bcomo\s+planta[r]?\b|\bplantio\b|\bmanejo\b|\binstruc[ao]+\s+de\s+plantio\b)/;
+
+export function isPlantioIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  if (PRECO_RE.test(t)) return false;
+  return PLANTIO_RE.test(t);
 }
 
 // Transcreve áudio curto via OpenAI Whisper. null se sem chave, áudio grande demais ou erro

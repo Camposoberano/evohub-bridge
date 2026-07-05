@@ -141,7 +141,7 @@ const version = {
     "video-sequence-5-videos",
     "plantio-pdf-resumos-lista",
   ],
-  build: "2026-07-04-plantio-v1",
+  build: "2026-07-04-plantio-v1.1",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

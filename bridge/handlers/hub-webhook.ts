@@ -14,7 +14,7 @@ import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
-import { isPrecoIntent, isVideoIntent, transcribeAudio } from "../shared/intent.ts";
+import { isPrecoIntent, isVideoIntent, isPlantioIntent, transcribeAudio } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -260,6 +260,11 @@ async function handleWhatsApp(db: Db, p: Json) {
                     } catch { /* nota é bônus */ }
                   }
                 }
+              }
+            } else if (isPlantioIntent(intentText)) {
+              const dia = new Date().toISOString().slice(0, 10);
+              if (await claimDelivery(db, `intent-plantio-${channel.id}-${from}-${dia}`, "intent")) {
+                await handlePlantioSequence(db, channel as Json, from, acct);
               }
             }
           } catch (e) { console.error("intent erro:", e); }
