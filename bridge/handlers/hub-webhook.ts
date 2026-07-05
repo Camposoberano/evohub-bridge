@@ -196,6 +196,11 @@ async function handleWhatsApp(db: Db, p: Json) {
           try { await handlePrecoClick(db, channel as Json, from, menuClick.id, acct); }
           catch (e) { console.error("handlePrecoClick erro:", e); }
         }
+        // botões da sequência de plantio (plantio_1..plantio_10).
+        if (menuClick?.id.startsWith("plantio_")) {
+          try { await handlePlantioClick(db, channel as Json, from, menuClick.id, acct); }
+          catch (e) { console.error("handlePlantioClick erro:", e); }
+        }
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
         try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
@@ -626,10 +631,224 @@ async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: C
   await registra("🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.", true);
 }
 
+// ── Sequência COMO PLANTAR (PDF + lista de resumos) ─────────────────────────
+const PLANTIO_RESUMOS: Record<string, string> = {
+  plantio_1:
+    "🌱 *Especificações da Semente*\n\n" +
+    "• Recomendação: *5 kg por hectare*\n" +
+    "• Altura: chega de *4 a 5 metros*\n" +
+    "• Plantio: de *setembro a março* (safra e safrinha)\n" +
+    "• Proteína: *8%*\n" +
+    "• Aguenta bem a seca e não tomba fácil\n" +
+    "• Faz *até 3 rebrotes* — irrigado, rebrota por 2 anos",
+
+  plantio_2:
+    "📏 *Espaçamento e Plantio em Linha*\n\n" +
+    "• Use *4 a 5 kg/ha* (já conta 20-30% a mais pra compensar perdas)\n" +
+    "• Profundidade: *2 a 3 cm* (mais raso em solo argiloso)\n" +
+    "• Disco: *52 furos de 3,50 mm* (mecânica) ou *1,75 mm* (vácuo)\n" +
+    "• Espaçamento maior facilita a máquina de corte na silagem\n" +
+    "• População: *110.000 a 140.000* sementes por hectare",
+
+  plantio_3:
+    "🌾 *Plantio a Lanço*\n\n" +
+    "• Coloque *10% a mais* de semente que no plantio em linha\n" +
+    "• Motivo: perde mais pra pássaros e roedores\n" +
+    "• ⚠️ Cuidado com chuva forte — carrega a semente\n" +
+    "• O adubo vai no fundo do sulco, *mínimo 3 cm* longe da semente",
+
+  plantio_4:
+    "🧪 *Calagem do Solo*\n\n" +
+    "• Faça análise do solo (0-20 cm) *antes* da safra\n" +
+    "• Objetivo: elevar a saturação por bases (V) a *70%*\n" +
+    "• Solo com bastante matéria orgânica: basta elevar V a *50%*\n" +
+    "• A calagem leva *alguns meses* pra fazer efeito — não deixe pra última hora",
+
+  plantio_5:
+    "💊 *Adubação de Base (NPK)*\n\n" +
+    "• Na semeadura: *20 a 40 kg/ha de Nitrogênio*\n" +
+    "• Fósforo e Potássio: conforme análise do solo\n" +
+    "• Solo fraco: mais adubo. Solo bom: menos adubo\n" +
+    "• Potássio no sulco ou a lanço antes do plantio\n" +
+    "• Meta: *35 a 70 toneladas/ha* de massa verde",
+
+  plantio_6:
+    "🔄 *Adubação de Cobertura*\n\n" +
+    "• Fórmula *20-00-20*: aplicar *200 kg/ha*\n" +
+    "• Quando: *25 a 35 dias* após o plantio, a lanço\n" +
+    "• Silagem: pode fazer *até 2 coberturas*\n" +
+    "• A mesma adubação serve pro *rebrote*\n" +
+    "• Quanto mais adubo, mais produz — é proporcional",
+
+  plantio_7:
+    "🌿 *Controle de Daninhas (Mato)*\n\n" +
+    "• Limpe a área *antes* do plantio\n" +
+    "• ⚠️ Herbicida anterior: espere *35 dias* antes de plantar\n" +
+    "• Herbicida liberado pro sorgo: *Atrazina* (3 a 4 litros)\n" +
+    "• Funciona antes ou depois da planta nascer\n" +
+    "• ❌ Não use em solo arenoso antes da planta nascer\n" +
+    "• Sempre com *receituário agronômico*",
+
+  plantio_8:
+    "🐛 *Pragas e Tratamento de Sementes*\n\n" +
+    "• Trate a semente *antes* de plantar — protege nos primeiros 30 dias\n" +
+    "• Principais pragas: *cigarrinha, lagarta, pulgão, percevejo*\n" +
+    "• Inseticidas: Clotianidina, Thiamethoxam, Imidacloprid\n" +
+    "• Fungicidas: Metalaxil, Tiabendazol, Captana\n" +
+    "• Aos *45 dias*: vistorie toda a lavoura\n" +
+    "• Faça pulverização preventiva — depois fica difícil entrar com máquina",
+
+  plantio_9:
+    "✂️ *Ponto de Corte e Silagem*\n\n" +
+    "• Corte quando a matéria seca estiver entre *30 e 35%*\n" +
+    "• Primeiro corte: *90 a 110 dias* após o plantio\n" +
+    "• Tamanho das partículas: *1,25 a 1,75 cm*\n" +
+    "• Não espere a panícula desenvolver toda — o objetivo é *massa verde*\n" +
+    "• Boa compactação + vedação = silagem de qualidade\n" +
+    "• Use *inoculante* pra uma boa fermentação",
+
+  plantio_10:
+    "📊 *Produtividade e Rebrote*\n\n" +
+    "• Safra normal, solo bom: *70 a 90 toneladas/ha*\n" +
+    "• Solo mais fraco: *45 a 60 toneladas/ha*\n" +
+    "• A silagem de sorgo equivale a *72-92%* da de milho\n" +
+    "• Após o corte: *rebrota vigorosa* em 90-100 dias com adubação\n" +
+    "• Pode fazer *pastejo direto* — entrada dos animais com 70-80 cm de altura\n" +
+    "• Acompanhe da semente até a colheita — faz toda a diferença!",
+};
+
+async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const msgPath = `${phone}/messages`;
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registra = async (texto: string, priv = false): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+  const envia = async (body: Json, registro: string, tipo: string) => {
+    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
+    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const cwMsgId = await registra(registro);
+    await db.from("messages").insert({
+      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
+      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    });
+  };
+
+  // 1) PDF
+  const { data: pdfMedia } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", "plantio_pdf").eq("active", true).limit(1).maybeSingle();
+  if (pdfMedia?.url) {
+    await envia(
+      { type: "document", document: { link: pdfMedia.url, caption: "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa", filename: "Instrucoes-Plantio-Mega-Sorgo.pdf" } },
+      "[PDF Instruções de Plantio]", "document",
+    );
+    await pause(3000);
+  }
+
+  // 2) Lista de resumos
+  await envia({
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "📋 *Quer um resumo rápido de algum tema?*\n\nEscolha abaixo o assunto que mais te interessa — te mando um resumo fácil de entender, direto no ponto!" },
+      action: { button: "Ver os temas", sections: [{ title: "Temas de plantio", rows: [
+        { id: "plantio_1", title: "🌱 A semente", description: "Características e especificações" },
+        { id: "plantio_2", title: "📏 Plantio em linha", description: "Espaçamento, disco e profundidade" },
+        { id: "plantio_3", title: "🌾 Plantio a lanço", description: "Quantidade e cuidados" },
+        { id: "plantio_4", title: "🧪 Calagem do solo", description: "Preparação e correção do solo" },
+        { id: "plantio_5", title: "💊 Adubação de base", description: "NPK na semeadura" },
+        { id: "plantio_6", title: "🔄 Adubação cobertura", description: "Cobertura e rebrote" },
+        { id: "plantio_7", title: "🌿 Controle de mato", description: "Herbicidas e daninhas" },
+        { id: "plantio_8", title: "🐛 Pragas", description: "Tratamento de sementes e pragas" },
+        { id: "plantio_9", title: "✂️ Corte e silagem", description: "Ponto de corte e partículas" },
+        { id: "plantio_10", title: "📊 Produtividade", description: "Rendimento e rebrote" },
+      ] } ] },
+    },
+  }, "📋 Lista de temas de plantio [10 opções]", "interactive");
+}
+
+async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+  const resumo = PLANTIO_RESUMOS[id];
+  if (!resumo) return;
+
+  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return;
+  const msgPath = `${phone}/messages`;
+
+  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registra = async (texto: string): Promise<number | null> => {
+    if (!conv?.chatwoot_conversation_id) return null;
+    try {
+      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      return (cw?.id as number) ?? null;
+    } catch { return null; }
+  };
+
+  // envia resumo
+  const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
+  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  const cwMsgId = await registra(resumo);
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
+    content: resumo, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
+    status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+  });
+
+  // re-envia lista pra poder consultar outro tema
+  const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
+  await pause(2000);
+  const r2 = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "interactive", interactive: {
+    type: "list",
+    body: { text: "Quer ver outro tema? 👇" },
+    action: { button: "Ver mais temas", sections: [{ title: "Temas de plantio", rows: [
+      { id: "plantio_1", title: "🌱 A semente", description: "Características e especificações" },
+      { id: "plantio_2", title: "📏 Plantio em linha", description: "Espaçamento, disco e profundidade" },
+      { id: "plantio_3", title: "🌾 Plantio a lanço", description: "Quantidade e cuidados" },
+      { id: "plantio_4", title: "🧪 Calagem do solo", description: "Preparação e correção do solo" },
+      { id: "plantio_5", title: "💊 Adubação de base", description: "NPK na semeadura" },
+      { id: "plantio_6", title: "🔄 Adubação cobertura", description: "Cobertura e rebrote" },
+      { id: "plantio_7", title: "🌿 Controle de mato", description: "Herbicidas e daninhas" },
+      { id: "plantio_8", title: "🐛 Pragas", description: "Tratamento de sementes e pragas" },
+      { id: "plantio_9", title: "✂️ Corte e silagem", description: "Ponto de corte e partículas" },
+      { id: "plantio_10", title: "📊 Produtividade", description: "Rendimento e rebrote" },
+    ] } ] },
+  } });
+  const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  const cwMsgId2 = await registra("Quer ver outro tema? [lista 10 temas]");
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
+    content: "Quer ver outro tema? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
+    status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+  });
+}
+
 async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
   // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
   if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
   if (menuId === "menu_depoimento") return await handleVideoSequence(db, channel, from, acct);
+  if (menuId === "menu_plantio") return await handlePlantioSequence(db, channel, from, acct);
   const content = MENU_CONTENT[menuId];
   if (!content) return;
 
