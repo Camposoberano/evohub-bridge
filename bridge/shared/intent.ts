@@ -30,7 +30,7 @@ export function isVideoIntent(text: string): boolean {
 }
 
 // "como plantar", "como planta", "plantio", "manejo", "instrução de plantio".
-const PLANTIO_RE = /(\bcomo\s+planta[r]?\b|\bplantio\b|\bmanejo\b|\binstruc[ao]+\s+de\s+plantio\b)/;
+const PLANTIO_RE = /(\bcomo\s+planta[r]?\b|\bplantio\b|\bmanejo\b|\binstruc[ao]+\s+de\s+plantio\b|\baduba[cçr]\w*\b|\badubo\b|\bfertiliza[cçr]\w*\b)/;
 
 export function isPlantioIntent(text: string): boolean {
   const t = fold(text ?? "");
