@@ -170,6 +170,7 @@ export async function handleOutgoing(db: Db, p: Json) {
     // Rota híbrida: canal oficial com espelho uazapi → service msgs saem pelo não-oficial (R$0).
     // Templates e janela fechada sempre pela oficial. Se uazapi falhar → fallback automático.
     const hybrid = !tplCmd ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string) : null;
+    if (hybrid) console.log("hybrid route found:", hybrid.instance, "for channel", channel.name, "to", to);
 
     if (!tplCmd && conv) {
       const win = await windowState(db, conv as Json, channel as Json);
@@ -220,6 +221,7 @@ export async function handleOutgoing(db: Db, p: Json) {
             isVoice: msgType === "audio",
           });
           if (hybridRes) { captionUsed = captionUsed || (!!content && msgType !== "audio"); }
+          console.log("hybrid-media-attempt:", hybridRes ? "uazapi OK" : "fallback oficial", "msg", cwMsgId);
           await dbg(db, cwMsgId, "hybrid-media-attempt", { via: hybridRes?.via ?? "fallback", ok: hybridRes?.ok ?? false });
         }
 
@@ -252,6 +254,7 @@ export async function handleOutgoing(db: Db, p: Json) {
         if (hr) { res = hr; } else {
           res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
         }
+        console.log("hybrid-text-attempt:", hr ? "uazapi OK" : "fallback oficial", "msg", cwMsgId);
         await dbg(db, cwMsgId, "hybrid-text-attempt", { via: (hr ? "uazapi" : "fallback") });
       } else {
         res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
