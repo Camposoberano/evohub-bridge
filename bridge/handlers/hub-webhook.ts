@@ -14,6 +14,7 @@ import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
+import { autoPauseFunil } from "./funil-control.ts";
 import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, isSaudacaoIntent, transcribeAudio } from "../shared/intent.ts";
 import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
@@ -228,6 +229,14 @@ async function handleWhatsApp(db: Db, p: Json) {
             if (type === "audio" && attachments?.length) {
               transcricao = await transcribeAudio(attachments[0].bytes, attachments[0].contentType);
               if (transcricao) intentText = transcricao;
+            }
+            const anyIntent = isPrecoIntent(intentText) || isVideoIntent(intentText) || isPlantioIntent(intentText) || isNutricaoIntent(intentText);
+            if (anyIntent) {
+              const { data: _ct } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+              if (_ct) {
+                const { data: _cv } = await db.from("conversations").select("id").eq("contact_id", _ct.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle();
+                if (_cv) await autoPauseFunil(_cv.id as string);
+              }
             }
             if (isPrecoIntent(intentText)) {
               const dia = new Date().toISOString().slice(0, 10);

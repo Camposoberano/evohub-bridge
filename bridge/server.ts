@@ -19,6 +19,7 @@ import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
 import { handle as ryzeapi } from "./handlers/ryzeapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import { handle as funilEnroll } from "./handlers/funil-enroll.ts";
+import { handle as funilControl } from "./handlers/funil-control.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
@@ -57,6 +58,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/ryzeapi": ryzeapi,
   "/send-outbound": sendOutbound,
   "/funil-enroll": funilEnroll,
+  "/funil-control": funilControl,
   "/meta-templates": metaTemplates,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
@@ -148,6 +150,9 @@ const version = {
     "data-cleanup-30d",
     "comment-reply-fase2",
     "hybrid-routes-uazapi",
+    "funil-control-pause-stop-resume",
+    "funil-auto-pause-on-intent",
+    "funil-command-private-note",
   ],
   build: "2026-07-06-hybrid-media-fix",
 };

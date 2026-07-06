@@ -51,6 +51,14 @@ export async function handle(req: Request): Promise<Response> {
 
   db.from("events").insert({ source: "chatwoot", event_type: eventName, payload: p }).then(() => {}, () => {});
 
+  // Comandos do atendente via nota privada: /funil pause|stop|resume|status
+  if (eventName === "message_created" && isOutgoing(p) && p.private) {
+    const cmd = ((p.content as string) ?? "").trim();
+    if (/^\/funil\s/i.test(cmd)) {
+      handleFunilCommand(db, p).catch((e) => console.error("funil-command erro:", e));
+    }
+  }
+
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
   if (eventName === "message_created" && isOutgoing(p) && !p.private) {
@@ -330,4 +338,32 @@ export async function handleOutgoing(db: Db, p: Json) {
 function metaAttachmentType(fileType?: string): "image" | "audio" | "video" | "file" {
   if (fileType === "image" || fileType === "audio" || fileType === "video") return fileType;
   return "file";
+}
+
+// Comando do atendente via nota privada: /funil pause|stop|resume|status
+async function handleFunilCommand(db: Db, p: Json) {
+  const conversation = (p.conversation ?? {}) as Json;
+  const cwConvId = (conversation.id ?? p.conversation_id) as number | undefined;
+  if (!cwConvId) return;
+
+  const cmd = ((p.content as string) ?? "").trim().toLowerCase();
+  const match = cmd.match(/^\/funil\s+(pause|pausa|stop|para|parar|resume|retoma|retomar|status)\b/i);
+  if (!match) return;
+
+  const actionMap: Record<string, string> = {
+    pause: "pause", pausa: "pause",
+    stop: "stop", para: "stop", parar: "stop",
+    resume: "resume", retoma: "resume", retomar: "resume",
+    status: "status",
+  };
+  const action = actionMap[match[1].toLowerCase()] ?? match[1].toLowerCase();
+  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+
+  const res = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-control?token=${encodeURIComponent(secret)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
+  });
+  const result = await res.json().catch(() => ({}));
+  console.log("funil-command:", action, "conv", cwConvId, "->", JSON.stringify(result).slice(0, 200));
 }
