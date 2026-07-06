@@ -149,7 +149,7 @@ const version = {
     "comment-reply-fase2",
     "hybrid-routes-uazapi",
   ],
-  build: "2026-07-06-hybrid-routes",
+  build: "2026-07-06-hybrid-diag",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -339,6 +339,36 @@ Deno.serve({ port }, async (req) => {
     return new Response(JSON.stringify(version), {
       headers: { "Content-Type": "application/json" },
     });
+  }
+  if (pathname === "/hybrid-diag") {
+    try {
+      const db = admin();
+      const { data: ch } = await db.from("channels")
+        .select("id,name,phone_number,phone_number_id,type,status")
+        .eq("type", "whatsapp").not("phone_number_id", "is", null);
+      const inst = uazapiConfigured() ? await (await import("./shared/uazapi.ts")).listInstances() : [];
+      const norm = (n: string | null) => (n ?? "").replace(/\D/g, "");
+      const diag = (ch ?? []).map((c: Record<string, unknown>) => {
+        const cp = norm(c.phone_number as string | null);
+        const match = inst.find((i: Record<string, unknown>) =>
+          i.status === "connected" && norm(i.number as string | null) === cp
+        );
+        return {
+          channel: c.name, phone: c.phone_number, phone_norm: cp || "(vazio)",
+          uaz_match: match ? (match as Record<string, unknown>).name : null,
+        };
+      });
+      const instList = inst.map((i: Record<string, unknown>) => ({
+        name: i.name, number: i.number, norm: norm(i.number as string | null), status: i.status,
+      }));
+      return new Response(JSON.stringify({ channels: diag, uazapi_instances: instList }, null, 2), {
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (e) {
+      return new Response(JSON.stringify({ error: String(e).slice(0, 200) }), {
+        status: 500, headers: { "Content-Type": "application/json" },
+      });
+    }
   }
   const h = routes[pathname];
   if (!h) return new Response("not found", { status: 404 });
