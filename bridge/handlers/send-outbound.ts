@@ -152,12 +152,12 @@ export async function handle(req: Request): Promise<Response> {
     // Fallback pro link se transcode/upload falhar (pelo menos o áudio toca).
     const oggUrl = await toVoiceOgg(src);
     let audioObj: Json = { link: oggUrl ?? src };
-    if (oggUrl && channel.phone_number_id) {
+    if (oggUrl && channel.phone_number_id && channelToken) {
       try {
         const ob = await fetch(oggUrl);
         if (ob.ok) {
           const bytes = new Uint8Array(await ob.arrayBuffer());
-          const up = await uploadMetaMedia(channelToken, channel.phone_number_id as string, bytes, "audio/ogg", "voz.ogg");
+          const up = await uploadMetaMedia(channelToken!, channel.phone_number_id as string, bytes, "audio/ogg", "voz.ogg");
           if (up.ok && up.id) audioObj = { id: up.id };
           else console.warn("send-outbound: uploadMetaMedia falhou, usa link:", up.status, JSON.stringify(up.data).slice(0, 150));
         }
