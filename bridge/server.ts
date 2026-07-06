@@ -31,6 +31,7 @@ import { handle as labelWindow } from "./handlers/label-window.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { handle as relatorio } from "./handlers/relatorio.ts";
+import { handle as hybridRoutes } from "./handlers/hybrid-routes.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
@@ -68,6 +69,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
   "/relatorio": relatorio,
+  "/hybrid-routes": hybridRoutes,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
@@ -145,8 +147,9 @@ const version = {
     "nutricao-bromatologica-lista",
     "data-cleanup-30d",
     "comment-reply-fase2",
+    "hybrid-routes-uazapi",
   ],
-  build: "2026-07-05-cleanup-comments-fase2",
+  build: "2026-07-06-hybrid-routes",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

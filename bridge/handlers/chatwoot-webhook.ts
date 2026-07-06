@@ -13,6 +13,7 @@ import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 import { windowState } from "../shared/window.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { getHybridRoute, hybridSendText, hybridSendMedia, type SendResult } from "../shared/hybrid.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -131,7 +132,7 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   // Envio por tipo de canal.
-  let res;
+  let res: { ok: boolean; status: number; data: unknown } | undefined;
   let msgType = "text";
   let mediaUrl: string | null = null;
   if (isRyze) {
@@ -163,25 +164,27 @@ export async function handleOutgoing(db: Db, p: Json) {
   } else if (channel.type === "whatsapp") {
     if (!channel.phone_number_id) { console.warn("WA sem phone_number_id", channel.id); return; }
     const url = `${channel.phone_number_id}/messages`;
-    // Disparo de template DE DENTRO DO CHAT: agente digita "/template <nome> [idioma]" (ou /tpl, /t).
-    // Útil pra falar com cliente fora da janela 24h sem sair do Chatwoot.
     const tplCmd = content.trim().match(/^\/(?:template|tpl|t)\s+([a-z0-9_]+)(?:\s+([a-z_]+))?$/i);
 
-    // GATE de janela (Meta): mensagem LIVRE com janela fechada a Meta rejeita EM SILÊNCIO
-    // (Chatwoot mostrava "sent" e nada chegava). Agora: bloqueia o envio e avisa o atendente
-    // com NOTA PRIVADA na própria conversa. Template (/template) passa — é o caminho certo.
+    // Rota híbrida: canal oficial com espelho uazapi → service msgs saem pelo não-oficial (R$0).
+    // Templates e janela fechada sempre pela oficial. Se uazapi falhar → fallback automático.
+    const hybrid = !tplCmd ? await getHybridRoute(channel.id as string, channel.phone_number_id as string) : null;
+
     if (!tplCmd && conv) {
       const win = await windowState(db, conv as Json, channel as Json);
       if (!win.aberta) {
-        const acct = await accountForChannel(channel.id as string);
-        const nota = `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — mensagem NÃO enviada.*\n\n` +
-          `"${content.slice(0, 120)}${content.length > 120 ? "…" : ""}"\n\n` +
-          `O WhatsApp oficial só aceita mensagem livre até ${win.tipo} após a última mensagem do cliente. ` +
-          `Opções: enviar template aprovado (digite /template <nome>) ou aguardar o cliente responder.`;
-        try { await createConversationMessage(cwConversationId!, { content: nota, messageType: "outgoing", private: true }, acct); }
-        catch (e) { console.warn("nota privada janela falhou:", String(e).slice(0, 120)); }
-        await dbg(db, cwMsgId, "blocked-window-closed", { tipo: win.tipo });
-        return;
+        // Híbrido ignora janela Meta — uazapi não tem janela. Só bloqueia se não tem rota híbrida.
+        if (!hybrid) {
+          const acct = await accountForChannel(channel.id as string);
+          const nota = `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — mensagem NÃO enviada.*\n\n` +
+            `"${content.slice(0, 120)}${content.length > 120 ? "…" : ""}"\n\n` +
+            `O WhatsApp oficial só aceita mensagem livre até ${win.tipo} após a última mensagem do cliente. ` +
+            `Opções: enviar template aprovado (digite /template <nome>) ou aguardar o cliente responder.`;
+          try { await createConversationMessage(cwConversationId!, { content: nota, messageType: "outgoing", private: true }, acct); }
+          catch (e) { console.warn("nota privada janela falhou:", String(e).slice(0, 120)); }
+          await dbg(db, cwMsgId, "blocked-window-closed", { tipo: win.tipo });
+          return;
+        }
       }
     }
     if (tplCmd && attachments.length === 0) {
@@ -194,8 +197,6 @@ export async function handleOutgoing(db: Db, p: Json) {
       msgType = "template";
       if (!res.ok) console.error("template via chat falhou:", JSON.stringify((res.data as Json)?.error ?? res.data).slice(0, 200));
     } else if (attachments.length > 0) {
-      // mídia (com ou sem legenda). A legenda do Chatwoot (content) entra na 1ª mídia.
-      // Bug antigo: "if (content) só texto" descartava a mídia quando havia legenda.
       const onlyAudio = attachments.every((att) =>
         metaAttachmentType(att.file_type as string | undefined) === "audio",
       );
@@ -206,25 +207,54 @@ export async function handleOutgoing(db: Db, p: Json) {
         const attachType = metaAttachmentType(att.file_type as string | undefined);
         msgType = attachType === "file" ? "document" : attachType;
         mediaUrl = aUrl;
-        // áudio: transcodifica pra ogg/opus pra virar "voz gravada" (PTT) no WhatsApp.
         let linkUrl = aUrl;
         if (msgType === "audio") { const ogg = await toVoiceOgg(aUrl); if (ogg) { linkUrl = ogg; mediaUrl = ogg; } }
-        const mediaPayload: Json = { link: linkUrl };
-        // áudio NÃO aceita caption; image/video/document aceitam.
-        if (content && !captionUsed && msgType !== "audio") { mediaPayload.caption = content; captionUsed = true; }
-        if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";
-        await dbg(db, cwMsgId, "before-sendMeta-attachment", { msgType, linkUrl, attachmentsTotal: attachments.length });
-        res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload });
-        await dbg(db, cwMsgId, "after-sendMeta-attachment", { ok: res.ok, status: res.status });
+
+        // Híbrido: tenta uazapi primeiro
+        let hybridRes: SendResult | null = null;
+        if (hybrid) {
+          hybridRes = await hybridSendMedia(hybrid, to, linkUrl, msgType, {
+            caption: (content && !captionUsed && msgType !== "audio") ? content : undefined,
+            fileName: msgType === "document" ? ((att.fallback_title as string) ?? "arquivo") : undefined,
+            isVoice: msgType === "audio",
+          });
+          if (hybridRes) { captionUsed = captionUsed || (!!content && msgType !== "audio"); }
+          await dbg(db, cwMsgId, "hybrid-media-attempt", { via: hybridRes?.via ?? "fallback", ok: hybridRes?.ok ?? false });
+        }
+
+        if (!hybridRes) {
+          const mediaPayload: Json = { link: linkUrl };
+          if (content && !captionUsed && msgType !== "audio") { mediaPayload.caption = content; captionUsed = true; }
+          if (msgType === "document") mediaPayload.filename = (att.fallback_title as string) ?? "arquivo";
+          await dbg(db, cwMsgId, "before-sendMeta-attachment", { msgType, linkUrl, attachmentsTotal: attachments.length });
+          res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: msgType, [msgType]: mediaPayload });
+          await dbg(db, cwMsgId, "after-sendMeta-attachment", { ok: res.ok, status: res.status });
+        } else {
+          res = hybridRes;
+        }
       }
-      // legenda que não coube na mídia → texto separado. Áudio puro NÃO manda texto extra
-      // (Chatwoot costuma preencher content com placeholder tipo "áudio").
       if (content && !captionUsed && !onlyAudio) {
-        res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+        if (hybrid) {
+          const hr = await hybridSendText(hybrid, to, content);
+          if (hr) { res = hr; } else {
+            res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+          }
+        } else {
+          res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+        }
         msgType = "text";
       }
     } else {
-      res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+      // Texto puro
+      if (hybrid) {
+        const hr = await hybridSendText(hybrid, to, content);
+        if (hr) { res = hr; } else {
+          res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+        }
+        await dbg(db, cwMsgId, "hybrid-text-attempt", { via: (hr ? "uazapi" : "fallback") });
+      } else {
+        res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
+      }
     }
   } else if (to.startsWith("cmt-fb-") || to.startsWith("cmt-ig-")) {
     // Fase 2: responder COMENTÁRIO no FB/IG (Graph API /{comment-id}/replies).
