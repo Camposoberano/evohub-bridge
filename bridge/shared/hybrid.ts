@@ -79,7 +79,7 @@ export async function hybridSendMedia(
   try {
     const body: Json = {
       number: to,
-      url: mediaUrl,
+      file: mediaUrl,
       type: mediaType === "document" ? "document" : mediaType,
       text: opts.caption || undefined,
     };
