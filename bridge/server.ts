@@ -149,7 +149,7 @@ const version = {
     "comment-reply-fase2",
     "hybrid-routes-uazapi",
   ],
-  build: "2026-07-06-hybrid-console-log",
+  build: "2026-07-06-hybrid-media-fix",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

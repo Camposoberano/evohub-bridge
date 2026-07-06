@@ -79,15 +79,15 @@ export async function hybridSendMedia(
   try {
     const body: Json = {
       number: to,
-      file: mediaUrl,
+      url: mediaUrl,
+      type: mediaType === "document" ? "document" : mediaType,
       text: opts.caption || undefined,
     };
-    if (mediaType === "document") body.docName = opts.fileName ?? "arquivo";
-    let endpoint = "/send/file";
+    if (mediaType === "document") body.fileName = opts.fileName ?? "arquivo";
+    const endpoint = "/send/media";
     if (opts.isVoice || mediaType === "audio") {
-      endpoint = "/send/audio";
       body.ptt = true;
-      body.file = mediaUrl;
+      body.type = "audio";
       delete body.text;
     }
     const r = await uazInstPost(endpoint, route.token, body);
