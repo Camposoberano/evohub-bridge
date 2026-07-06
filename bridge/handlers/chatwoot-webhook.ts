@@ -59,10 +59,8 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  // Comandos do atendente via MACRO (label de comando): cmd-funil-pause/stop/resume/enviar-*
-  if (eventName === "conversation_updated" || eventName === "conversation_label_updated") {
-    handleLabelCommands(db, p).catch((e) => console.error("label-command erro:", e));
-  }
+  // Label commands (cmd-*) handled by macro-poll loop in server.ts — not by webhook
+  // (avoids double-dispatch when both webhook and poll detect the same label).
 
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
@@ -352,7 +350,7 @@ async function handleFunilCommand(db: Db, p: Json) {
   if (!cwConvId) return;
 
   const cmd = ((p.content as string) ?? "").trim().toLowerCase();
-  const match = cmd.match(/^\/funil\s+(pause|pausa|stop|para|parar|resume|retoma|retomar|status)\b/i);
+  const match = cmd.match(/^\/funil\s+(pause|pausa|stop|para|parar|resume|retoma|retomar|status|preco|preço|video|vídeo|plantio|nutricao|nutrição|iniciar|start)\b/i);
   if (!match) return;
 
   const actionMap: Record<string, string> = {
@@ -360,6 +358,11 @@ async function handleFunilCommand(db: Db, p: Json) {
     stop: "stop", para: "stop", parar: "stop",
     resume: "resume", retoma: "resume", retomar: "resume",
     status: "status",
+    preco: "preco", "preço": "preco",
+    video: "video", "vídeo": "video",
+    plantio: "plantio",
+    nutricao: "nutricao", "nutrição": "nutricao",
+    iniciar: "funil", start: "funil",
   };
   const action = actionMap[match[1].toLowerCase()] ?? match[1].toLowerCase();
   const secret = env("CHATWOOT_WEBHOOK_SECRET");

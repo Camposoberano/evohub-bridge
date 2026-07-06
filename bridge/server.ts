@@ -392,6 +392,15 @@ function startMacroCommandLoop() {
         const action = CMD_LABELS[cmdLabel];
         console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
 
+        // Remove label ANTES de executar — evita re-disparo no próximo tick
+        try {
+          const freshLabels = await getConversationLabels(cwConvId, acct);
+          const cleaned = freshLabels.filter((l) => !CMD_LABEL_KEYS.includes(l));
+          if (cleaned.length !== freshLabels.length) {
+            await setConversationLabels(cwConvId, cleaned, acct);
+          }
+        } catch (e) { console.warn("macro-poll cleanup:", String(e).slice(0, 120)); }
+
         try {
           const r = await fetch(`http://localhost:${port}/funil-control?token=${encodeURIComponent(secret)}`, {
             method: "POST",
@@ -401,14 +410,6 @@ function startMacroCommandLoop() {
           const result = await r.json().catch(() => ({}));
           console.log("macro-poll result:", JSON.stringify(result).slice(0, 200));
         } catch (e) { console.error("macro-poll exec erro:", e); }
-
-        try {
-          const freshLabels = await getConversationLabels(cwConvId, acct);
-          const cleaned = freshLabels.filter((l) => !CMD_LABEL_KEYS.includes(l));
-          if (cleaned.length !== freshLabels.length) {
-            await setConversationLabels(cwConvId, cleaned, acct);
-          }
-        } catch (e) { console.warn("macro-poll cleanup:", String(e).slice(0, 120)); }
       }
     } catch (e) { console.error("macro-poll erro:", e); }
   };
