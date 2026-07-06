@@ -11,7 +11,7 @@ import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 import { windowState } from "../shared/window.ts";
-import { createConversationMessage } from "../shared/chatwoot.ts";
+import { createConversationMessage, getConversationLabels, setConversationLabels } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 import type { SendResult } from "../shared/hybrid.ts";
@@ -57,6 +57,11 @@ export async function handle(req: Request): Promise<Response> {
     if (/^\/funil\s/i.test(cmd)) {
       handleFunilCommand(db, p).catch((e) => console.error("funil-command erro:", e));
     }
+  }
+
+  // Comandos do atendente via MACRO (label de comando): cmd-funil-pause/stop/resume
+  if (eventName === "conversation_updated") {
+    handleLabelCommands(db, p).catch((e) => console.error("label-command erro:", e));
   }
 
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
@@ -366,4 +371,43 @@ async function handleFunilCommand(db: Db, p: Json) {
   });
   const result = await res.json().catch(() => ({}));
   console.log("funil-command:", action, "conv", cwConvId, "->", JSON.stringify(result).slice(0, 200));
+}
+
+const CMD_LABELS: Record<string, string> = {
+  "cmd-funil-pause": "pause",
+  "cmd-funil-stop": "stop",
+  "cmd-funil-resume": "resume",
+};
+
+async function handleLabelCommands(db: Db, p: Json) {
+  const conv = (p.conversation ?? p) as Json;
+  const cwConvId = (conv.id ?? p.id) as number | undefined;
+  if (!cwConvId) return;
+
+  const labels = ((conv.labels ?? p.labels ?? []) as string[]);
+  const cmdLabel = labels.find((l) => l in CMD_LABELS);
+  if (!cmdLabel) return;
+
+  const action = CMD_LABELS[cmdLabel];
+  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+
+  const res = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-control?token=${encodeURIComponent(secret)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
+  });
+  const result = await res.json().catch(() => ({}));
+  console.log("label-command:", cmdLabel, "->", action, "conv", cwConvId, "result:", JSON.stringify(result).slice(0, 200));
+
+  // remove label de comando pra ficar reutilizável
+  try {
+    const { data: dbConv } = await db.from("conversations").select("channel_id")
+      .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
+    const acct = dbConv ? await accountForChannel(dbConv.channel_id as string) : undefined;
+    const current = await getConversationLabels(cwConvId, acct);
+    const cleaned = current.filter((l) => !(l in CMD_LABELS));
+    if (cleaned.length !== current.length) {
+      await setConversationLabels(cwConvId, cleaned, acct);
+    }
+  } catch (e) { console.warn("label-command cleanup:", String(e).slice(0, 120)); }
 }
