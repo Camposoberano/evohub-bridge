@@ -59,8 +59,8 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  // Comandos do atendente via MACRO (label de comando): cmd-funil-pause/stop/resume
-  if (eventName === "conversation_updated") {
+  // Comandos do atendente via MACRO (label de comando): cmd-funil-pause/stop/resume/enviar-*
+  if (eventName === "conversation_updated" || eventName === "conversation_label_updated") {
     handleLabelCommands(db, p).catch((e) => console.error("label-command erro:", e));
   }
 
@@ -385,11 +385,18 @@ const CMD_LABELS: Record<string, string> = {
 };
 
 async function handleLabelCommands(db: Db, p: Json) {
-  const conv = (p.conversation ?? p) as Json;
-  const cwConvId = (conv.id ?? p.id) as number | undefined;
+  const cwConvId = (p.conversation?.id ?? p.id) as number | undefined;
   if (!cwConvId) return;
 
-  const labels = ((conv.labels ?? p.labels ?? []) as string[]);
+  // Payload do webhook pode não ter labels atualizadas — busca via API.
+  const { data: dbConv } = await db.from("conversations").select("channel_id")
+    .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
+  const acct = dbConv ? await accountForChannel(dbConv.channel_id as string) : undefined;
+
+  let labels: string[];
+  try { labels = await getConversationLabels(cwConvId, acct); }
+  catch { return; }
+
   const cmdLabel = labels.find((l) => l in CMD_LABELS);
   if (!cmdLabel) return;
 
@@ -406,12 +413,8 @@ async function handleLabelCommands(db: Db, p: Json) {
 
   // remove label de comando pra ficar reutilizável
   try {
-    const { data: dbConv } = await db.from("conversations").select("channel_id")
-      .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-    const acct = dbConv ? await accountForChannel(dbConv.channel_id as string) : undefined;
-    const current = await getConversationLabels(cwConvId, acct);
-    const cleaned = current.filter((l) => !(l in CMD_LABELS));
-    if (cleaned.length !== current.length) {
+    const cleaned = labels.filter((l) => !(l in CMD_LABELS));
+    if (cleaned.length !== labels.length) {
       await setConversationLabels(cwConvId, cleaned, acct);
     }
   } catch (e) { console.warn("label-command cleanup:", String(e).slice(0, 120)); }
