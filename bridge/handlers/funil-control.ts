@@ -19,8 +19,12 @@ export async function handle(req: Request): Promise<Response> {
 
   const body = await req.json().catch(() => ({})) as Json;
   const action = (body.action as string) ?? url.searchParams.get("action") ?? "";
-  const cwConvId = Number(body.chatwoot_conversation_id ?? body.conversation_id);
+  // Aceita: chatwoot_conversation_id (API direta), conversation_id, id (webhook macro),
+  // ou conversation.id (webhook Chatwoot aninhado)
+  const conv_ = (body.conversation ?? {}) as Json;
+  const cwConvId = Number(body.chatwoot_conversation_id ?? body.conversation_id ?? conv_.id ?? body.id);
   if (!cwConvId) return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  console.log("funil-control:", action, "conv", cwConvId);
 
   const db = admin();
   const { data: conv } = await db.from("conversations").select("id, channel_id, contact_id, chatwoot_conversation_id")
