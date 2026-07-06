@@ -149,7 +149,7 @@ const version = {
     "comment-reply-fase2",
     "hybrid-routes-uazapi",
   ],
-  build: "2026-07-06-hybrid-diag",
+  build: "2026-07-06-hybrid-diag-v2",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -210,7 +210,7 @@ function startChatwootOutLoop() {
     try {
       const res = await syncChatwootOut(new Request(url));
       const body = await res.json();
-      if (body.dispatched > 0 || body.errors?.length) console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
+      console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
     } catch (e) {
       console.error("sync-chatwoot-out (auto) erro:", e);
     }
@@ -344,7 +344,7 @@ Deno.serve({ port }, async (req) => {
     try {
       const db = admin();
       const { data: ch } = await db.from("channels")
-        .select("id,name,phone_number,phone_number_id,type,status")
+        .select("id,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier,type,status")
         .eq("type", "whatsapp").not("phone_number_id", "is", null);
       const inst = uazapiConfigured() ? await (await import("./shared/uazapi.ts")).listInstances() : [];
       const norm = (n: string | null) => (n ?? "").replace(/\D/g, "");
@@ -355,6 +355,8 @@ Deno.serve({ port }, async (req) => {
         );
         return {
           channel: c.name, phone: c.phone_number, phone_norm: cp || "(vazio)",
+          chatwoot_inbox_id: c.chatwoot_inbox_id ?? null,
+          chatwoot_inbox_identifier: c.chatwoot_inbox_identifier ?? null,
           uaz_match: match ? (match as Record<string, unknown>).name : null,
         };
       });
