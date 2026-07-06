@@ -38,6 +38,7 @@ import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
+import { envAcct, getConversationLabels, setConversationLabels } from "./shared/chatwoot.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -153,8 +154,9 @@ const version = {
     "funil-control-pause-stop-resume",
     "funil-auto-pause-on-intent",
     "funil-command-private-note",
+    "macro-command-poll-15s",
   ],
-  build: "2026-07-06-hybrid-media-fix",
+  build: "2026-07-06-macro-poll",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -335,6 +337,65 @@ function startDataCleanupLoop() {
   setInterval(run, 24 * 60 * 60 * 1000);
 }
 
+// Macro commands via labels — Chatwoot macros add labels (cmd-*), mas NÃO disparam
+// webhook. Loop poll a cada 15s busca conversas abertas, detecta cmd-* labels, executa
+// funil-control e remove a label. Kill-switch: MACRO_POLL_ENABLED=false.
+const MACRO_POLL_INTERVAL_MS = 15_000;
+const CMD_LABELS: Record<string, string> = {
+  "cmd-funil-pause": "pause",
+  "cmd-funil-stop": "stop",
+  "cmd-funil-resume": "resume",
+  "cmd-iniciar-funil": "funil",
+  "cmd-enviar-preco": "preco",
+  "cmd-enviar-video": "video",
+  "cmd-enviar-plantio": "plantio",
+  "cmd-enviar-nutricao": "nutricao",
+};
+const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
+function startMacroCommandLoop() {
+  if (optionalEnv("MACRO_POLL_ENABLED") === "false") return;
+  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+  const acct = envAcct();
+  const baseUrl = acct.url.replace(/\/+$/, "");
+  const tick = async () => {
+    try {
+      const res = await fetch(`${baseUrl}/api/v1/accounts/${acct.accountId}/conversations?status=open&page=1`, {
+        headers: { "api_access_token": acct.token },
+      });
+      if (!res.ok) { console.warn("macro-poll: list convs", res.status); return; }
+      const json = await res.json();
+      const convs = (json.data?.payload ?? json.payload ?? []) as Array<Record<string, unknown>>;
+      for (const conv of convs) {
+        const labels = (conv.labels ?? []) as string[];
+        const cmdLabel = labels.find((l) => CMD_LABEL_KEYS.includes(l));
+        if (!cmdLabel) continue;
+        const cwConvId = conv.id as number;
+        const action = CMD_LABELS[cmdLabel];
+        console.log("macro-poll: found", cmdLabel, "on conv", cwConvId, "-> action", action);
+        try {
+          const r = await fetch(`http://localhost:${port}/funil-control?token=${encodeURIComponent(secret)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
+          });
+          const result = await r.json().catch(() => ({}));
+          console.log("macro-poll: result", JSON.stringify(result).slice(0, 200));
+        } catch (e) { console.error("macro-poll exec erro:", e); }
+        try {
+          const freshLabels = await getConversationLabels(cwConvId, acct);
+          const cleaned = freshLabels.filter((l) => !CMD_LABEL_KEYS.includes(l));
+          if (cleaned.length !== freshLabels.length) {
+            await setConversationLabels(cwConvId, cleaned, acct);
+          }
+        } catch (e) { console.warn("macro-poll cleanup:", String(e).slice(0, 120)); }
+      }
+    } catch (e) { console.error("macro-poll erro:", e); }
+  };
+  setTimeout(tick, 10_000);
+  setInterval(tick, MACRO_POLL_INTERVAL_MS);
+  console.log("macro-command-poll loop ON (15s)");
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -407,4 +468,5 @@ startRetentionLoop();
 startEnrichLoop();
 startChannelSyncLoop();
 startDataCleanupLoop();
+startMacroCommandLoop();
 console.log(`bridge ouvindo na porta ${port}`);
