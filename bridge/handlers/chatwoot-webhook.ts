@@ -377,6 +377,7 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-funil-pause": "pause",
   "cmd-funil-stop": "stop",
   "cmd-funil-resume": "resume",
+  "cmd-iniciar-funil": "funil",
   "cmd-enviar-preco": "preco",
   "cmd-enviar-video": "video",
   "cmd-enviar-plantio": "plantio",

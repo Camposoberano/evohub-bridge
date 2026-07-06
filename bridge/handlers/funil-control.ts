@@ -74,6 +74,22 @@ export async function handle(req: Request): Promise<Response> {
     });
   }
 
+  // Iniciar funil de apresentação (Mega Sorgo) manualmente
+  if (action === "funil" || action === "iniciar" || action === "start-funil") {
+    const secret = env("CHATWOOT_WEBHOOK_SECRET");
+    const enrollRes = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-enroll?token=${encodeURIComponent(secret)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chatwoot_conversation_id: cwConvId, force: true }),
+    });
+    const enrollData = await enrollRes.json().catch(() => ({})) as Json;
+    if (enrollData.ok) {
+      await nota(cwConvId, `🚀 *Funil de apresentação iniciado!*\n${enrollData.enfileiradas ?? 0} mensagens enfileiradas.`, acct);
+      return json({ ok: true, action: "funil", enfileiradas: enrollData.enfileiradas });
+    }
+    return json({ ok: false, action: "funil", error: enrollData.error ?? "erro ao iniciar funil" }, 500);
+  }
+
   // Dispatch: dispara sequência de intent manualmente (preço, vídeo, plantio, nutrição)
   const DISPATCH_MAP: Record<string, string> = {
     preco: "menu_preco", price: "menu_preco",
@@ -94,7 +110,7 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  return json({ error: "ação desconhecida: " + action + " (use: pause, stop, resume, status, preco, video, plantio, nutricao)" }, 400);
+  return json({ error: "ação desconhecida: " + action + " (use: funil, pause, stop, resume, status, preco, video, plantio, nutricao)" }, 400);
 }
 
 async function resolveChannelAndContact(db: Db, conv: Json): Promise<{ channel: Json; from: string } | null> {
