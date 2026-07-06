@@ -338,8 +338,9 @@ function startDataCleanupLoop() {
 }
 
 // Macro commands via labels — Chatwoot macros add labels (cmd-*), mas NÃO disparam
-// webhook. Loop poll a cada 15s busca conversas abertas, detecta cmd-* labels, executa
-// funil-control e remove a label. Kill-switch: MACRO_POLL_ENABLED=false.
+// webhook. Loop poll a cada 15s usa filter API do Chatwoot pra buscar conversas com
+// qualquer cmd-* label, executa funil-control e remove a label.
+// Kill-switch: MACRO_POLL_ENABLED=false.
 const MACRO_POLL_INTERVAL_MS = 15_000;
 const CMD_LABELS: Record<string, string> = {
   "cmd-funil-pause": "pause",
@@ -352,26 +353,45 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-enviar-nutricao": "nutricao",
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
+
+// Payload do filter API — OR de todos os cmd labels.
+const CMD_FILTER_PAYLOAD = JSON.stringify({
+  payload: CMD_LABEL_KEYS.map((label, i) => ({
+    attribute_key: "labels",
+    filter_operator: "equal_to",
+    values: [label],
+    query_operator: i < CMD_LABEL_KEYS.length - 1 ? "OR" : null,
+  })),
+});
+
 function startMacroCommandLoop() {
   if (optionalEnv("MACRO_POLL_ENABLED") === "false") return;
   const secret = env("CHATWOOT_WEBHOOK_SECRET");
   const acct = envAcct();
   const baseUrl = acct.url.replace(/\/+$/, "");
+  const filterUrl = `${baseUrl}/api/v1/accounts/${acct.accountId}/conversations/filter`;
+
   const tick = async () => {
     try {
-      const res = await fetch(`${baseUrl}/api/v1/accounts/${acct.accountId}/conversations?status=open&page=1`, {
-        headers: { "api_access_token": acct.token },
+      const res = await fetch(filterUrl, {
+        method: "POST",
+        headers: { "api_access_token": acct.token, "Content-Type": "application/json" },
+        body: CMD_FILTER_PAYLOAD,
       });
-      if (!res.ok) { console.warn("macro-poll: list convs", res.status); return; }
+      if (!res.ok) { console.warn("macro-poll: filter", res.status); return; }
       const json = await res.json();
-      const convs = (json.data?.payload ?? json.payload ?? []) as Array<Record<string, unknown>>;
+      const convs = (json.payload ?? []) as Array<Record<string, unknown>>;
+      if (convs.length === 0) return;
+      console.log("macro-poll: found", convs.length, "conv(s) with cmd labels");
+
       for (const conv of convs) {
         const labels = (conv.labels ?? []) as string[];
         const cmdLabel = labels.find((l) => CMD_LABEL_KEYS.includes(l));
         if (!cmdLabel) continue;
         const cwConvId = conv.id as number;
         const action = CMD_LABELS[cmdLabel];
-        console.log("macro-poll: found", cmdLabel, "on conv", cwConvId, "-> action", action);
+        console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
+
         try {
           const r = await fetch(`http://localhost:${port}/funil-control?token=${encodeURIComponent(secret)}`, {
             method: "POST",
@@ -379,8 +399,9 @@ function startMacroCommandLoop() {
             body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
           });
           const result = await r.json().catch(() => ({}));
-          console.log("macro-poll: result", JSON.stringify(result).slice(0, 200));
+          console.log("macro-poll result:", JSON.stringify(result).slice(0, 200));
         } catch (e) { console.error("macro-poll exec erro:", e); }
+
         try {
           const freshLabels = await getConversationLabels(cwConvId, acct);
           const cleaned = freshLabels.filter((l) => !CMD_LABEL_KEYS.includes(l));
@@ -393,7 +414,7 @@ function startMacroCommandLoop() {
   };
   setTimeout(tick, 10_000);
   setInterval(tick, MACRO_POLL_INTERVAL_MS);
-  console.log("macro-command-poll loop ON (15s)");
+  console.log("macro-command-poll loop ON (15s, filter API)");
 }
 
 Deno.serve({ port }, async (req) => {
