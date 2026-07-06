@@ -90,8 +90,9 @@ export async function hybridSendMedia(
       body.type = "audio";
       delete body.text;
     }
+    console.log("hybrid-media-req:", endpoint, JSON.stringify(body).slice(0, 400));
     const r = await uazInstPost(endpoint, route.token, body);
-    if (!r.ok) { console.warn("hybrid media falhou, fallback oficial:", r.status); return null; }
+    if (!r.ok) { console.warn("hybrid media falhou, fallback oficial:", r.status, JSON.stringify(r.data).slice(0, 300)); return null; }
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) { console.warn("hybrid media erro, fallback:", String(e).slice(0, 100)); return null; }
 }
