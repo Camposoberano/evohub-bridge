@@ -15,6 +15,8 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, isSaudacaoIntent, transcribeAudio } from "../shared/intent.ts";
+import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
+import { toVoiceOgg } from "../shared/audio.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -1237,23 +1239,48 @@ async function resumeCampaign(db: Db, channel: Json, from: string) {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  const hybrid = await getHybridRoute(channel.id as string, phone ?? "", channel.phone_number as string);
+  if (!hybrid && (!token || !phone)) return;
 
   for (const step of camp.steps) {
-    let body: Json;
-    if (step.type === "text") {
-      if (!step.text) continue; // texto vazio = pula
-      body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text } };
-    } else {
-      if (!step.file) continue; // mídia sem URL = pula (não quebra a sequência)
-      const media: Json = { link: step.file };
-      // áudio NÃO aceita caption na Cloud API; image/video/document aceitam.
-      if (step.type !== "audio" && step.text) media.caption = step.text;
-      if (step.type === "document" && step.text) media.filename = step.text;
-      body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: media };
+    let r: { ok: boolean; status: number; data: unknown } | null = null;
+
+    if (hybrid) {
+      if (step.type === "text") {
+        if (!step.text) continue;
+        r = await hybridSendText(hybrid, key, step.text);
+      } else {
+        if (!step.file) continue;
+        let mediaUrl = step.file as string;
+        if (step.type === "audio") {
+          const ogg = await toVoiceOgg(mediaUrl);
+          if (ogg) mediaUrl = ogg;
+        }
+        r = await hybridSendMedia(hybrid, key, mediaUrl, step.type as string, {
+          caption: (step.type !== "audio" && step.text) ? step.text as string : undefined,
+          fileName: step.type === "document" ? (step.text as string ?? "arquivo") : undefined,
+          isVoice: step.type === "audio",
+        });
+      }
+      if (r) { console.log("resumeCampaign hybrid:", step.type, "uazapi OK"); continue; }
+      console.log("resumeCampaign hybrid:", step.type, "fallback oficial");
     }
-    const r = await sendMeta(token, `${phone}/messages`, body);
-    if (!r.ok) console.error(`resumeCampaign step falhou (${step.type}):`, JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200));
+
+    if (token && phone) {
+      let body: Json;
+      if (step.type === "text") {
+        if (!step.text) continue;
+        body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text } };
+      } else {
+        if (!step.file) continue;
+        const media: Json = { link: step.file };
+        if (step.type !== "audio" && step.text) media.caption = step.text;
+        if (step.type === "document" && step.text) media.filename = step.text;
+        body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: media };
+      }
+      r = await sendMeta(token, `${phone}/messages`, body);
+      if (!r.ok) console.error(`resumeCampaign step falhou (${step.type}):`, JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200));
+    }
   }
 
   // marca concluído

@@ -25,6 +25,7 @@ import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
+import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 
 type Json = Record<string, unknown>;
 
@@ -53,15 +54,17 @@ export async function handle(req: Request): Promise<Response> {
   const isWhatsapp = channel.type === "whatsapp";
   if (isWhatsapp && !channel.phone_number_id) return json({ error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)" }, 422);
 
+  const hybrid = isWhatsapp ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string) : null;
+
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const channelToken = secret?.channel_token as string | undefined;
-  if (!channelToken) return json({ error: "canal sem token" }, 404);
+  if (!channelToken && !hybrid) return json({ error: "canal sem token" }, 404);
   const acct = await accountForChannel(channel.id as string);
 
   // GATE de janela (Meta): funil/n8n mandando mensagem livre com janela fechada = rejeição
   // silenciosa e custo perdido. Bloqueia e deixa NOTA PRIVADA na conversa (1x/dia por conversa,
   // pra retry do cron não virar spam de nota).
-  if (isWhatsapp) {
+  if (isWhatsapp && !hybrid) {
     const win = await windowState(db, conv as Json, channel as Json);
     if (!win.aberta) {
       const dia = new Date().toISOString().slice(0, 10);
@@ -91,11 +94,17 @@ export async function handle(req: Request): Promise<Response> {
     const results: Json[] = [];
     for (let i = 0; i < texts.length; i++) {
       const content = texts[i];
-      const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
-      const metaPayload = isWhatsapp
-        ? { messaging_product: "whatsapp", to, type: "text", text: { body: content } }
-        : { recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE" };
-      const res = await sendMeta(channelToken, path, metaPayload);
+      let res: { ok: boolean; status: number; data: unknown };
+      const hr = hybrid ? await hybridSendText(hybrid, to, content) : null;
+      if (hr) {
+        res = hr;
+      } else {
+        const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
+        const metaPayload = isWhatsapp
+          ? { messaging_product: "whatsapp", to, type: "text", text: { body: content } }
+          : { recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE" };
+        res = await sendMeta(channelToken!, path, metaPayload);
+      }
       const d = res.data as Json;
       const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
 
@@ -187,11 +196,31 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "tipo desconhecido: " + type }, 400);
   }
 
-  const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
-  const metaPayload = isWhatsapp
-    ? { messaging_product: "whatsapp", to, ...metaBody }
-    : { recipient: { id: to }, message: { text: registroTexto }, messaging_type: "RESPONSE" }; // FB/IG: só texto
-  const res = await sendMeta(channelToken, path, metaPayload);
+  let res: { ok: boolean; status: number; data: unknown } | undefined;
+
+  if (hybrid) {
+    if (type === "text") {
+      const content = (payload.content as string) ?? "";
+      res = (await hybridSendText(hybrid, to, content)) ?? undefined;
+    } else if (type === "audio") {
+      const src = payload.media_url as string;
+      const oggUrl = await toVoiceOgg(src);
+      res = (await hybridSendMedia(hybrid, to, oggUrl ?? src, "audio", { isVoice: true })) ?? undefined;
+    } else if (type === "image" || type === "video") {
+      const link = payload.media_url as string;
+      res = (await hybridSendMedia(hybrid, to, link, type, { caption: payload.caption as string | undefined })) ?? undefined;
+    }
+    if (res) console.log("send-outbound hybrid:", type, "uazapi OK");
+    else console.log("send-outbound hybrid:", type, "fallback oficial");
+  }
+
+  if (!res) {
+    const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
+    const metaPayload = isWhatsapp
+      ? { messaging_product: "whatsapp", to, ...metaBody }
+      : { recipient: { id: to }, message: { text: registroTexto }, messaging_type: "RESPONSE" };
+    res = await sendMeta(channelToken!, path, metaPayload);
+  }
 
   const d = res.data as Json;
   const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
