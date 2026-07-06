@@ -13,7 +13,8 @@ import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 import { windowState } from "../shared/window.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { getHybridRoute, hybridSendText, hybridSendMedia, type SendResult } from "../shared/hybrid.ts";
+import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
+import type { SendResult } from "../shared/hybrid.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -168,7 +169,7 @@ export async function handleOutgoing(db: Db, p: Json) {
 
     // Rota híbrida: canal oficial com espelho uazapi → service msgs saem pelo não-oficial (R$0).
     // Templates e janela fechada sempre pela oficial. Se uazapi falhar → fallback automático.
-    const hybrid = !tplCmd ? await getHybridRoute(channel.id as string, channel.phone_number_id as string) : null;
+    const hybrid = !tplCmd ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string) : null;
 
     if (!tplCmd && conv) {
       const win = await windowState(db, conv as Json, channel as Json);

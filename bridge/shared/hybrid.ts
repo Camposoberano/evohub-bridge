@@ -1,88 +1,71 @@
-// hybrid — rota híbrida: canal oficial Meta pode ter uma instância uazapi espelho
-// pra enviar mensagens de serviço (R$0) em vez da API oficial (R$0,035/msg a partir
-// de 01/10/2026). Templates sempre saem pela oficial. Se uazapi falhar (offline,
-// bloqueio web), fallback automático pra sendMeta.
+// hybrid — rota híbrida AUTO-DISCOVERY: cruza phone_number do canal oficial com
+// números conectados no uazapi. Se o mesmo número está no oficial E no uazapi,
+// mensagens de serviço saem pelo não-oficial (R$0). Templates sempre pela oficial.
+// Se uazapi falhar (offline, bloqueio web), fallback automático pra sendMeta.
 //
-// Config em soberano-config/hybrid-routes.json:
-//   { "<channel_id>": { "provider": "uazapi", "instance": "<nome_instancia>" } }
-//
-// Suporta extensão futura pra ryzeapi (provider: "ryzeapi").
-import { admin } from "./supabase.ts";
+// Zero config: não precisa de JSON manual. Basta conectar o número no uazapi
+// (coexistência) e o bridge detecta sozinho.
 import {
   instPost as uazInstPost,
-  tokenForInstance as uazTokenForInstance,
+  listInstances,
   uazapiConfigured,
 } from "./uazapi.ts";
 
-const BUCKET = "soberano-config";
-const FILE = "hybrid-routes.json";
-
 type Json = Record<string, unknown>;
+type UazInstance = { name: string; number: string | null; status: string; token: string };
 
 export type HybridRoute = {
-  provider: "uazapi" | "ryzeapi";
+  provider: "uazapi";
   instance: string;
-  enabled?: boolean;
+  token: string;
 };
 
-let cache: Record<string, HybridRoute> | null = null;
+// Cache das instâncias uazapi (recarrega a cada 60s).
+let instCache: UazInstance[] = [];
 let ts = 0;
-const TTL_MS = 30_000;
+const TTL_MS = 60_000;
 
-async function dl(): Promise<Record<string, HybridRoute>> {
-  try {
-    // deno-lint-ignore no-explicit-any
-    const { data } = await (admin() as any).storage.from(BUCKET).download(FILE);
-    if (data) return JSON.parse(await data.text());
-  } catch { /* arquivo ainda não existe = sem rotas */ }
-  return {};
-}
-
-async function refresh() {
+async function refreshInstances() {
   const now = Date.now();
-  if (cache && now - ts <= TTL_MS) return;
-  cache = await dl();
-  ts = now;
+  if (instCache.length && now - ts <= TTL_MS) return;
+  try {
+    instCache = await listInstances();
+    ts = now;
+  } catch (e) { console.warn("hybrid: erro listando uazapi:", String(e).slice(0, 100)); }
 }
 
-// Busca por channel_id OU phone_number_id (chaves flexíveis no JSON).
-export async function getHybridRoute(channelId: string, phoneNumberId?: string): Promise<HybridRoute | null> {
-  if (!uazapiConfigured()) return null;
-  await refresh();
-  const r = cache![channelId] ?? (phoneNumberId ? cache![phoneNumberId] : undefined);
-  if (!r || r.enabled === false) return null;
-  return r;
+// Normaliza número pra comparação: só dígitos, sem +/espaço/traço.
+function norm(n: string | null | undefined): string {
+  return (n ?? "").replace(/\D/g, "");
 }
 
-export async function getAllRoutes(): Promise<Record<string, HybridRoute>> {
-  await refresh();
-  return { ...cache! };
-}
-
-export async function setRoute(channelId: string, route: HybridRoute | null): Promise<void> {
-  const routes = await dl();
-  if (route) routes[channelId] = route;
-  else delete routes[channelId];
-  const blob = new Blob([JSON.stringify(routes, null, 2)], { type: "application/json" });
-  // deno-lint-ignore no-explicit-any
-  await (admin() as any).storage.from(BUCKET).upload(FILE, blob, {
-    upsert: true, contentType: "application/json",
-  });
-  cache = routes;
-  ts = Date.now();
+// Descobre se o canal oficial tem espelho uazapi pelo número.
+// channelPhone = phone_number do canal (display_phone_number da Meta, ex: "+55 11 91036-3320")
+// Cruza contra os números conectados nas instâncias uazapi.
+export async function getHybridRoute(
+  _channelId: string,
+  _phoneNumberId?: string,
+  channelPhone?: string,
+): Promise<HybridRoute | null> {
+  if (!uazapiConfigured() || !channelPhone) return null;
+  await refreshInstances();
+  const target = norm(channelPhone);
+  if (!target || target.length < 10) return null;
+  const match = instCache.find((i) =>
+    i.status === "connected" && norm(i.number) === target
+  );
+  if (!match) return null;
+  return { provider: "uazapi", instance: match.name, token: match.token };
 }
 
 export type SendResult = { ok: boolean; status: number; data: unknown; via: "uazapi" | "official" };
 
-// Envia texto via uazapi. Retorna null se instância offline/não encontrada (caller faz fallback).
+// Envia texto via uazapi. Retorna null se falhar (caller faz fallback pro oficial).
 export async function hybridSendText(
   route: HybridRoute, to: string, text: string,
 ): Promise<SendResult | null> {
-  if (route.provider !== "uazapi") return null;
-  const token = await uazTokenForInstance(route.instance);
-  if (!token) return null;
   try {
-    const r = await uazInstPost("/send/text", token, { number: to, text });
+    const r = await uazInstPost("/send/text", route.token, { number: to, text });
     if (!r.ok) { console.warn("hybrid text falhou, fallback oficial:", r.status); return null; }
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) { console.warn("hybrid text erro, fallback:", String(e).slice(0, 100)); return null; }
@@ -93,9 +76,6 @@ export async function hybridSendMedia(
   route: HybridRoute, to: string, mediaUrl: string, mediaType: string,
   opts: { caption?: string; fileName?: string; isVoice?: boolean },
 ): Promise<SendResult | null> {
-  if (route.provider !== "uazapi") return null;
-  const token = await uazTokenForInstance(route.instance);
-  if (!token) return null;
   try {
     const body: Json = {
       number: to,
@@ -103,8 +83,6 @@ export async function hybridSendMedia(
       text: opts.caption || undefined,
     };
     if (mediaType === "document") body.docName = opts.fileName ?? "arquivo";
-    // uazapi /send/file detecta tipo automaticamente pela URL/content-type.
-    // Para voz (PTT), usamos /send/audio com ptt=true.
     let endpoint = "/send/file";
     if (opts.isVoice || mediaType === "audio") {
       endpoint = "/send/audio";
@@ -112,7 +90,7 @@ export async function hybridSendMedia(
       body.file = mediaUrl;
       delete body.text;
     }
-    const r = await uazInstPost(endpoint, token, body);
+    const r = await uazInstPost(endpoint, route.token, body);
     if (!r.ok) { console.warn("hybrid media falhou, fallback oficial:", r.status); return null; }
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) { console.warn("hybrid media erro, fallback:", String(e).slice(0, 100)); return null; }
