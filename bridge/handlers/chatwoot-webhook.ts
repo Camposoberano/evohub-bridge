@@ -385,7 +385,8 @@ const CMD_LABELS: Record<string, string> = {
 };
 
 async function handleLabelCommands(db: Db, p: Json) {
-  const cwConvId = (p.conversation?.id ?? p.id) as number | undefined;
+  const conv = (p.conversation ?? p) as Json;
+  const cwConvId = (conv.id ?? p.id) as number | undefined;
   if (!cwConvId) return;
 
   // Payload do webhook pode não ter labels atualizadas — busca via API.

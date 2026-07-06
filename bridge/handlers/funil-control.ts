@@ -4,7 +4,7 @@
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
-import { createConversationMessage } from "../shared/chatwoot.ts";
+import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
 
@@ -123,7 +123,7 @@ async function resolveChannelAndContact(db: Db, conv: Json): Promise<{ channel: 
   return { channel: channel as Json, from: contact.external_contact_id as string };
 }
 
-async function nota(cwConvId: number, text: string, acct: string) {
+async function nota(cwConvId: number, text: string, acct: CwAcct) {
   try { await createConversationMessage(cwConvId, { content: text, messageType: "outgoing", private: true }, acct); }
   catch (e) { console.warn("funil-control nota falhou:", String(e).slice(0, 120)); }
 }
