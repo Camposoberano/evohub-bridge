@@ -575,7 +575,7 @@ const VIDEO_CAPTIONS: Record<string, string> = {
 // v1: 3:00 | v2: 2:30 | v3: 1:50 | v4: 2:50 | v5: fim
 const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
 
-async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+export async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -1098,7 +1098,7 @@ async function handleSaudacao(db: Db, channel: Json, from: string, _acct?: CwAcc
   try { await enrollIfNew(db, channel, from); } catch (e) { console.error("saudacao enroll erro:", e); }
 }
 
-async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
+export async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
   // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
   if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
   if (menuId === "menu_depoimento") return await handleVideoSequence(db, channel, from, acct);

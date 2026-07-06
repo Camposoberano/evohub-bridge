@@ -1,4 +1,4 @@
-// funil-control — controle manual do funil (pause/stop/resume/status).
+// funil-control — controle manual do funil (pause/stop/resume/status/dispatch).
 // Chamado por macros do Chatwoot ou API direta.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { admin } from "../shared/supabase.ts";
@@ -6,8 +6,10 @@ import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { handleMenuClick } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
+type Db = ReturnType<typeof admin>;
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
@@ -21,7 +23,7 @@ export async function handle(req: Request): Promise<Response> {
   if (!cwConvId) return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
 
   const db = admin();
-  const { data: conv } = await db.from("conversations").select("id, channel_id, chatwoot_conversation_id")
+  const { data: conv } = await db.from("conversations").select("id, channel_id, contact_id, chatwoot_conversation_id")
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
 
@@ -72,7 +74,37 @@ export async function handle(req: Request): Promise<Response> {
     });
   }
 
-  return json({ error: "ação desconhecida: " + action + " (use: pause, stop, resume, status)" }, 400);
+  // Dispatch: dispara sequência de intent manualmente (preço, vídeo, plantio, nutrição)
+  const DISPATCH_MAP: Record<string, string> = {
+    preco: "menu_preco", price: "menu_preco",
+    video: "menu_depoimento", videos: "menu_depoimento", depoimento: "menu_depoimento",
+    plantio: "menu_plantio", adubacao: "menu_plantio",
+    nutricao: "menu_nutricao", nutricional: "menu_nutricao",
+  };
+  const menuId = DISPATCH_MAP[action];
+  if (menuId) {
+    const resolved = await resolveChannelAndContact(db, conv);
+    if (!resolved) return json({ error: "canal ou contato não encontrado" }, 404);
+    try {
+      await handleMenuClick(db, resolved.channel, resolved.from, menuId, acct);
+      await nota(cwConvId, `🚀 *Sequência "${action}" disparada manualmente.*`, acct);
+      return json({ ok: true, action, dispatched: menuId });
+    } catch (e) {
+      return json({ error: String(e).slice(0, 200) }, 500);
+    }
+  }
+
+  return json({ error: "ação desconhecida: " + action + " (use: pause, stop, resume, status, preco, video, plantio, nutricao)" }, 400);
+}
+
+async function resolveChannelAndContact(db: Db, conv: Json): Promise<{ channel: Json; from: string } | null> {
+  const { data: channel } = await db.from("channels").select("*")
+    .eq("id", conv.channel_id).maybeSingle();
+  if (!channel) return null;
+  const { data: contact } = await db.from("contacts").select("external_contact_id")
+    .eq("id", conv.contact_id).maybeSingle();
+  if (!contact?.external_contact_id) return null;
+  return { channel: channel as Json, from: contact.external_contact_id as string };
 }
 
 async function nota(cwConvId: number, text: string, acct: string) {
@@ -80,7 +112,7 @@ async function nota(cwConvId: number, text: string, acct: string) {
   catch (e) { console.warn("funil-control nota falhou:", String(e).slice(0, 120)); }
 }
 
-// Auto-pause: chamado pelo inbound quando intent é detectado em conversa com funil ativo.
+// Auto-pause: chamado pelo hub-webhook quando intent é detectado em conversa com funil ativo.
 export async function autoPauseFunil(conversationId: string): Promise<boolean> {
   const db = admin();
   const { data: seq } = await db.from("sales_sequences").select("id, status")

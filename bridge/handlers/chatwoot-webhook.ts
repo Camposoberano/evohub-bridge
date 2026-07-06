@@ -377,6 +377,10 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-funil-pause": "pause",
   "cmd-funil-stop": "stop",
   "cmd-funil-resume": "resume",
+  "cmd-enviar-preco": "preco",
+  "cmd-enviar-video": "video",
+  "cmd-enviar-plantio": "plantio",
+  "cmd-enviar-nutricao": "nutricao",
 };
 
 async function handleLabelCommands(db: Db, p: Json) {
