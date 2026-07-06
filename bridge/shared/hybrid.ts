@@ -86,8 +86,8 @@ export async function hybridSendMedia(
     if (mediaType === "document") body.fileName = opts.fileName ?? "arquivo";
     const endpoint = "/send/media";
     if (opts.isVoice || mediaType === "audio") {
-      body.ptt = true;
-      body.type = "audio";
+      body.type = "ptt";
+      delete body.ptt;
       delete body.text;
     }
     console.log("hybrid-media-req:", endpoint, JSON.stringify(body).slice(0, 400));
