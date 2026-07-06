@@ -62,10 +62,24 @@ function closingList(gancho: { text: string; row: Botao } | null): Peca {
   return { offset: 0, kind: "list", text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌", buttonLabel: "Ver opções", sections };
 }
 
+function turnoBRT(): string {
+  const h = ((Date.now() - TZ_OFFSET) % 86_400_000) / 3_600_000 | 0;
+  return h < 12 ? "bom dia" : h < 18 ? "boa tarde" : "boa noite";
+}
+
+function saudacaoDinamica(): string {
+  const aberturas = ["Olá", "Oi", "E aí"];
+  const finais = ["tudo bem?", "que bom ter você aqui!", "como vai?", "tudo certo?"];
+  const i = Date.now() % aberturas.length;
+  const j = (Date.now() >> 4) % finais.length;
+  const turno = turnoBRT();
+  return `${aberturas[i]}, ${turno}, vida boa! ${finais[j]} 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾`;
+}
+
 // roteiro de cada fase. offset = segundos DENTRO do acesso (relativo ao início dele).
 function fase1(): Peca[] {
   return [
-    { offset: 0, kind: "text", text: "Vida boa! 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾" },
+    { offset: 0, kind: "text", text: saudacaoDinamica() },
     { offset: 70, kind: "media", mediaType: "image", slot: "logo",
       caption: "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜" },
     { offset: 140, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
