@@ -83,6 +83,15 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
+  // Anti-dup: n8n cron pode chamar send-outbound 2x pra mesma scheduled_message se o envio
+  // demora mais que o intervalo do cron (60s). Claim atômico por conteúdo+conversa (2min TTL).
+  const contentHash = JSON.stringify(payload).slice(0, 200);
+  const claimKey = `send-out-${cwConvId}-${type}-${contentHash.length}-${contentHash.slice(0, 60)}`;
+  if (!await claimDelivery(db, claimKey, "send-outbound")) {
+    console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
+    return json({ ok: true, deduplicated: true });
+  }
+
   // text_sequence: várias mensagens de texto com pausa real entre elas (efeito "digitando").
   // Cron de 1min não separa peças com gap < 60s -> o pacing tem que ser feito aqui dentro,
   // numa chamada só, em vez de depender do agendamento de cada peça.
