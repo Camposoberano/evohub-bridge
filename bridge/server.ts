@@ -156,7 +156,7 @@ const version = {
     "funil-command-private-note",
     "macro-command-poll-15s",
   ],
-  build: "2026-07-06-macro-poll",
+  build: "2026-07-06-anti-dup",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
