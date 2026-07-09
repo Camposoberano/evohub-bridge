@@ -227,6 +227,12 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getString(context, "message_id"),
     getString(message, "uuid"),
     getString(context, "uuid"),
+    getString(getJson(message, "key"), "id"),
+    getString(getJson(context, "key"), "id"),
+    getString(getJson(getJson(message, "message"), "key"), "id"),
+    getString(getJson(getJson(context, "message"), "key"), "id"),
+    getString(getJson(message, "message"), "id"),
+    getString(getJson(context, "message"), "id"),
   );
   const sentAt = firstString(
     getString(message, "messageTimestamp"),

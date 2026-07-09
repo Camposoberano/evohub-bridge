@@ -57,6 +57,13 @@ export async function ingestInbound(
     ) {
       return { inserted: false, reason: "duplicate" };
     }
+  } else {
+    // Alguns provedores não-oficiais enviam retry/eco sem id estável. Sem essa guarda, cada
+    // retry vira uma nova mensagem "incoming" no Chatwoot e pode formar loop pelo webhook.
+    const fallbackKey = await fallbackInboundDeliveryKey(channel, msg);
+    if (!(await claimDelivery(db, fallbackKey, "wa-fallback"))) {
+      return { inserted: false, reason: "duplicate-fallback" };
+    }
   }
 
   const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
@@ -333,4 +340,51 @@ function firstAttachmentUrl(message: Record<string, unknown>): string | null {
   const dataUrl = attachment.data_url as string | undefined;
   const thumbUrl = attachment.thumb_url as string | undefined;
   return dataUrl ?? thumbUrl ?? null;
+}
+
+async function fallbackInboundDeliveryKey(
+  channel: Json,
+  msg: {
+    from: string;
+    msgType: string;
+    content: string;
+    sentAt?: string;
+    attachments?: InboundAttachment[];
+    outgoing?: boolean;
+  },
+): Promise<string> {
+  const firstAttachment = msg.attachments?.[0];
+  const attachmentSig = firstAttachment
+    ? [
+      firstAttachment.filename,
+      firstAttachment.contentType,
+      firstAttachment.bytes?.byteLength ?? 0,
+      firstAttachment.sourceUrl ?? "",
+    ].join(":")
+    : "";
+  const bucket = fallbackTimeBucket(msg.sentAt);
+  const raw = [
+    channel.id ?? "",
+    msg.outgoing ? "out" : "in",
+    msg.from,
+    msg.msgType,
+    msg.content,
+    attachmentSig,
+    bucket,
+  ].join("|");
+  return `wa-fallback-${await sha256Hex(raw)}`;
+}
+
+function fallbackTimeBucket(sentAt?: string): number {
+  const parsed = sentAt ? Date.parse(sentAt) : NaN;
+  const time = Number.isFinite(parsed) ? parsed : Date.now();
+  return Math.floor(time / (2 * 60 * 1000));
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
