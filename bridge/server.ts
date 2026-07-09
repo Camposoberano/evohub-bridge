@@ -484,15 +484,19 @@ function startChannelSyncLoop() {
   setInterval(run, 5 * 60 * 1000);
 }
 
-startSyncLoop();
-startCommentsLoop();
-startAvatarLoop();
-startChatwootOutLoop();
-startLabelWindowLoop();
-startRollupLoop();
-startRetentionLoop();
-startEnrichLoop();
-startChannelSyncLoop();
-startDataCleanupLoop();
-startMacroCommandLoop();
+if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
+  console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
+} else {
+  startSyncLoop();
+  startCommentsLoop();
+  startAvatarLoop();
+  startChatwootOutLoop();
+  startLabelWindowLoop();
+  startRollupLoop();
+  startRetentionLoop();
+  startEnrichLoop();
+  startChannelSyncLoop();
+  startDataCleanupLoop();
+  startMacroCommandLoop();
+}
 console.log(`bridge ouvindo na porta ${port}`);
