@@ -1,0 +1,1 @@
+Session was handed off by user. No further action taken in this session.

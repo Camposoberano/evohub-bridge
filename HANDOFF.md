@@ -1,7 +1,125 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
 > Documento de estado do projeto. Lê isto antes de mexer em qualquer coisa.
-> Última atualização: 2026-06-15.
+> Última atualização: 2026-07-09 14:00
+
+## 🔁 SESSÃO ATUAL — 2026-07-09
+- Revisão do painel/dashboard e da arquitetura do projeto concluída.
+- Verificado o uso de `cofre.camposoberano.com.br` e `cofre.2.camposoberano.com.br` no frontend e nos scripts.
+- Confirmado que a ponte Deno, o Chatwoot, o Supabase e os endpoints uazapi/ryzeapi estão integrados pela mesma base de código.
+- Nenhuma correção de código aplicada nesta sessão; foco em alinhamento e validação de funções existentes.
+
+## 🔴 PRÓXIMO PASSO: Recriar caixa 5895 do zero
+
+Usuário vai pausar e depois voltar. **Tarefa principal**: apagar e recriar a inbox do 5895 no Chatwoot.
+
+## 📋 Resumo da sessão (08/07/2026)
+
+### Problemas encontrados e resolvidos
+1. **Webhook global EVO Hub desabilitado** → recriado 3x, sempre auto-desabilitado pelo EVO Hub (falhas de entrega)
+2. **Chatwoot com 500 Internal Server Error** → VPS sobrecarregada (13.3/15.6 GiB RAM, 11.8% CPU steal)
+3. **Sidekiq a 73.7% CPU** → inboxes `[DESATIVADA] WA uazapi 5895` (id 43) e `[DESATIVADA] WA uazapi 11910363320` (id 44) com webhooks quebrados (404) em retry loop → **deletadas**
+4. **PostgreSQL healthcheck quebrado** (`-U ${POSTGRES_USER}` resolvido vazio) → corrigido no docker-compose do Chatwoot para `-U $${POSTGRES_USER}` (escapado)
+
+### Estado atual
+- **Bridge**: online, build `2026-07-06-anti-dup`, zero erros
+- **Chatwoot**: voltou, sem 500, inboxes quebradas deletadas
+- **Webhook 5895**: `e0b6a12d` (active, sem channel_ids — EVO Hub ignora)
+- **5895**: mensagens chegam no WhatsApp mas não aparecem no Chatwoot
+- **VPS**: ainda no limite (12 serviços em ~16 GB RAM)
+- **Sessão 2026-07-09**: verificação do painel e alinhamento de arquitetura concluída; validado que `cofre`/`cofre.2` e `Supabase`/`Chatwoot` entram na mesma infraestrutura.
+
+## 📦 CONFIGS DO 5895 (backup pra recriação)
+
+### Canal no Supabase
+```
+id: 3516c0a2-9519-4b57-9d32-ad342f6f8242
+type: whatsapp
+name: "5895"
+status: active
+hub_channel_id: 3cd9df61-a599-4c32-8da8-b3e683550284
+phone_number_id: 956105997592428
+waba_id: 743886211614541
+phone_number: +55 19 99971-5895
+display_name: Campo Soberano
+chatwoot_inbox_id: 34
+chatwoot_inbox_identifier: gYUdPdQfV4CfnKs7rJYM72Ki
+channel_token: b8c03c37e37c5b18d123e815361a2dc5a0fd77f8bfbd51b0bba09cc61028de6d
+```
+
+### Canal no EVO Hub
+```
+id: 3cd9df61-a599-4c32-8da8-b3e683550284
+waba_id: 743886211614541
+business_id: 699887902753241
+phone_number_id: 956105997592428
+status: CONNECTED, qualidade GREEN
+```
+
+### Inbox no Chatwoot
+```
+Conta 1
+id: 34
+name: WA Oficial 5895
+inbox_identifier: gYUdPdQfV4CfnKs7rJYM72Ki
+channel_type: Channel::Api
+```
+
+### Webhook ativo (dedicado)
+```
+id: e0b6a12d-f41f-474f-9b8d-457e226f67cf
+name: webhook 5895
+url: https://cofre.camposoberano.com.br/hub-webhook
+status: active
+events: messages, message_echoes, smb_message_echoes, message_deliveries, message_reads
+all_channels: false
+```
+
+### Etiquetas (labels) do Chatwoot
+```
+1  | testando-agente     | #6BBF8A | Habilita agente IA em modo teste
+2  | agente-off          | #E8735A | Desabilita agente IA
+16 | janela-aberta       | #2ECC71 | Janela Meta aberta
+17 | janela-fechando     | #F39C12 | Janela Meta fechando <2h
+18 | janela-fechada      | #E74C3C | Janela Meta fechada
+19 | canal-oficial       | #3498DB | Canal WhatsApp oficial
+20 | canal-nao-oficial   | #9B59B6 | Canal WhatsApp não-oficial
+21 | origem-anuncio      | #1ABC9C | Lead veio de anúncio (CTWA) - janela 72h
+22 | cmd-funil-pause     | #f59e0b | Comando funil
+23 | cmd-funil-stop      | #ef4444 | Comando funil
+24 | cmd-funil-resume    | #22c55e | Comando funil
+25 | cmd-enviar-preco    | #f97316 | Disparo
+26 | cmd-enviar-video    | #8b5cf6 | Disparo
+27 | cmd-enviar-plantio  | #22c55e | Disparo
+28 | cmd-enviar-nutricao | #06b6d4 | Disparo
+29 | cmd-iniciar-funil   | #3b82f6 | Iniciar funil
+```
+
+### Sistema Híbrido (auto-discovery uazapi)
+- Feature flag: `hybrid-routes-uazapi` (ativa no build)
+- Endpoint: `GET /hybrid-routes` (auth: token ou JWT)
+- Lógica: cruza `phone_number` do canal oficial com instâncias uazapi `connected`
+- Templates (`/template`) → SEMPRE oficial
+- Texto/mídia → uazapi primeiro, fallback oficial se falhar
+- Cache: 60s
+- Janela Meta ignorada quando há rota híbrida
+
+## 🚀 Deploy
+- `git push origin master:main` (Coolify observa `main`)
+- Bridge: Coolify UUID `g5oxpau2ffnvso50m3wuhwxq`
+- Painel: Coolify UUID `wwkt5an839c410ceklpu1cns`
+- Force deploy without cache quando mexer no Dockerfile
+
+## ⚠️ VPS - Alerta
+- 13 serviços na mesma máquina (localhost Coolify)
+- RAM: 13.3/15.6 GiB (85%)
+- CPU steal: 11.8% (overselling do provedor)
+- Chatwoot `unhealthy` (healthcheck postgres corrigido, precisa redeploy)
+- Servidor já ficou inacessível 6x
+
+## 🔴 ALERTA: Sessão anterior "ORACLE" (07/07) foi PERDIDA
+Os debug-logs do VS Code sumiram entre reinicializações. Nenhum turn foi preservado.
+**Regra nova no CLAUDE.md global: sempre perguntar "quer salvar handoff?" antes de encerrar.**
 
 ## 1. O que é o projeto
 
@@ -99,3 +217,25 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 
 ---
 **Regra de ouro:** o bridge é o caminho de tudo. Não tente "atalhar" pela Meta direto (caixa nativa) — você perde o processamento. E todo deploy vai pra `main`.
+
+---
+
+## 🟢 Sessão 08/07/2026 — Infra & Anti-perda
+
+### Estado atual
+- Nenhum deploy rodado nesta sessão (apenas mudanças de configuração)
+- Branch: `master`
+
+### Concluído nesta sessão
+- Diagnosticada a perda da sessão "ORACLE" (07/07): debug-logs do VS Code sumiram, 0 turns preservados em 4 sessões
+- Criado `/memories/sessoes-nao-perder.md` com checklist anti-perda
+- Adicionada regra `⚠️ ANTI-PERDA` no `CLAUDE.md` global (`c:\Users\User\.claude\CLAUDE.md`)
+- HANDOFF.md atualizado com alerta sobre a perda
+
+### Decisões tomadas
+- **HANDOFF.md é a ÚNICA fonte confiável de persistência entre sessões.** O session store/indexador FTS5 do VS Code é descartável.
+- Agente DEVE perguntar proativamente "quer salvar handoff?" sempre que o usuário indicar que vai encerrar, mesmo sem dizer "handoff".
+- Se HANDOFF.md estiver desatualizado (>24h) e usuário disser "continue", AVISAR e oferecer recriar do zero.
+
+### Pendente / próximo passo
+- [ ] Nenhuma tarefa de código pendente desta sessão — retomar da lista de pendências (§3 e §8 do HANDOFF)

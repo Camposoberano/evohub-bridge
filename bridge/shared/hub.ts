@@ -52,7 +52,9 @@ export async function uploadMetaMedia(
   const form = new FormData();
   form.set("messaging_product", "whatsapp");
   form.set("type", mimeType);
-  form.append("file", new Blob([bytes], { type: mimeType }), filename);
+  const bytesCopy = new Uint8Array(bytes);
+  const fileBlob = new Blob([bytesCopy.buffer], { type: mimeType });
+  form.append("file", fileBlob, filename);
   const res = await fetch(`${HUB()}/meta/${phoneNumberId}/media`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${channelToken}` }, // sem Content-Type: FormData põe o boundary

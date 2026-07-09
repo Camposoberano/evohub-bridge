@@ -66,6 +66,15 @@ async function applyChatwootConfig(token: string, acct: CwAcct, extra: Json = {}
   return { config: put.data, ok: put.ok, status: put.status, inbox_id: inboxId, webhook_sync: hook };
 }
 
+async function disableChatwootConfig(token: string): Promise<Json> {
+  const cur = (await instGet("/chatwoot/config", token)).data as Json;
+  if (!cur || typeof cur !== "object" || Object.keys(cur).length === 0) {
+    return { ok: false, reason: "config Chatwoot não encontrada" };
+  }
+  const put = await instPut("/chatwoot/config", token, { ...cur, enabled: false });
+  return { ok: put.ok, status: put.status, config: put.data };
+}
+
 type Json = Record<string, unknown>;
 
 export async function handle(req: Request): Promise<Response> {
@@ -104,14 +113,21 @@ export async function handle(req: Request): Promise<Response> {
       const inst = body.instance as string | undefined;
       let cwResult: Json | null = null;
       if (inst) {
+        const tok = await tokenForInstance(inst);
         if (body.conta) {
           cur[inst] = body.conta as string;
           // auto: configura uazapi→Chatwoot na CONTA da tela (sem depender de outra ação).
           try {
-            const tok = await tokenForInstance(inst);
             if (tok) { const acct = await acctByKey(body.conta as string); cwResult = await applyChatwootConfig(tok, acct, {}, inst); }
           } catch (e) { cwResult = { ok: false, reason: String(e) }; }
-        } else delete cur[inst];
+        } else {
+          delete cur[inst];
+          // Se desassociou a instância de uma tela, desliga o Chatwoot nela para evitar
+          // recriação automática de inboxes antigos no próximo boot.
+          try {
+            if (tok) cwResult = await disableChatwootConfig(tok);
+          } catch (e) { cwResult = { ok: false, reason: String(e) }; }
+        }
       }
       await writeAssign(cur);
       return json({ ok: true, assign: cur, chatwoot: cwResult });

@@ -9,10 +9,22 @@ import {
   createIncomingMessage,
   type CwAcct,
   ensureContact,
+  resolveInboxIdentifier,
 } from "./chatwoot.ts";
 
 type Json = Record<string, unknown>;
-type MsgType = "text" | "image" | "audio" | "video" | "document" | "sticker" | "location" | "contact" | "interactive" | "template" | "unknown";
+type MsgType =
+  | "text"
+  | "image"
+  | "audio"
+  | "video"
+  | "document"
+  | "sticker"
+  | "location"
+  | "contact"
+  | "interactive"
+  | "template"
+  | "unknown";
 
 export type InboundAttachment = ChatwootAttachment & {
   sourceUrl?: string;
@@ -35,45 +47,82 @@ export async function ingestInbound(
     referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
-  const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
   if (msg.metaMessageId) {
     // Claim ATÔMICO por (canal, wamid): impede a corrida (2 ingests concorrentes do mesmo
     // wamid) de inserir 2 linhas. Cross-canal (mesmo wamid em 2 números) é OK -> chave inclui canal.
-    if (!(await claimDelivery(db, `wa-${channel.id}-${msg.metaMessageId}`, "wa"))) {
+    if (
+      !(await claimDelivery(db, `wa-${channel.id}-${msg.metaMessageId}`, "wa"))
+    ) {
       return { inserted: false, reason: "duplicate" };
     }
   }
 
-  const inboxId = channel.chatwoot_inbox_identifier as string;
+  const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
+  const inboxId = await resolveInboxIdentifier(
+    (channel.chatwoot_inbox_id ?? channel.chatwoot_inbox_identifier) as
+      | string
+      | number
+      | null
+      | undefined,
+    acct,
+    channel.chatwoot_inbox_identifier as string | undefined,
+  );
+  if (!inboxId) {
+    throw new Error(
+      `sem inbox_identifier para canal ${String(channel.id ?? "unknown")}`,
+    );
+  }
+  if ((channel.chatwoot_inbox_identifier as string | undefined) !== inboxId) {
+    await db.from("channels").update({ chatwoot_inbox_identifier: inboxId }).eq(
+      "id",
+      channel.id,
+    );
+    (channel as Json).chatwoot_inbox_identifier = inboxId;
+  }
   // BSUID-proof (usernames Meta 2026): `from` pode ser um BSUID, não telefone. Só trata como
   // telefone se PARECER telefone (10-15 dígitos) — senão o Chatwoot rejeita o phone_number
   // inválido e a criação do contato quebrava. Identidade continua sendo o `from` cru.
-  const pareceTelefone = /^\d{10,15}$/.test(String(msg.from).replace(/\D/g, "")) && String(msg.from).replace(/\D/g, "") === String(msg.from);
-  const phone = channel.type === "whatsapp" && pareceTelefone ? `+${msg.from}` : null;
+  const pareceTelefone =
+    /^\d{10,15}$/.test(String(msg.from).replace(/\D/g, "")) &&
+    String(msg.from).replace(/\D/g, "") === String(msg.from);
+  const phone = channel.type === "whatsapp" && pareceTelefone
+    ? `+${msg.from}`
+    : null;
 
   const { data: existing, error: contactQueryError } = await db
     .from("contacts").select("*")
-    .eq("channel_id", channel.id).eq("external_contact_id", msg.from).maybeSingle();
+    .eq("channel_id", channel.id).eq("external_contact_id", msg.from)
+    .maybeSingle();
   if (contactQueryError) throw contactQueryError;
 
   let contact = existing as Json | null;
-  let sourceId = (existing?.attributes as Json | undefined)?.source_id as string | undefined;
+  let sourceId = (existing?.attributes as Json | undefined)?.source_id as
+    | string
+    | undefined;
 
   if (!contact || (!sourceId && !skip)) {
     // nativo: não cria contato no Chatwoot (a nativa já tem o seu) — só no banco.
-    const cw = skip ? null : await ensureContact(inboxId, { name: msg.name, phone: phone ?? undefined, identifier: msg.from }, acct);
+    const cw = skip ? null : await ensureContact(inboxId, {
+      name: msg.name,
+      phone: phone ?? undefined,
+      identifier: msg.from,
+    }, acct);
     if (cw) sourceId = cw.source_id;
-    const { data: upserted, error: upsertError } = await db.from("contacts").upsert({
-      channel_id: channel.id,
-      external_contact_id: msg.from,
-      name: msg.name ?? null,
-      phone: phone,
-      chatwoot_contact_id: cw?.contact_id ?? (contact?.chatwoot_contact_id ?? null),
-      attributes: sourceId ? { source_id: sourceId } : ((contact?.attributes as Json) ?? {}),
-      last_seen_at: new Date().toISOString(),
-    }, { onConflict: "channel_id,external_contact_id" }).select().single();
+    const { data: upserted, error: upsertError } = await db.from("contacts")
+      .upsert({
+        channel_id: channel.id,
+        external_contact_id: msg.from,
+        name: msg.name ?? null,
+        phone: phone,
+        chatwoot_contact_id: cw?.contact_id ??
+          (contact?.chatwoot_contact_id ?? null),
+        attributes: sourceId
+          ? { source_id: sourceId }
+          : ((contact?.attributes as Json) ?? {}),
+        last_seen_at: new Date().toISOString(),
+      }, { onConflict: "channel_id,external_contact_id" }).select().single();
     if (upsertError) throw upsertError;
     contact = upserted as Json;
   } else {
@@ -92,8 +141,12 @@ export async function ingestInbound(
   let conv = openConv as Json | null;
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
-    const cwConv = skip ? null : await createConversation(inboxId, sourceId!, acct);
-    const { data: insertedConv, error: convInsertError } = await db.from("conversations").insert({
+    const cwConv = skip
+      ? null
+      : await createConversation(inboxId, sourceId!, acct);
+    const { data: insertedConv, error: convInsertError } = await db.from(
+      "conversations",
+    ).insert({
       channel_id: channel.id,
       contact_id: contact.id,
       chatwoot_conversation_id: cwConv?.id ?? null,
@@ -105,7 +158,10 @@ export async function ingestInbound(
     conv = insertedConv as Json;
   } else if (msg.referral && !conv.origem) {
     // conversa já existia e AGORA chegou referral de anúncio -> marca a origem (janela vira 72h).
-    db.from("conversations").update({ origem: "anuncio", referral: msg.referral })
+    db.from("conversations").update({
+      origem: "anuncio",
+      referral: msg.referral,
+    })
       .eq("id", conv.id).then(() => {}, () => {});
     conv.origem = "anuncio";
   }
@@ -119,25 +175,50 @@ export async function ingestInbound(
     // echo do aparelho -> mensagem de SAÍDA na conversa do cliente.
     // debug temporário (duplicação de áudio): registra toda vez que um ECHO cria mensagem nova no Chatwoot.
     db.from("events").insert({
-      source: "debug-audio-dup", event_type: "echo-createConversationMessage",
-      payload: { metaMessageId: msg.metaMessageId, msgType: msg.msgType, t: Date.now(), channelId: channel.id, convId: conv.id },
+      source: "debug-audio-dup",
+      event_type: "echo-createConversationMessage",
+      payload: {
+        metaMessageId: msg.metaMessageId,
+        msgType: msg.msgType,
+        t: Date.now(),
+        channelId: channel.id,
+        convId: conv.id,
+      },
     }).then(() => {}, () => {});
-    cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
-      content: msg.content,
-      messageType: "outgoing",
-      attachments,
-    }, acct);
+    cwMsg = await createConversationMessage(
+      conv.chatwoot_conversation_id as number,
+      {
+        content: msg.content,
+        messageType: "outgoing",
+        attachments,
+      },
+      acct,
+    );
   } else if (attachments.length > 0) {
-    cwMsg = await createConversationMessage(conv.chatwoot_conversation_id as number, {
-      content: msg.content,
-      messageType: "incoming",
-      attachments,
-    }, acct);
+    cwMsg = await createConversationMessage(
+      conv.chatwoot_conversation_id as number,
+      {
+        content: msg.content,
+        messageType: "incoming",
+        attachments,
+      },
+      acct,
+    );
   } else {
-    cwMsg = await createIncomingMessage(inboxId, sourceId!, conv.chatwoot_conversation_id as number, msg.content, acct);
+    cwMsg = await createIncomingMessage(
+      inboxId,
+      sourceId!,
+      conv.chatwoot_conversation_id as number,
+      msg.content,
+      acct,
+    );
   }
-  const chatwootMediaUrl = cwMsg ? firstAttachmentUrl(cwMsg) : (msg.attachments?.[0]?.sourceUrl ?? null);
-  const { data: insertedMessage, error: messageError } = await db.from("messages").insert({
+  const chatwootMediaUrl = cwMsg
+    ? firstAttachmentUrl(cwMsg)
+    : (msg.attachments?.[0]?.sourceUrl ?? null);
+  const { data: insertedMessage, error: messageError } = await db.from(
+    "messages",
+  ).insert({
     conversation_id: conv.id,
     channel_id: channel.id,
     direction,
@@ -151,7 +232,9 @@ export async function ingestInbound(
   }).select("id").single();
 
   if (messageError) {
-    if ((messageError as { code?: string }).code === "23505") return { inserted: false, reason: "duplicate" };
+    if ((messageError as { code?: string }).code === "23505") {
+      return { inserted: false, reason: "duplicate" };
+    }
     throw messageError;
   }
 
@@ -161,9 +244,15 @@ export async function ingestInbound(
   // seletivo.) Reativar o comportamento antigo: FUNIL_CANCEL_ON_REPLY=true.
   if (!msg.outgoing && optionalEnv("FUNIL_CANCEL_ON_REPLY") === "true") {
     db.from("scheduled_messages").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).eq("status", "pending").then(() => {}, () => {});
+      .eq("conversation_id", conv.id).eq("status", "pending").then(
+        () => {},
+        () => {},
+      );
     db.from("sales_sequences").update({ status: "replied" })
-      .eq("conversation_id", conv.id).eq("status", "running").then(() => {}, () => {});
+      .eq("conversation_id", conv.id).eq("status", "running").then(
+        () => {},
+        () => {},
+      );
   }
 
   return { inserted: true, message_id: insertedMessage.id as string };
@@ -178,7 +267,9 @@ export async function repairInboundMedia(
     attachments: InboundAttachment[];
   },
 ): Promise<{ repaired: boolean; reason?: string }> {
-  if (input.attachments.length === 0) return { repaired: false, reason: "sem anexos" };
+  if (input.attachments.length === 0) {
+    return { repaired: false, reason: "sem anexos" };
+  }
 
   const { data: message, error: messageError } = await db.from("messages")
     .select("id,conversation_id,media_url,chatwoot_message_id")
@@ -187,21 +278,28 @@ export async function repairInboundMedia(
   if (messageError) throw messageError;
   if (message?.media_url) return { repaired: false, reason: "ja reparado" };
 
-  const { data: conversation, error: convError } = await db.from("conversations")
+  const { data: conversation, error: convError } = await db.from(
+    "conversations",
+  )
     .select("chatwoot_conversation_id")
     .eq("id", message.conversation_id)
     .single();
   if (convError) throw convError;
 
-  const cwConversationId = conversation?.chatwoot_conversation_id as number | undefined;
-  if (!cwConversationId) return { repaired: false, reason: "sem conversa Chatwoot" };
+  const cwConversationId = conversation?.chatwoot_conversation_id as
+    | number
+    | undefined;
+  if (!cwConversationId) {
+    return { repaired: false, reason: "sem conversa Chatwoot" };
+  }
 
   const cwMsg = await createConversationMessage(cwConversationId, {
     content: input.content,
     messageType: "incoming",
     attachments: input.attachments,
   });
-  const chatwootMediaUrl = firstAttachmentUrl(cwMsg) ?? input.attachments[0]?.sourceUrl ?? null;
+  const chatwootMediaUrl = firstAttachmentUrl(cwMsg) ??
+    input.attachments[0]?.sourceUrl ?? null;
 
   const { error: updateError } = await db.from("messages").update({
     msg_type: normalizeMsgType(input.msgType),
@@ -217,8 +315,10 @@ export async function repairInboundMedia(
 
 function normalizeMsgType(value: string): MsgType {
   if (
-    value === "text" || value === "image" || value === "audio" || value === "video" ||
-    value === "document" || value === "sticker" || value === "location" || value === "contact" ||
+    value === "text" || value === "image" || value === "audio" ||
+    value === "video" ||
+    value === "document" || value === "sticker" || value === "location" ||
+    value === "contact" ||
     value === "interactive" || value === "template"
   ) return value;
   return "unknown";

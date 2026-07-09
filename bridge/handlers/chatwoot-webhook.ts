@@ -11,7 +11,7 @@ import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 import { windowState } from "../shared/window.ts";
-import { createConversationMessage, getConversationLabels, setConversationLabels } from "../shared/chatwoot.ts";
+import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 import type { SendResult } from "../shared/hybrid.ts";
@@ -50,17 +50,6 @@ export async function handle(req: Request): Promise<Response> {
   const eventName = (p.event as string) ?? "unknown";
 
   db.from("events").insert({ source: "chatwoot", event_type: eventName, payload: p }).then(() => {}, () => {});
-
-  // Comandos do atendente via nota privada: /funil pause|stop|resume|status
-  if (eventName === "message_created" && isOutgoing(p) && p.private) {
-    const cmd = ((p.content as string) ?? "").trim();
-    if (/^\/funil\s/i.test(cmd)) {
-      handleFunilCommand(db, p).catch((e) => console.error("funil-command erro:", e));
-    }
-  }
-
-  // Label commands (cmd-*) handled by macro-poll loop in server.ts — not by webhook
-  // (avoids double-dispatch when both webhook and poll detect the same label).
 
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
@@ -181,7 +170,6 @@ export async function handleOutgoing(db: Db, p: Json) {
     // Rota híbrida: canal oficial com espelho uazapi → service msgs saem pelo não-oficial (R$0).
     // Templates e janela fechada sempre pela oficial. Se uazapi falhar → fallback automático.
     const hybrid = !tplCmd ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string) : null;
-    if (hybrid) console.log("hybrid route found:", hybrid.instance, "for channel", channel.name, "to", to);
 
     if (!tplCmd && conv) {
       const win = await windowState(db, conv as Json, channel as Json);
@@ -232,7 +220,6 @@ export async function handleOutgoing(db: Db, p: Json) {
             isVoice: msgType === "audio",
           });
           if (hybridRes) { captionUsed = captionUsed || (!!content && msgType !== "audio"); }
-          console.log("hybrid-media-attempt:", hybridRes ? "uazapi OK" : "fallback oficial", "msg", cwMsgId);
           await dbg(db, cwMsgId, "hybrid-media-attempt", { via: hybridRes?.via ?? "fallback", ok: hybridRes?.ok ?? false });
         }
 
@@ -265,7 +252,6 @@ export async function handleOutgoing(db: Db, p: Json) {
         if (hr) { res = hr; } else {
           res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
         }
-        console.log("hybrid-text-attempt:", hr ? "uazapi OK" : "fallback oficial", "msg", cwMsgId);
         await dbg(db, cwMsgId, "hybrid-text-attempt", { via: (hr ? "uazapi" : "fallback") });
       } else {
         res = await sendMeta(token, url, { messaging_product: "whatsapp", to, type: "text", text: { body: content } });
@@ -313,11 +299,20 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); await dbg(db, cwMsgId, "no-res-nothing-sent", {}); return; }
-  const d = res.data as Json;
-  const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
-    ((d?.message_id as string) ?? null) ??
-    (((d?.data as Json)?.messageId as string) ?? null) ??
-    ((d?.id as string) ?? null);
+  const d = res.data as Json | null;
+  const messages = d && Array.isArray((d as { messages?: unknown }).messages)
+    ? (d as { messages: Json[] }).messages
+    : undefined;
+  const extractedMessageId = messages?.length
+    ? ((messages[0] as Json)?.id as string | undefined) ?? null
+    : null;
+  const extractedDataMessageId = d && typeof (d as { data?: unknown }).data === "object" && d.data !== null
+    ? (typeof ((d.data as Json).messageId) === "string" ? ((d.data as Json).messageId as string) : null)
+    : null;
+  const metaId = extractedMessageId ??
+    (d && typeof (d as { message_id?: unknown }).message_id === "string" ? (d as { message_id: string }).message_id : null) ??
+    extractedDataMessageId ??
+    (d && typeof (d as { id?: unknown }).id === "string" ? (d as { id: string }).id : null);
 
   await dbg(db, cwMsgId, "before-insert-messages", { msgType, mediaUrl, metaId });
   await db.from("messages").insert({
@@ -341,85 +336,4 @@ export async function handleOutgoing(db: Db, p: Json) {
 function metaAttachmentType(fileType?: string): "image" | "audio" | "video" | "file" {
   if (fileType === "image" || fileType === "audio" || fileType === "video") return fileType;
   return "file";
-}
-
-// Comando do atendente via nota privada: /funil pause|stop|resume|status
-async function handleFunilCommand(db: Db, p: Json) {
-  const conversation = (p.conversation ?? {}) as Json;
-  const cwConvId = (conversation.id ?? p.conversation_id) as number | undefined;
-  if (!cwConvId) return;
-
-  const cmd = ((p.content as string) ?? "").trim().toLowerCase();
-  const match = cmd.match(/^\/funil\s+(pause|pausa|stop|para|parar|resume|retoma|retomar|status|preco|preço|video|vídeo|plantio|nutricao|nutrição|iniciar|start)\b/i);
-  if (!match) return;
-
-  const actionMap: Record<string, string> = {
-    pause: "pause", pausa: "pause",
-    stop: "stop", para: "stop", parar: "stop",
-    resume: "resume", retoma: "resume", retomar: "resume",
-    status: "status",
-    preco: "preco", "preço": "preco",
-    video: "video", "vídeo": "video",
-    plantio: "plantio",
-    nutricao: "nutricao", "nutrição": "nutricao",
-    iniciar: "funil", start: "funil",
-  };
-  const action = actionMap[match[1].toLowerCase()] ?? match[1].toLowerCase();
-  const secret = env("CHATWOOT_WEBHOOK_SECRET");
-
-  const res = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-control?token=${encodeURIComponent(secret)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
-  });
-  const result = await res.json().catch(() => ({}));
-  console.log("funil-command:", action, "conv", cwConvId, "->", JSON.stringify(result).slice(0, 200));
-}
-
-const CMD_LABELS: Record<string, string> = {
-  "cmd-funil-pause": "pause",
-  "cmd-funil-stop": "stop",
-  "cmd-funil-resume": "resume",
-  "cmd-iniciar-funil": "funil",
-  "cmd-enviar-preco": "preco",
-  "cmd-enviar-video": "video",
-  "cmd-enviar-plantio": "plantio",
-  "cmd-enviar-nutricao": "nutricao",
-};
-
-async function handleLabelCommands(db: Db, p: Json) {
-  const conv = (p.conversation ?? p) as Json;
-  const cwConvId = (conv.id ?? p.id) as number | undefined;
-  if (!cwConvId) return;
-
-  // Payload do webhook pode não ter labels atualizadas — busca via API.
-  const { data: dbConv } = await db.from("conversations").select("channel_id")
-    .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-  const acct = dbConv ? await accountForChannel(dbConv.channel_id as string) : undefined;
-
-  let labels: string[];
-  try { labels = await getConversationLabels(cwConvId, acct); }
-  catch { return; }
-
-  const cmdLabel = labels.find((l) => l in CMD_LABELS);
-  if (!cmdLabel) return;
-
-  const action = CMD_LABELS[cmdLabel];
-  const secret = env("CHATWOOT_WEBHOOK_SECRET");
-
-  const res = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-control?token=${encodeURIComponent(secret)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
-  });
-  const result = await res.json().catch(() => ({}));
-  console.log("label-command:", cmdLabel, "->", action, "conv", cwConvId, "result:", JSON.stringify(result).slice(0, 200));
-
-  // remove label de comando pra ficar reutilizável
-  try {
-    const cleaned = labels.filter((l) => !(l in CMD_LABELS));
-    if (cleaned.length !== labels.length) {
-      await setConversationLabels(cwConvId, cleaned, acct);
-    }
-  } catch (e) { console.warn("label-command cleanup:", String(e).slice(0, 120)); }
 }

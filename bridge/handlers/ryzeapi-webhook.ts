@@ -55,7 +55,10 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   const instanceName = instanceData.instance as string | undefined;
   if (!instanceName) return;
 
-  const { data: channel } = await db.from("channels").select("*").eq("external_id", instanceName).maybeSingle();
+  let channel = (await db.from("channels").select("*").eq("external_id", instanceName).maybeSingle()).data as Json | null;
+  if (!channel) {
+    channel = (await db.from("channels").select("*").eq("name", instanceName).maybeSingle()).data as Json | null;
+  }
   if (!channel) { console.warn("ryzeapi: sem canal cadastrado pra instância", instanceName); return; }
 
   const message = (data.message ?? {}) as Json;
