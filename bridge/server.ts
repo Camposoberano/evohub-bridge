@@ -211,6 +211,10 @@ function startCommentsLoop() {
 // o webhook). Curto (20s) pra latência baixa do atendimento.
 const SYNC_OUT_INTERVAL_MS = 20_000;
 function startChatwootOutLoop() {
+  if (optionalEnv("SYNC_OUT_ENABLED") === "false") {
+    console.log("sync-chatwoot-out loop OFF (SYNC_OUT_ENABLED=false)");
+    return;
+  }
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
   const url = `http://internal/sync-chatwoot-out?token=${encodeURIComponent(token)}&since_minutes=30`;
   setInterval(async () => {
