@@ -51,6 +51,7 @@ export async function handle(req: Request): Promise<Response> {
 function isInboundUazapiEvent(eventType: string, p: Json): boolean {
   const data = (p.data ?? {}) as Json;
   if (eventType === "message.exchange") return true;
+  if (eventType === "messages_update" || eventType === "ReadReceipt") return false;
   if (data.direction === "incoming") return true;
   if (Array.isArray(data.messages) && data.messages.length > 0) return true;
   if (data.message) return true;
@@ -89,6 +90,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   for (const rawMsg of messages) {
     const msg = await parseUazapiMessage(rawMsg, p);
     if (msg.direction === "outgoing") continue;
+    if (msg.isGroup) continue;
     if (!msg.from) {
       console.warn(
         "uazapi-webhook mensagem sem remetente",
@@ -197,6 +199,16 @@ function extractUazapiMessages(data: Json): Json[] {
 }
 
 async function parseUazapiMessage(message: Json, context: Json) {
+  const fromMe = isTruthy(
+    message.fromMe,
+    message.from_me,
+    message.isFromMe,
+    message.IsFromMe,
+    getJson(message, "key")?.fromMe,
+    getJson(context, "key")?.fromMe,
+    getJson(context, "event")?.IsFromMe,
+    getJson(context, "event")?.fromMe,
+  );
   const fromRaw = firstString(
     message.from,
     getString(message, "sender"),
@@ -246,7 +258,7 @@ async function parseUazapiMessage(message: Json, context: Json) {
   const direction = firstString(
     getString(message, "direction"),
     getString(context, "direction"),
-  ) ?? "incoming";
+  ) ?? (fromMe ? "outgoing" : "incoming");
   const msgType = firstString(
     getString(message, "type"),
     getString(message, "mediaType"),
@@ -278,6 +290,7 @@ async function parseUazapiMessage(message: Json, context: Json) {
     metaMessageId,
     sentAt,
     direction,
+    isGroup: Boolean(message.isGroup) || Boolean(getJson(context, "chat")?.wa_isGroup),
     msgType,
     content,
     attachments,
@@ -361,6 +374,13 @@ function getJson(obj: Json | undefined, key: string): Json | undefined {
 function getString(obj: Json | undefined, key: string): string | undefined {
   const value = obj?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isTruthy(...values: Array<unknown>): boolean {
+  return values.some((value) =>
+    value === true ||
+    (typeof value === "string" && ["true", "1", "yes"].includes(value.trim().toLowerCase()))
+  );
 }
 
 function normDigits(value: string | undefined): string {
