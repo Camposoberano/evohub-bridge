@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "db:apply": "node --env-file=.env scripts/apply-migration.mjs"
+    "db:apply": "node --env-file=.env scripts/apply-migration.mjs",
+    "ai:bundle": "node scripts/build-ai-context-bundle.mjs"
   },
   "dependencies": {
     "pg": "^8.13.1"

@@ -1,3 +1,11 @@
+# Prompt Cache Bundle
+
+Bundle estavel para prefixo reutilizavel de LLM.
+Use isto no INICIO do prompt/request e coloque detalhes variaveis somente depois do breakpoint de cache.
+Nao inclua segredos neste arquivo.
+
+## Arquivo: README.md
+
 # Evo Hub ↔ Chatwoot Bridge + Dashboard
 
 Ponte entre o **EVO Hub** (gateway proxy da Meta Graph API — WhatsApp/Facebook/Instagram) e o **Chatwoot** (camada de conversa), com um **dashboard próprio** que é o system of record + analisador (operacional e comercial).
@@ -156,3 +164,196 @@ deno run --allow-env --allow-net --allow-read bridge/scripts/test-llm-execute.ts
 - [ ] Hardening (Fase 5)
 ```
 
+## Arquivo: .ai-context/PROMPT_CACHE_PREFIX.md
+
+# Prefixo Estavel do Projeto
+
+Projeto: EvoHub
+Objetivo: integrar mensageria, atendimento, automacao e observabilidade em uma unica operacao.
+
+## Arquitetura duravel
+
+- Bridge Deno em `bridge/`
+- Dashboard Next.js em `web/`
+- Supabase como base operacional e analitica
+- Chatwoot como camada de atendimento
+- EVO Hub, Uazapi e RyzeAPI como integracoes de mensageria
+
+## Regras duraveis
+
+- a logica de negocio central fica no bridge;
+- o Chatwoot e camada de conversa, nao de regra de negocio;
+- contexto estavel deve vir antes do contexto de tarefa;
+- logs, debug bruto e status do dia ficam fora do prefixo cacheavel;
+- segredos nunca entram em bundles de contexto.
+
+## Convencoes de uso com IA
+
+- reaproveitar prefixos estaveis;
+- anexar detalhes variaveis so depois do breakpoint de cache;
+- medir `cached_tokens` e `cache_write_tokens` nas chamadas compativeis;
+- manter o bundle estavel pequeno, legivel e sem ruido operacional.
+
+## Arquivo: .ai-context/REGRAS_DO_PROJETO.md
+
+# Regras do Projeto
+
+- Nao misturar este projeto com outros projetos.
+- Nao criar arquivos de configuracao global dentro do projeto sem necessidade.
+- Nao expor chaves API em arquivos.
+- Antes de editar muitos arquivos, apresentar plano curto.
+- Se a tarefa for apenas duvida, nao alterar arquivos.
+- Ao terminar uma sessao, atualizar ULTIMA_SESSAO.md.
+
+## Arquivo: docs/projeto-1-multiagentes-contrato.md
+
+# Projeto 1 - Contrato tecnico de orquestracao multi-LLM (v1)
+
+## Objetivo
+
+Criar um fluxo com 3 LLMs ou mais, com especializacao por tarefa, fallback automatico e revisao cruzada.
+
+## Resultado esperado
+
+1. Sem bloqueio quando um provider ficar sem quota.
+2. Troca de modelo sem perder contexto.
+3. Menos erro repetido na mesma categoria de tarefa.
+4. Trilha auditavel de decisao, custo, latencia e qualidade.
+
+## Acoplamento com este repositorio
+
+1. Bridge Deno decide rota e persiste tentativas.
+2. Supabase guarda tarefas, runs, handoff e quality gates.
+3. Web/Next mostra fila e saude dos modelos.
+
+Arquivos centrais:
+
+1. bridge/shared/llm-orchestrator.ts
+2. bridge/handlers/llm-orchestrate.ts
+3. supabase/migrations/0002_llm_orchestration.sql
+4. web/app/orquestracao/page.jsx
+
+## API da bridge
+
+Endpoint:
+
+1. POST /llm-orchestrate
+
+Autenticacao:
+
+1. Header Authorization: Bearer <LLM_ROUTER_API_TOKEN> quando o token estiver configurado.
+
+### Modo route
+
+Cria llm_task + primeira llm_run com status started.
+
+```json
+{
+  "mode": "route",
+  "external_ref": "ticket-42",
+  "area": "frontend_visual",
+  "risk": "high",
+  "title": "Refinar tela de conexoes",
+  "objective": "melhorar UX sem regressao funcional",
+  "payload": { "files": ["web/app/conexoes/page.jsx"] },
+  "requires_review": true,
+  "blocked_model_ids": ["cloud_arch"]
+}
+```
+
+### Modo execute
+
+Cria llm_task + llm_run inicial, executa a chamada OpenAI no proprio endpoint e finaliza a tentativa com trilha de cache.
+
+```json
+{
+  "mode": "execute",
+  "external_ref": "ticket-43",
+  "area": "backend",
+  "risk": "medium",
+  "title": "Gerar plano de correção",
+  "objective": "propor ajuste seguro para webhook duplicado",
+  "payload": {
+    "context_prefix": "PREFIXO ESTAVEL GRANDE AQUI",
+    "files": ["bridge/handlers/chatwoot-webhook.ts"]
+  },
+  "instructions": "Seja direto e priorize baixo risco."
+}
+```
+
+Campos uteis para prompt caching:
+
+1. `payload.context_prefix` ou `context_prefix` para enviar o bundle estavel
+2. `cache_tenant` para separar prefixos por cliente/escopo
+3. `model_name` para override do modelo OpenAI
+
+### Modo attempt
+
+Registra tentativa, atualiza status da tarefa, opcionalmente grava gates e handoff.
+
+```json
+{
+  "mode": "attempt",
+  "task_id": "<uuid>",
+  "model_id": "codex_exec",
+  "role": "primary",
+  "status": "succeeded",
+  "attempt_no": 2,
+  "latency_ms": 8100,
+  "total_tokens": 5200,
+  "gates": {
+    "lint": "pass",
+    "build": "pass",
+    "tests": "pass",
+    "security": "na"
+  }
+}
+```
+
+## Contrato de handoff
+
+Nenhuma troca de modelo deve ocorrer sem handoff.
+
+Campos minimos:
+
+1. taskId
+2. objective
+3. completedSteps
+4. pendingSteps
+5. failures
+6. nextAction
+7. gates
+
+## Politica de roteamento
+
+Formula base de score:
+
+score = 0.40*especialidade + 0.25*disponibilidade + 0.15*historico + 0.10*latencia + 0.10*custo
+
+Regras:
+
+1. risk high força reviewer, quando houver.
+2. Falhas consecutivas removem modelo do pool preferencial.
+3. Quota/timeout move para fallback.
+4. Reviewer pode reprovar e abrir nova tentativa.
+
+## Quality gates
+
+1. lint
+2. build
+3. tests
+4. security
+
+## SLOs iniciais
+
+1. Sucesso por tarefa >= 90%.
+2. Fallback sem bloqueio manual >= 95%.
+3. Reducao de retrabalho >= 30%.
+4. Latencia p95 por tentativa <= 25s.
+
+## Roadmap de implantacao
+
+1. Aplicar migration 0002 e seeds de modelo.
+2. Integrar chamada do endpoint /llm-orchestrate no fluxo operacional.
+3. Instrumentar quality gates por tentativa.
+4. Monitorar dashboard /orquestracao e ajustar pesos.

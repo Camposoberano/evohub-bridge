@@ -8,6 +8,8 @@ import {
 } from "../shared/llm-orchestrator.ts";
 import { optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
+import { executeOpenAIText } from "../shared/openai-exec.ts";
+import { extractPromptCacheMetrics } from "../shared/prompt-cache.ts";
 import { admin } from "../shared/supabase.ts";
 
 type Json = Record<string, unknown>;
@@ -57,8 +59,9 @@ export async function handle(req: Request): Promise<Response> {
   try {
     const mode = asText(body.mode)?.toLowerCase() ?? "route";
     if (mode === "route") return await routeTask(body);
+    if (mode === "execute") return await executeTask(body);
     if (mode === "attempt") return await persistAttempt(body);
-    return json({ error: "mode invalido (route|attempt)" }, 400);
+    return json({ error: "mode invalido (route|execute|attempt)" }, 400);
   } catch (error) {
     if (error instanceof HttpError) return json({ error: error.message }, error.status);
     console.error("llm-orchestrate erro:", error);
@@ -67,6 +70,110 @@ export async function handle(req: Request): Promise<Response> {
 }
 
 async function routeTask(body: Json): Promise<Response> {
+  const routed = await createRoutedTask(body, true);
+  return json({ mode: "route", task: routed.task, run: routed.run, decision: routed.decision }, 201);
+}
+
+async function executeTask(body: Json): Promise<Response> {
+  const routed = await createRoutedTask(body, true);
+  const db = admin();
+  const model = await loadModelById(db, routed.decision.primaryModelId);
+  if (!model) throw new HttpError(404, "modelo selecionado nao encontrado");
+  if (!String(model.provider ?? "").toLowerCase().includes("openai")) {
+    await persistAttemptRecord(db, {
+      run_id: routed.run?.id,
+      task_id: routed.task.id,
+      model_id: routed.decision.primaryModelId,
+      role: "primary",
+      status: "failed",
+      attempt_no: 1,
+      error_code: "provider_not_supported",
+      error_message: `execucao automatica ainda nao suportada para provider ${String(model.provider ?? "desconhecido")}`,
+      next_model_id: routed.decision.fallbackModelIds[0] ?? null,
+    });
+    throw new HttpError(409, `execucao automatica ainda nao suportada para provider ${String(model.provider ?? "desconhecido")}`);
+  }
+
+  const input = buildExecutionInput(body);
+  const payload = isRecord(body.payload) ? body.payload : {};
+  const tenant = asText(body.cache_tenant ?? body.cacheTenant ?? payload.cache_tenant ?? payload.cacheTenant);
+  const contextPrefix = asText(body.context_prefix ?? body.contextPrefix ?? payload.context_prefix ?? payload.contextPrefix);
+  const instructions = asText(body.instructions ?? payload.instructions);
+  const maxCompletionTokens = asPositiveInt(body.max_completion_tokens ?? body.maxCompletionTokens ?? payload.max_completion_tokens ?? payload.maxCompletionTokens);
+  const temperature = asNumberMaybe(body.temperature ?? payload.temperature);
+
+  try {
+    const exec = await executeOpenAIText({
+      area: String(body.area ?? payload.area ?? "analysis"),
+      title: String(body.title ?? payload.title ?? "Task"),
+      objective: String(body.objective ?? payload.objective ?? ""),
+      input,
+      model: asText(body.model_name ?? body.modelName ?? payload.model_name ?? payload.modelName) ?? String(model.model_name ?? ""),
+      tenant,
+      contextPrefix,
+      instructions,
+      maxCompletionTokens,
+      temperature,
+    });
+
+    const persisted = await persistAttemptRecord(db, {
+      run_id: routed.run?.id,
+      task_id: routed.task.id,
+      model_id: routed.decision.primaryModelId,
+      role: "primary",
+      status: "succeeded",
+      attempt_no: 1,
+      output_summary: exec.text.slice(0, 4000),
+      output_payload: {
+        text: exec.text,
+        usage: exec.response.usage ?? {},
+        model_name: exec.model,
+      },
+      prompt_tokens: exec.usage.promptTokens ?? undefined,
+      completion_tokens: exec.usage.completionTokens ?? undefined,
+      total_tokens: exec.usage.totalTokens ?? undefined,
+      cached_tokens: exec.usage.cachedTokens,
+      cache_write_tokens: exec.usage.cacheWriteTokens,
+      cache_hit: exec.usage.cacheHit,
+      prompt_cache_key: exec.promptCacheKey,
+      prompt_cache_ttl: exec.promptCacheTtl ?? undefined,
+      prompt_cache_mode: exec.promptCacheMode ?? undefined,
+    });
+
+    return json({
+      mode: "execute",
+      task: routed.task,
+      decision: routed.decision,
+      run: persisted.run,
+      output_text: exec.text,
+      usage: exec.response.usage ?? {},
+      prompt_cache: {
+        key: exec.promptCacheKey,
+        ttl: exec.promptCacheTtl,
+        mode: exec.promptCacheMode,
+        cached_tokens: exec.usage.cachedTokens,
+        cache_write_tokens: exec.usage.cacheWriteTokens,
+        cache_hit: exec.usage.cacheHit,
+      },
+    }, 201);
+  } catch (error) {
+    const nextModelId = routed.decision.fallbackModelIds[0] ?? null;
+    await persistAttemptRecord(db, {
+      run_id: routed.run?.id,
+      task_id: routed.task.id,
+      model_id: routed.decision.primaryModelId,
+      role: "primary",
+      status: "failed",
+      attempt_no: 1,
+      error_code: "openai_execution_failed",
+      error_message: String(error instanceof Error ? error.message : error),
+      next_model_id: nextModelId,
+    });
+    throw error;
+  }
+}
+
+async function createRoutedTask(body: Json, createStartedRun: boolean): Promise<{ task: Json; run: Json | null; decision: ReturnType<typeof decideRoute> }> {
   const area = parseTaskArea(body.area);
   const risk = parseRisk(body.risk);
   const objective = asText(body.objective);
@@ -116,20 +223,24 @@ async function routeTask(body: Json): Promise<Response> {
   }).select("id, status, attempts, selected_primary, selected_reviewer, created_at").single();
   if (taskError) throw new HttpError(500, messageFromError(taskError));
 
-  const { data: run, error: runError } = await db.from("llm_runs").insert({
-    task_id: task.id,
-    model_id: decision.primaryModelId,
-    role: "primary",
-    attempt_no: 1,
-    status: "started",
-    score: primaryScore,
-    route_reason: decision.reasons,
-    input_summary: shortSummary(title, objective),
-    started_at: now,
-  }).select("id, model_id, role, status, attempt_no, started_at").single();
-  if (runError) throw new HttpError(500, messageFromError(runError));
+  let run: Json | null = null;
+  if (createStartedRun) {
+    const { data: createdRun, error: runError } = await db.from("llm_runs").insert({
+      task_id: task.id,
+      model_id: decision.primaryModelId,
+      role: "primary",
+      attempt_no: 1,
+      status: "started",
+      score: primaryScore,
+      route_reason: decision.reasons,
+      input_summary: shortSummary(title, objective),
+      started_at: now,
+    }).select("id, model_id, role, status, attempt_no, started_at").single();
+    if (runError) throw new HttpError(500, messageFromError(runError));
+    run = createdRun as Json;
+  }
 
-  return json({ mode: "route", task, run, decision }, 201);
+  return { task: task as unknown as Json, run, decision };
 }
 
 async function persistAttempt(body: Json): Promise<Response> {
@@ -142,6 +253,24 @@ async function persistAttempt(body: Json): Promise<Response> {
   if (!modelId) throw new HttpError(400, "model_id e obrigatorio");
 
   const db = admin();
+  const result = await persistAttemptRecord(db, body);
+  return json({
+    mode: "attempt",
+    task_id: taskId,
+    task_status: result.taskStatus,
+    run: result.run,
+  }, 201);
+}
+
+async function persistAttemptRecord(db: Db, body: Json): Promise<{ run: Json; taskStatus: string }> {
+  const taskId = asText(body.task_id ?? body.taskId);
+  const modelId = asText(body.model_id ?? body.modelId);
+  const status = parseRunStatus(body.status);
+  const role = parseRunRole(body.role ?? "fallback");
+
+  if (!taskId) throw new HttpError(400, "task_id e obrigatorio");
+  if (!modelId) throw new HttpError(400, "model_id e obrigatorio");
+
   const { data: task, error: taskError } = await db.from("llm_tasks")
     .select("id, area, risk_level, objective, status, attempts, selected_reviewer, started_at")
     .eq("id", taskId)
@@ -163,8 +292,10 @@ async function persistAttempt(body: Json): Promise<Response> {
   const outputPayload = isRecord(body.output_payload ?? body.outputPayload)
     ? (body.output_payload ?? body.outputPayload) as Json
     : {};
+  const cacheMetrics = extractPromptCacheMetrics(body.usage ?? outputPayload.usage ?? {});
+  const runId = asText(body.run_id ?? body.runId);
 
-  const { data: run, error: runError } = await db.from("llm_runs").insert({
+  const runPatch: Json = {
     task_id: taskId,
     model_id: modelId,
     role,
@@ -175,22 +306,41 @@ async function persistAttempt(body: Json): Promise<Response> {
     input_summary: asText(body.input_summary ?? body.inputSummary) ?? null,
     output_summary: asText(body.output_summary ?? body.outputSummary) ?? null,
     output_payload: outputPayload,
-    prompt_tokens: asPositiveInt(body.prompt_tokens ?? body.promptTokens) ?? null,
-    completion_tokens: asPositiveInt(body.completion_tokens ?? body.completionTokens) ?? null,
-    total_tokens: asPositiveInt(body.total_tokens ?? body.totalTokens) ?? null,
+    prompt_tokens: asPositiveInt(body.prompt_tokens ?? body.promptTokens) ?? cacheMetrics.promptTokens ?? null,
+    completion_tokens: asPositiveInt(body.completion_tokens ?? body.completionTokens) ?? cacheMetrics.completionTokens ?? null,
+    total_tokens: asPositiveInt(body.total_tokens ?? body.totalTokens) ?? cacheMetrics.totalTokens ?? null,
+    cached_tokens: asZeroOrPositiveInt(body.cached_tokens ?? body.cachedTokens) ?? cacheMetrics.cachedTokens,
+    cache_write_tokens: asZeroOrPositiveInt(body.cache_write_tokens ?? body.cacheWriteTokens) ?? cacheMetrics.cacheWriteTokens,
+    cache_hit: hasBool(body.cache_hit ?? body.cacheHit) ? asBool(body.cache_hit ?? body.cacheHit) : cacheMetrics.cacheHit,
+    prompt_cache_key: asText(body.prompt_cache_key ?? body.promptCacheKey) ?? null,
+    prompt_cache_ttl: asText(body.prompt_cache_ttl ?? body.promptCacheTtl) ?? null,
+    prompt_cache_mode: asText(body.prompt_cache_mode ?? body.promptCacheMode) ?? null,
     latency_ms: asPositiveInt(body.latency_ms ?? body.latencyMs) ?? null,
     error_code: asText(body.error_code ?? body.errorCode) ?? null,
     error_message: asText(body.error_message ?? body.errorMessage) ?? null,
-    started_at: now,
     finished_at: finishedAt,
-  }).select("id, model_id, role, status, attempt_no, started_at, finished_at").single();
-  if (runError) throw new HttpError(500, messageFromError(runError));
+  };
+
+  let run: Json;
+  if (runId) {
+    (runPatch as Json).started_at = asText(body.started_at ?? body.startedAt) ?? now;
+    const { data: updatedRun, error: runError } = await db.from("llm_runs").update(runPatch).eq("id", runId)
+      .select("id, model_id, role, status, attempt_no, started_at, finished_at").single();
+    if (runError) throw new HttpError(500, messageFromError(runError));
+    run = updatedRun as unknown as Json;
+  } else {
+    (runPatch as Json).started_at = now;
+    const { data: createdRun, error: runError } = await db.from("llm_runs").insert(runPatch)
+      .select("id, model_id, role, status, attempt_no, started_at, finished_at").single();
+    if (runError) throw new HttpError(500, messageFromError(runError));
+    run = createdRun as unknown as Json;
+  }
 
   const gates = parseGates(body.gates);
   if (gates) {
     const { error: gateError } = await db.from("llm_quality_gates").insert({
       task_id: taskId,
-      run_id: run.id,
+      run_id: run.id as string,
       lint_status: gates.lint,
       build_status: gates.build,
       tests_status: gates.tests,
@@ -246,12 +396,7 @@ async function persistAttempt(body: Json): Promise<Response> {
   const { error: patchError } = await db.from("llm_tasks").update(patch).eq("id", taskId);
   if (patchError) throw new HttpError(500, messageFromError(patchError));
 
-  return json({
-    mode: "attempt",
-    task_id: taskId,
-    task_status: nextTaskStatus,
-    run,
-  }, 201);
+  return { run, taskStatus: nextTaskStatus };
 }
 
 async function loadCandidates(db: Db, maxFailures: number): Promise<ModelCandidate[]> {
@@ -383,6 +528,15 @@ function normalizeAreas(value: unknown): TaskArea[] {
   return out.length > 0 ? out : ["analysis"];
 }
 
+async function loadModelById(db: Db, modelId: string): Promise<Json | null> {
+  const { data, error } = await db.from("llm_models")
+    .select("id, provider, model_name, notes")
+    .eq("id", modelId)
+    .maybeSingle();
+  if (error) throw new HttpError(500, messageFromError(error));
+  return (data as Json | null) ?? null;
+}
+
 function hasProviderKey(provider: string): boolean {
   const low = provider.toLowerCase();
   if (low.includes("openai")) return Boolean(optionalEnv("OPENAI_API_KEY"));
@@ -409,6 +563,42 @@ function readBearer(value: string | null): string | null {
 function shortSummary(title: string, objective: string): string {
   const value = `${title} | ${objective}`;
   return value.length > 240 ? `${value.slice(0, 237)}...` : value;
+}
+
+function buildExecutionInput(body: Json): string {
+  const payload = isRecord(body.payload) ? body.payload : {};
+  const direct = asText(body.input ?? payload.input);
+  if (direct) return direct;
+
+  const filteredPayload: Json = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if ([
+      "input",
+      "instructions",
+      "context_prefix",
+      "contextPrefix",
+      "cache_tenant",
+      "cacheTenant",
+      "max_completion_tokens",
+      "maxCompletionTokens",
+      "temperature",
+      "model_name",
+      "modelName",
+    ].includes(key)) continue;
+    filteredPayload[key] = value;
+  }
+
+  const chunks = [
+    `Titulo: ${String(body.title ?? payload.title ?? "Task")}`,
+    `Area: ${String(body.area ?? payload.area ?? "analysis")}`,
+    `Risco: ${String(body.risk ?? payload.risk ?? "medium")}`,
+    `Objetivo: ${String(body.objective ?? payload.objective ?? "")}`,
+  ];
+  if (Object.keys(filteredPayload).length > 0) {
+    chunks.push(`Payload relevante:\n${JSON.stringify(filteredPayload, null, 2)}`);
+  }
+  chunks.push("Entregue uma resposta tecnica, objetiva e pronta para execucao.");
+  return chunks.join("\n\n");
 }
 
 function percentile95(values: number[], fallback: number): number {
@@ -439,10 +629,24 @@ function asBool(value: unknown): boolean {
   return false;
 }
 
+function hasBool(value: unknown): boolean {
+  if (typeof value === "boolean") return true;
+  if (typeof value !== "string") return false;
+  const low = value.trim().toLowerCase();
+  return low === "1" || low === "0" || low === "true" || low === "false" || low === "yes" || low === "no";
+}
+
 function asPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.floor(n);
+}
+
+function asZeroOrPositiveInt(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n < 0) return undefined;
   return Math.floor(n);
 }
 

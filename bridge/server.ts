@@ -155,6 +155,7 @@ const version = {
     "funil-auto-pause-on-intent",
     "funil-command-private-note",
     "macro-command-poll-15s",
+    "llm-openai-execute-cache",
   ],
   build: "2026-07-10-ryze-inbound-fix",
 };
