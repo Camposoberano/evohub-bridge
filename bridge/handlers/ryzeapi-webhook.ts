@@ -12,6 +12,10 @@ import { accountForChannel } from "../shared/accounts.ts";
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+function jidDigits(value: unknown): string {
+  return String(value ?? "").replace(/@.*/, "").replace(/\D/g, "");
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
   const url = new URL(req.url);
@@ -47,7 +51,6 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   //   p.data.message.media.*    mídia (type/url/base64/...)
   //   p.data.timestamp       ISO timestamp (NÃO dentro de message)
   const data = (p.data ?? {}) as Json;
-  if (data.direction !== "incoming") return; // saída já vai pela ponte nativa deles
   const chat = (data.chat ?? {}) as Json;
   if (chat.type && chat.type !== "private") return; // grupo/newsletter -- fora de escopo por agora
 
@@ -62,10 +65,32 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   if (!channel) { console.warn("ryzeapi: sem canal cadastrado pra instância", instanceName); return; }
 
   const message = (data.message ?? {}) as Json;
-  const sender = (data.sender ?? chat) as Json;
-  const fromRaw = (sender.jid ?? chat.jid ?? sender.lid ?? chat.lid) as string | undefined;
-  if (!fromRaw) return;
-  const from = String(fromRaw).replace(/@.*/, ""); // "55119...@s.whatsapp.net" -> só os dígitos
+  const sender = (data.sender ?? {}) as Json;
+  const recipient = (data.recipient ?? {}) as Json;
+  const ownDigits = jidDigits(channel.phone_number);
+  const senderDigits = jidDigits(sender.jid ?? sender.lid);
+  const chatDigits = jidDigits(chat.jid ?? chat.lid);
+  const recipientDigits = jidDigits(recipient.jid ?? recipient.lid);
+  const direction = String(data.direction ?? "");
+  const source = String(message.source ?? "");
+
+  // A Ryze tem entregue alguns eventos do cliente como "outgoing" e, logo depois,
+  // um espelho "incoming" com o número da própria caixa. Aqui escolhemos o lado que
+  // representa o cliente e ignoramos o espelho/eco da própria instância.
+  let from = "";
+  if (direction === "incoming") {
+    if (senderDigits && senderDigits !== ownDigits) from = senderDigits;
+    else if (chatDigits && chatDigits !== ownDigits) from = chatDigits;
+    else return; // espelho da própria caixa
+  } else if (direction === "outgoing") {
+    if (source === "api") return; // saída iniciada pelo Chatwoot/API
+    if (senderDigits && senderDigits !== ownDigits) from = senderDigits;
+    else if (chatDigits && chatDigits !== ownDigits) from = chatDigits;
+    else if (recipientDigits && recipientDigits !== ownDigits) from = recipientDigits;
+    else return;
+  } else {
+    return;
+  }
 
   const content = (message.content as string) ?? "";
 
