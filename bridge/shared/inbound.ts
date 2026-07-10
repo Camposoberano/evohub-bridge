@@ -174,6 +174,23 @@ export async function ingestInbound(
   }
 
   const attachments = msg.attachments ?? [];
+  if (!msg.outgoing && attachments.length === 0 && msg.content.trim()) {
+    const { data: recentDup, error: recentDupError } = await db.from(
+      "messages",
+    ).select("id,sent_at")
+      .eq("channel_id", channel.id)
+      .eq("conversation_id", conv.id)
+      .eq("direction", "in")
+      .eq("content", msg.content)
+      .eq("msg_type", normalizeMsgType(msg.msgType))
+      .gte("sent_at", new Date(Date.now() - 30_000).toISOString())
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recentDupError) throw recentDupError;
+    if (recentDup) return { inserted: false, reason: "duplicate-recent-text" };
+  }
+
   let cwMsg: (Record<string, unknown> & { id?: number }) | null = null;
   if (skip) {
     // nativo: não posta no Chatwoot. Entrada já chega na caixa nativa pelo repasse do EVO Hub.
