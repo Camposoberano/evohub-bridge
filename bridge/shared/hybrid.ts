@@ -10,6 +10,7 @@ import {
   listInstances,
   uazapiConfigured,
 } from "./uazapi.ts";
+import { optionalEnv } from "./env.ts";
 
 type Json = Record<string, unknown>;
 type UazInstance = { name: string; number: string | null; status: string; token: string };
@@ -25,6 +26,11 @@ let instCache: UazInstance[] = [];
 let ts = 0;
 const TTL_MS = 60_000;
 
+type HybridPolicy = {
+  channelAllowlist: Set<string>;
+  instanceAllowlist: Set<string>;
+};
+
 async function refreshInstances() {
   const now = Date.now();
   if (instCache.length && now - ts <= TTL_MS) return;
@@ -39,20 +45,78 @@ function norm(n: string | null | undefined): string {
   return (n ?? "").replace(/\D/g, "");
 }
 
+function parseAllowlist(value: string | undefined): Set<string> {
+  if (!value?.trim()) return new Set();
+  return new Set(
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => item.toLowerCase()),
+  );
+}
+
+function hybridPolicy(): HybridPolicy {
+  return {
+    channelAllowlist: parseAllowlist(optionalEnv("HYBRID_CHANNEL_ALLOWLIST")),
+    instanceAllowlist: parseAllowlist(optionalEnv("HYBRID_INSTANCE_ALLOWLIST")),
+  };
+}
+
+function channelMatchesAllowlist(
+  allowlist: Set<string>,
+  channelId: string,
+  phoneNumberId?: string,
+  channelPhone?: string,
+): boolean {
+  if (allowlist.size === 0) return true;
+  const normalizedPhone = norm(channelPhone);
+  const candidates = [
+    channelId,
+    phoneNumberId,
+    channelPhone,
+    normalizedPhone,
+  ]
+    .filter((value): value is string => !!value)
+    .map((value) => value.toLowerCase());
+  return candidates.some((value) => allowlist.has(value));
+}
+
+function instanceMatchesAllowlist(
+  allowlist: Set<string>,
+  instance: UazInstance,
+): boolean {
+  if (allowlist.size === 0) return true;
+  const candidates = [
+    instance.name,
+    instance.number ?? "",
+    norm(instance.number),
+  ]
+    .filter(Boolean)
+    .map((value) => value.toLowerCase());
+  return candidates.some((value) => allowlist.has(value));
+}
+
 // Descobre se o canal oficial tem espelho uazapi pelo número.
 // channelPhone = phone_number do canal (display_phone_number da Meta, ex: "+55 11 91036-3320")
 // Cruza contra os números conectados nas instâncias uazapi.
 export async function getHybridRoute(
-  _channelId: string,
-  _phoneNumberId?: string,
+  channelId: string,
+  phoneNumberId?: string,
   channelPhone?: string,
 ): Promise<HybridRoute | null> {
   if (!uazapiConfigured() || !channelPhone) return null;
+  const policy = hybridPolicy();
+  if (!channelMatchesAllowlist(policy.channelAllowlist, channelId, phoneNumberId, channelPhone)) {
+    return null;
+  }
   await refreshInstances();
   const target = norm(channelPhone);
   if (!target || target.length < 10) return null;
   const match = instCache.find((i) =>
-    i.status === "connected" && norm(i.number) === target
+    i.status === "connected" &&
+    norm(i.number) === target &&
+    instanceMatchesAllowlist(policy.instanceAllowlist, i)
   );
   if (!match) return null;
   return { provider: "uazapi", instance: match.name, token: match.token };
