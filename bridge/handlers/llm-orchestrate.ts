@@ -169,6 +169,9 @@ async function executeTask(body: Json): Promise<Response> {
       error_message: String(error instanceof Error ? error.message : error),
       next_model_id: nextModelId,
     });
+    const message = String(error instanceof Error ? error.message : error);
+    const status = openAIErrorStatus(message);
+    if (status) throw new HttpError(status, message);
     throw error;
   }
 }
@@ -551,6 +554,13 @@ function verifyAuth(req: Request): Response | null {
 
   const provided = readBearer(req.headers.get("authorization")) ?? asText(req.headers.get("x-router-token"));
   if (!provided || !timingSafeEqual(expected, provided)) return json({ error: "unauthorized" }, 401);
+  return null;
+}
+
+function openAIErrorStatus(message: string): number | null {
+  const low = message.toLowerCase();
+  if (low.includes("quota") || low.includes("billing") || low.includes("rate limit")) return 429;
+  if (low.includes("invalid api key") || low.includes("authentication")) return 502;
   return null;
 }
 
