@@ -249,7 +249,13 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  await db.from("sales_sequences").insert({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, status: "running" });
+  const { error: sequenceError } = await db.from("sales_sequences").insert({
+    conversation_id: conv.id,
+    chatwoot_conversation_id: cwConvId,
+    funnel: FUNNEL,
+    status: "running",
+  });
+  if (sequenceError) return json({ error: `falha ao criar sequência: ${sequenceError.message}` }, 500);
   const { error } = await db.from("scheduled_messages").insert(rows);
   if (error) return json({ error: error.message }, 500);
 

@@ -64,17 +64,22 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (action === "status") {
-    const { data: seq } = await db.from("sales_sequences").select("funnel, status")
+    const { data: seq, error: seqError } = await db.from("sales_sequences").select("funnel, status")
       .eq("conversation_id", conv.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    const { count: pending } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
+    const { count: pending, error: pendingError } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
       .eq("conversation_id", conv.id).eq("status", "pending");
-    const { count: paused } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
+    const { count: paused, error: pausedError } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
       .eq("conversation_id", conv.id).eq("status", "paused");
-    const { count: sent } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
+    const { count: sent, error: sentError } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
       .eq("conversation_id", conv.id).eq("status", "sent");
+    const { data: next, error: nextError } = await db.from("scheduled_messages")
+      .select("id, type, send_at, status").eq("conversation_id", conv.id)
+      .in("status", ["pending", "paused"]).order("send_at", { ascending: true }).limit(1).maybeSingle();
     return json({
       ok: true, funnel: seq?.funnel ?? null, sequence_status: seq?.status ?? null,
       pending: pending ?? 0, paused: paused ?? 0, sent: sent ?? 0,
+      next: next ?? null,
+      diagnostics: [seqError, pendingError, pausedError, sentError, nextError].filter(Boolean).map((e) => e?.message),
     });
   }
 
