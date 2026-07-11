@@ -62,7 +62,10 @@ export async function handle(req: Request): Promise<Response> {
         // mas evita a chamada e o delay defensivo de 600ms à toa.
         const { data: exist } = await db.from("messages").select("id,status")
           .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-        if (exist && exist.status !== "failed" && !chatwootFailed) { totals.skipped++; continue; }
+        // O status do Chatwoot pode continuar "failed" mesmo depois de um retry aceito
+        // pelo provedor. O registro local "sent" é a confirmação do bridge e deve encerrar
+        // novas tentativas; caso contrário a mesma mensagem sai a cada ciclo de 20s.
+        if (exist && exist.status !== "failed") { totals.skipped++; continue; }
         // Uma tentativa anterior pode ter deixado a claim cw-out-<id> presa. Só
         // removemos essa trava quando o registro correspondente está falho.
         if (exist?.status === "failed" || chatwootFailed) {
