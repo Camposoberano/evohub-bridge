@@ -213,13 +213,15 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getJson(context, "event")?.fromMe,
   );
   let fromRaw = firstString(
+    getString(message, "sender_pn"),
+    getString(getJson(message, "sender"), "sender_pn"),
+    getString(context, "sender_pn"),
+    getString(getJson(context, "sender"), "sender_pn"),
     message.from,
     getString(message, "sender"),
-    getString(message, "sender_pn"),
     getString(message, "sender_lid"),
     getString(context, "from"),
     getString(context, "sender"),
-    getString(context, "sender_pn"),
     getString(getJson(message, "sender"), "jid"),
     getString(getJson(context, "sender"), "jid"),
     getString(getJson(message, "chat"), "jid"),
@@ -235,6 +237,8 @@ async function parseUazapiMessage(message: Json, context: Json) {
     // Em mensagens enviadas pelo aparelho, o remetente e o proprio numero;
     // para abrir a conversa correta precisamos usar o destinatario/chatid.
     fromRaw = firstString(
+      getString(message, "recipient_pn"),
+      getString(context, "recipient_pn"),
       getString(message, "to"),
       getString(message, "chatid"),
       getString(message, "chat_id"),
