@@ -34,6 +34,7 @@ import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { handle as relatorio } from "./handlers/relatorio.ts";
 import { handle as hybridRoutes } from "./handlers/hybrid-routes.ts";
 import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
+import { handle as funnelQueuePump } from "./handlers/funil-queue-pump.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
@@ -76,6 +77,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/relatorio": relatorio,
   "/hybrid-routes": hybridRoutes,
   "/repair-official-5895": repairOfficial5895,
+  "/funil-queue-pump": funnelQueuePump,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
