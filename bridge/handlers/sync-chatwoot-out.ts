@@ -59,9 +59,14 @@ export async function handle(req: Request): Promise<Response> {
 
         // dedup leve: já registrada na nossa base -> handleOutgoing também pularia (anti-echo),
         // mas evita a chamada e o delay defensivo de 600ms à toa.
-        const { data: exist } = await db.from("messages").select("id")
+        const { data: exist } = await db.from("messages").select("id,status")
           .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-        if (exist) { totals.skipped++; continue; }
+        if (exist && exist.status !== "failed") { totals.skipped++; continue; }
+        // Uma tentativa anterior pode ter deixado a claim cw-out-<id> presa. Só
+        // removemos essa trava quando o registro correspondente está falho.
+        if (exist?.status === "failed") {
+          await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
+        }
 
         // monta o payload no formato do webhook do Chatwoot e reusa handleOutgoing
         const p: Json = {
