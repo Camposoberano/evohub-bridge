@@ -216,10 +216,11 @@ export async function handle(req: Request): Promise<Response> {
   const fast = body.fast === true || body.fast === "true";
   const turbo = body.turbo === true || body.turbo === "true";
   const agora = Date.now();
-  // TURBO (teste): todas as fases começam AGORA -> as peças agrupam por offset e o funil todo
-  // sai em ~8min, mas FORA DE ORDEM (o cron de 1min dispara várias peças vencidas juntas). Só teste.
+  // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.
+  // Assim o teste cabe em ~45min sem misturar as aberturas, mídias e botões das fases.
+  const turboGaps = [0, 0, 0, 0, 0];
   const inicios = turbo
-    ? new Array(FASES.length).fill(agora)
+    ? iniciosDosAcessos(agora, turboGaps, true)
     : iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast);
   const rows: Json[] = [];
   for (let i = 0; i < FASES.length; i++) {
