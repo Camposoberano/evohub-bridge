@@ -275,6 +275,16 @@ function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
+function normalizedWords(s: string): string {
+  return fold(s).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function isDefaultAdMessage(content: string): boolean {
+  return normalizedWords(content).includes(
+    "ola posso ter mais informacoes sobre isso",
+  );
+}
+
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
 // Liga via env (desligado se não setar):
 //   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
@@ -285,7 +295,15 @@ export async function autoEnrollFunil(
   channel: Json,
   from: string,
   content: string,
+  fromAd = false,
 ): Promise<void> {
+  // A mensagem pré-preenchida do anúncio e o referral da Meta são sinais
+  // suficientes mesmo sem configuração adicional no ambiente.
+  if (fromAd || isDefaultAdMessage(content)) {
+    await enrollIfNew(db, channel, from);
+    return;
+  }
+
   const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
   if (!alvo) return; // desligado por padrão
   if (channel.name !== alvo && channel.external_id !== alvo) return;

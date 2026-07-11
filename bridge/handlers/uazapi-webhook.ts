@@ -119,7 +119,13 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
 
     if (msg.direction === "incoming") {
       try {
-        await autoEnrollFunil(db, channel as Json, msg.from, msg.content);
+        await autoEnrollFunil(
+          db,
+          channel as Json,
+          msg.from,
+          msg.content,
+          msg.fromAd,
+        );
         if (isSaudacaoIntent(msg.content)) {
           await enrollIfNew(db, channel as Json, msg.from);
         }
@@ -362,6 +368,7 @@ async function parseUazapiMessage(
     msgType,
     content,
     attachments,
+    fromAd: hasAdReferral(message, context),
   };
 }
 
@@ -499,6 +506,23 @@ function isMediaType(msgType: string): boolean {
   const normalized = msgType.toLowerCase();
   return ["audio", "ptt", "image", "video", "document", "sticker"]
     .some((type) => normalized.includes(type));
+}
+
+function hasAdReferral(message: Json, context: Json): boolean {
+  if (
+    getJson(message, "referral") ||
+    getJson(context, "referral") ||
+    getJson(getJson(message, "contextInfo"), "externalAdReply") ||
+    getJson(getJson(context, "contextInfo"), "externalAdReply")
+  ) return true;
+
+  const sourceType = firstString(
+    getString(message, "source_type"),
+    getString(context, "source_type"),
+    getString(getJson(message, "referral"), "source_type"),
+    getString(getJson(context, "referral"), "source_type"),
+  )?.toLowerCase();
+  return sourceType === "ad" || sourceType === "ads";
 }
 
 function firstString(...values: Array<unknown>): string | undefined {

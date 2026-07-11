@@ -215,7 +215,15 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         // entrada automática no funil (leads de anúncio) -- só age se FUNIL_AUTO_ENROLL_CHANNEL
         // estiver setado e este for o canal alvo (+ FUNIL_KEYWORD, se configurada).
-        try { await autoEnrollFunil(db, channel as Json, from, content ?? ""); } catch (e) { console.error("autoEnrollFunil erro:", e); }
+        try {
+          await autoEnrollFunil(
+            db,
+            channel as Json,
+            from,
+            content ?? "",
+            Boolean(m.referral),
+          );
+        } catch (e) { console.error("autoEnrollFunil erro:", e); }
 
         // Intenção de PREÇO — três portas, mesma resposta do botão 💰 Preço:
         //   botão   -> menu_preco (tratado acima)
