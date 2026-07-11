@@ -54,6 +54,7 @@ export async function handle(req: Request): Promise<Response> {
         const cwMsgId = m.id as number | undefined;
         const content = (m.content as string | undefined) ?? "";
         const attachments = (m.attachments as Json[] | undefined) ?? [];
+        const chatwootFailed = m.status === "failed";
         if (!cwMsgId || (!content && attachments.length === 0)) continue;
         totals.outgoing_found++;
 
@@ -61,10 +62,10 @@ export async function handle(req: Request): Promise<Response> {
         // mas evita a chamada e o delay defensivo de 600ms à toa.
         const { data: exist } = await db.from("messages").select("id,status")
           .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-        if (exist && exist.status !== "failed") { totals.skipped++; continue; }
+        if (exist && exist.status !== "failed" && !chatwootFailed) { totals.skipped++; continue; }
         // Uma tentativa anterior pode ter deixado a claim cw-out-<id> presa. Só
         // removemos essa trava quando o registro correspondente está falho.
-        if (exist?.status === "failed") {
+        if (exist?.status === "failed" || chatwootFailed) {
           await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
         }
 
