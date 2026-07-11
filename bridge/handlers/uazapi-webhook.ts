@@ -89,7 +89,9 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   const acct = await accountForChannel(channel.id as string);
   for (const rawMsg of messages) {
     const msg = await parseUazapiMessage(rawMsg, p);
-    if (msg.direction === "outgoing") continue;
+    // Saida gerada pela API ja foi criada no Chatwoot pelo webhook de origem.
+    // Saida digitada no aparelho precisa entrar como echo na conversa.
+    if (msg.direction === "outgoing" && msg.wasSentByApi) continue;
     if (msg.isGroup) continue;
     if (!msg.from) {
       console.warn(
@@ -209,7 +211,7 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getJson(context, "event")?.IsFromMe,
     getJson(context, "event")?.fromMe,
   );
-  const fromRaw = firstString(
+  let fromRaw = firstString(
     message.from,
     getString(message, "sender"),
     getString(message, "sender_pn"),
@@ -222,6 +224,28 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getString(getJson(message, "chat"), "jid"),
     getString(getJson(context, "chat"), "jid"),
   );
+  const wasSentByApi = isTruthy(
+    message.wasSentByApi,
+    message.was_sent_by_api,
+    getJson(message, "metadata")?.wasSentByApi,
+    getJson(context, "message")?.wasSentByApi,
+  );
+  if (fromMe) {
+    // Em mensagens enviadas pelo aparelho, o remetente e o proprio numero;
+    // para abrir a conversa correta precisamos usar o destinatario/chatid.
+    fromRaw = firstString(
+      getString(message, "to"),
+      getString(message, "chatid"),
+      getString(message, "chat_id"),
+      getString(getJson(message, "chat"), "wa_chatid"),
+      getString(getJson(message, "chat"), "jid"),
+      getString(getJson(context, "chat"), "wa_chatid"),
+      getString(getJson(context, "chat"), "jid"),
+      getString(context, "chatid"),
+      getString(getJson(context, "event"), "Chat"),
+      fromRaw,
+    );
+  }
   const from = fromRaw ? fromRaw.replace(/@.*$/, "") : undefined;
   const name = firstString(
     getString(message, "name"),
@@ -290,6 +314,7 @@ async function parseUazapiMessage(message: Json, context: Json) {
     metaMessageId,
     sentAt,
     direction,
+    wasSentByApi,
     isGroup: Boolean(message.isGroup) || Boolean(getJson(context, "chat")?.wa_isGroup),
     msgType,
     content,
