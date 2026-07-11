@@ -65,7 +65,7 @@ export async function handle(req: Request): Promise<Response> {
 
   if (action === "status") {
     const { data: seq, error: seqError } = await db.from("sales_sequences").select("funnel, status")
-      .eq("conversation_id", conv.id).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      .eq("conversation_id", conv.id).limit(1).maybeSingle();
     const { count: pending, error: pendingError } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
       .eq("conversation_id", conv.id).eq("status", "pending");
     const { count: paused, error: pausedError } = await db.from("scheduled_messages").select("id", { count: "exact", head: true })
