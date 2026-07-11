@@ -1,0 +1,8 @@
+[Unit]
+Description=Update EvoHub Nginx upstream after Coolify deploys
+After=docker.service nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/update-evohub-nginx-upstream
+

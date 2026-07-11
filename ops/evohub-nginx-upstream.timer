@@ -1,0 +1,10 @@
+[Unit]
+Description=Monitor EvoHub container IP for Nginx
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=10s
+Unit=evohub-nginx-upstream.service
+
+[Install]
+WantedBy=timers.target
