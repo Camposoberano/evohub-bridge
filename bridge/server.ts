@@ -40,6 +40,7 @@ import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
 import { envAcct, getConversationLabels, setConversationLabels } from "./shared/chatwoot.ts";
+import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -160,6 +161,7 @@ const version = {
     "llm-openai-execute-cache",
     "repair-official-5895-single-inbox",
     "uazapi-device-echo-to-chatwoot",
+    "funnel-queue-pump",
   ],
   build: "2026-07-10-ryze-inbound-fix",
 };
@@ -489,6 +491,18 @@ function startChannelSyncLoop() {
   setInterval(run, 5 * 60 * 1000);
 }
 
+function startFunnelQueueLoop() {
+  const run = async () => {
+    try {
+      const result = await pumpFunnelQueue(10);
+      if (result.found) console.log("funnel-queue-pump:", JSON.stringify(result));
+    } catch (e) { console.error("funnel-queue-pump erro:", e); }
+  };
+  setTimeout(run, 20_000);
+  setInterval(run, 30_000);
+  console.log("funnel-queue-pump loop ON (30s)");
+}
+
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
 } else {
@@ -503,5 +517,6 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startChannelSyncLoop();
   startDataCleanupLoop();
   startMacroCommandLoop();
+  startFunnelQueueLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);
