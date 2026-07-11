@@ -33,6 +33,7 @@ import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { handle as relatorio } from "./handlers/relatorio.ts";
 import { handle as hybridRoutes } from "./handlers/hybrid-routes.ts";
+import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
@@ -73,6 +74,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/llm-orchestrate": llmOrchestrate,
   "/relatorio": relatorio,
   "/hybrid-routes": hybridRoutes,
+  "/repair-official-5895": repairOfficial5895,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
@@ -156,6 +158,7 @@ const version = {
     "funil-command-private-note",
     "macro-command-poll-15s",
     "llm-openai-execute-cache",
+    "repair-official-5895-single-inbox",
   ],
   build: "2026-07-10-ryze-inbound-fix",
 };
