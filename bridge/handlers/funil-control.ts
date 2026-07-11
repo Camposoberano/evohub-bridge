@@ -75,11 +75,24 @@ export async function handle(req: Request): Promise<Response> {
     const { data: next, error: nextError } = await db.from("scheduled_messages")
       .select("id, type, send_at, status").eq("conversation_id", conv.id)
       .in("status", ["pending", "paused"]).order("send_at", { ascending: true }).limit(1).maybeSingle();
+    const { data: upcoming, error: upcomingError } = await db.from("scheduled_messages")
+      .select("day, step, type, send_at, status").eq("conversation_id", conv.id)
+      .order("send_at", { ascending: true }).limit(40);
+    const { data: mediaRows, error: mediaError } = await db.from("funnel_media")
+      .select("day, slot, type").eq("funnel", "mega-sorgo").eq("active", true);
+    const media = (mediaRows ?? []).reduce((acc: Record<string, number>, row: Json) => {
+      const key = `dia${row.day}:${row.slot}:${row.type ?? "unknown"}`;
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {});
     return json({
       ok: true, funnel: seq?.funnel ?? null, sequence_status: seq?.status ?? null,
       pending: pending ?? 0, paused: paused ?? 0, sent: sent ?? 0,
       next: next ?? null,
-      diagnostics: [seqError, pendingError, pausedError, sentError, nextError].filter(Boolean).map((e) => e?.message),
+      upcoming: upcoming ?? [],
+      media,
+      diagnostics: [seqError, pendingError, pausedError, sentError, nextError, upcomingError, mediaError]
+        .filter(Boolean).map((e) => e?.message),
     });
   }
 
