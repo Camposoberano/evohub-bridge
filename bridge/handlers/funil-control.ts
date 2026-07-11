@@ -102,8 +102,9 @@ export async function handle(req: Request): Promise<Response> {
     const enrollRes = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-enroll?token=${encodeURIComponent(secret)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      // Clique manual = disparo imediato de teste; nao cria agenda para outro horario.
-      body: JSON.stringify({ chatwoot_conversation_id: cwConvId, force: true, turbo: true }),
+      // Clique manual ignora apenas o bloqueio de horario comercial; os intervalos do funil
+      // continuam intactos (30min, 2h, 4h e 8h).
+      body: JSON.stringify({ chatwoot_conversation_id: cwConvId, force: true, manual: true }),
     });
     const enrollData = await enrollRes.json().catch(() => ({})) as Json;
     if (enrollData.ok) {

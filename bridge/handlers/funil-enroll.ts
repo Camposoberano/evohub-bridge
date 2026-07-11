@@ -217,13 +217,14 @@ export async function handle(req: Request): Promise<Response> {
 
   const fast = body.fast === true || body.fast === "true";
   const turbo = body.turbo === true || body.turbo === "true";
+  const manual = body.manual === true || body.manual === "true";
   const agora = Date.now();
   // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.
   // Assim o teste cabe em ~45min sem misturar as aberturas, mídias e botões das fases.
   const turboGaps = [0, 0, 0, 0, 0];
   const inicios = turbo
     ? iniciosDosAcessos(agora, turboGaps, true)
-    : iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast);
+    : iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast || manual);
   const rows: Json[] = [];
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;
