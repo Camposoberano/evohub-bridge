@@ -299,6 +299,14 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   if (!res) { console.warn("nada enviado (sem conteúdo/anexo válido)", channel.id); await dbg(db, cwMsgId, "no-res-nothing-sent", {}); return; }
+  console.log("chatwoot-out result:", JSON.stringify({
+    cwMsgId,
+    channel: channel.name,
+    ok: res.ok,
+    status: res.status,
+    via: (res as Json).via ?? "official",
+    data: JSON.stringify(res.data).slice(0, 300),
+  }));
   const d = res.data as Json | null;
   const messages = d && Array.isArray((d as { messages?: unknown }).messages)
     ? (d as { messages: Json[] }).messages
