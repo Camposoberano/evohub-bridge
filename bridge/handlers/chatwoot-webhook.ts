@@ -74,6 +74,7 @@ export async function handleOutgoing(db: Db, p: Json) {
   const attachment = attachments[0];
 
   const cwMsgId = p.id as number | undefined;
+  let retryingFailedMessage: Json | null = null;
   await dbg(db, cwMsgId, "entry", { cwConversationId, cwInboxId, hasContent: !!content, attachmentsLen: attachments.length });
 
   if (!cwConversationId || (!content && !attachment)) { await dbg(db, cwMsgId, "early-return-no-content-no-attachment", {}); return; }
@@ -98,18 +99,23 @@ export async function handleOutgoing(db: Db, p: Json) {
       return;
     }
     // 2) Anti-loop echo: mensagem já no banco (echo do aparelho que injetamos) -> não reenviar.
-    const { data: dup } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-    await dbg(db, cwMsgId, "anti-echo-check", { dupFound: !!dup, dupId: dup?.id ?? null });
-    if (dup) { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
+    const { data: dup } = await db.from("messages").select("id,status,direction,meta_message_id")
+      .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+    await dbg(db, cwMsgId, "anti-echo-check", { dupFound: !!dup, dupId: dup?.id ?? null, status: dup?.status ?? null });
+    if (dup && dup.status !== "failed") { console.log("msg já ingerida (echo) — não reenvia", cwMsgId); return; }
+    if (dup?.status === "failed") {
+      retryingFailedMessage = dup as Json;
+      await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
+    }
 
     // 3) Segunda checagem DEFENSIVA depois de um delay: foi observado (sem causa raiz achada)
     // algum processo fora do nosso código inserindo uma linha pra esse mesmo chatwoot_message_id
     // poucos ms depois do claim, sem passar pelo claimDelivery. Espera um pouco e confere de
     // novo antes de mandar -- não resolve a causa, mas evita o cliente receber 2x.
     await new Promise((r) => setTimeout(r, 600));
-    const { data: dupDelayed } = await db.from("messages").select("id").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+    const { data: dupDelayed } = await db.from("messages").select("id,status").eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
     await dbg(db, cwMsgId, "anti-echo-check-delayed", { dupFound: !!dupDelayed, dupId: dupDelayed?.id ?? null });
-    if (dupDelayed) { console.log("msg apareceu durante o delay defensivo — não reenvia", cwMsgId); return; }
+    if (dupDelayed && dupDelayed.status !== "failed") { console.log("msg apareceu durante o delay defensivo — não reenvia", cwMsgId); return; }
   }
 
   const { data: channel } = await db.from("channels").select("*").eq("chatwoot_inbox_id", cwInboxId!).maybeSingle();
@@ -323,7 +329,7 @@ export async function handleOutgoing(db: Db, p: Json) {
     (d && typeof (d as { id?: unknown }).id === "string" ? (d as { id: string }).id : null);
 
   await dbg(db, cwMsgId, "before-insert-messages", { msgType, mediaUrl, metaId });
-  await db.from("messages").insert({
+  const messageRow = {
     conversation_id: conv?.id ?? null,
     channel_id: channel.id,
     direction: "out",
@@ -333,7 +339,12 @@ export async function handleOutgoing(db: Db, p: Json) {
     meta_message_id: metaId,
     chatwoot_message_id: (p.id as number) ?? null,
     status: res.ok ? "sent" : "failed",
-  });
+  };
+  if (retryingFailedMessage?.id) {
+    await db.from("messages").update(messageRow).eq("id", retryingFailedMessage.id);
+  } else {
+    await db.from("messages").insert(messageRow);
+  }
 
   if (conv && !conv.first_response_at) {
     await db.from("conversations").update({ first_response_at: new Date().toISOString() }).eq("id", conv.id);
