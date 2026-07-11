@@ -45,7 +45,15 @@ export async function handle(req: Request): Promise<Response> {
       totals.conversations_scanned++;
       let messages: Json[];
       try { messages = await listConversationMessages(cwConvId) as Json[]; }
-      catch (e) { totals.errors.push(`conv ${cwConvId}: ${msg(e)}`); continue; }
+      catch (e) {
+        const detail = msg(e);
+        if (detail.includes(" 404:")) {
+          await db.from("conversations").update({ status: "resolved" }).eq("id", conv.id);
+          continue;
+        }
+        totals.errors.push(`conv ${cwConvId}: ${detail}`);
+        continue;
+      }
 
       for (const m of messages) {
         if (!isOutgoing(m) || m.private === true) continue;
