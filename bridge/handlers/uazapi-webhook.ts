@@ -7,6 +7,8 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
+import { isSaudacaoIntent } from "../shared/intent.ts";
+import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -114,6 +116,17 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       outgoing: msg.direction === "outgoing",
       acct,
     });
+
+    if (msg.direction === "incoming") {
+      try {
+        await autoEnrollFunil(db, channel as Json, msg.from, msg.content);
+        if (isSaudacaoIntent(msg.content)) {
+          await enrollIfNew(db, channel as Json, msg.from);
+        }
+      } catch (e) {
+        console.error("uazapi-webhook auto-enroll erro:", e);
+      }
+    }
   }
 }
 
