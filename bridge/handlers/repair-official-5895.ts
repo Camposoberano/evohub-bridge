@@ -4,7 +4,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { getChannelDetail } from "../shared/hub.ts";
 import { acctByKey } from "../shared/accounts.ts";
-import { findInboxByName, setInboxWebhook } from "../shared/chatwoot.ts";
+import { createApiInbox, findInboxByName, setInboxWebhook } from "../shared/chatwoot.ts";
 
 type Json = Record<string, unknown>;
 
@@ -43,10 +43,14 @@ export async function handle(req: Request): Promise<Response> {
   if (findError) return json({ error: findError.message }, 500);
 
   const acct = await acctByKey(accountKey);
-  const inbox = await findInboxByName(inboxName, acct);
-  if (!inbox?.inbox_identifier) {
-    return json({ error: "inbox existente nao encontrada", inbox_name: inboxName, action: "criar somente se realmente nao existir" }, 404);
+  let inbox = await findInboxByName(inboxName, acct);
+  let inboxCreated = false;
+  if (!inbox) {
+    const webhookUrl = `${env("BRIDGE_PUBLIC_BASE").replace(/\/+$/, "")}/chatwoot-webhook?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`;
+    inbox = await createApiInbox(inboxName, webhookUrl, acct);
+    inboxCreated = true;
   }
+  if (!inbox?.inbox_identifier) return json({ error: "inbox sem inbox_identifier", inbox_name: inboxName }, 502);
 
   const channelId = existing?.id ?? crypto.randomUUID();
   const patch = {
@@ -80,6 +84,7 @@ export async function handle(req: Request): Promise<Response> {
   return json({
     ok: true,
     created: !existing,
+    inbox_created: inboxCreated,
     channel: { id: channelId, name: patch.name, phone_number_id: detailPhoneId },
     inbox: { id: patch.chatwoot_inbox_id, name: inboxName, identifier: patch.chatwoot_inbox_identifier },
     hub: { channel_id: hubChannelId, status: detail.status ?? "unknown" },
