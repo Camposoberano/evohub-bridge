@@ -162,7 +162,9 @@ function iniciosDosAcessos(agora: number, gaps: number[], skipClamp: boolean): n
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
-    const ini = i === 0 ? fimAnterior : clamp(fimAnterior + gaps[i] * 1000);
+    // O primeiro disparo responde ao clique/entrada imediatamente. A janela comercial
+    // só é aplicada às fases seguintes, para não prender a abertura até 06:00.
+    const ini = i === 0 ? agora : clamp(fimAnterior + gaps[i] * 1000);
     inicios.push(ini);
     fimAnterior = ini + FIM_ACESSO * 1000;
   }
