@@ -110,6 +110,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       content: msg.content,
       attachments: msg.attachments,
       sentAt: msg.sentAt,
+      outgoing: msg.direction === "outgoing",
       acct,
     });
   }
