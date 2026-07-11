@@ -63,12 +63,69 @@ export function isSaudacaoIntent(text: string): boolean {
   return SAUDACAO_RE.test(t);
 }
 
-// Transcreve áudio curto via OpenAI Whisper. null se sem chave, áudio grande demais ou erro
-// (caller segue sem transcrição — detecção por áudio é best-effort).
+// Transcreve áudio curto via provedor configurado. null se sem chave, áudio grande demais
+// ou erro (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 export async function transcribeAudio(bytes: Uint8Array, contentType: string): Promise<string | null> {
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_AUDIO_BYTES) return null;
+  const provider = (optionalEnv("AUDIO_TRANSCRIBE_PROVIDER") ?? "openai").toLowerCase();
+  if (provider === "gemini") return await transcribeWithGemini(bytes, contentType);
+  return await transcribeWithOpenAI(bytes, contentType);
+}
+
+async function transcribeWithGemini(
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<string | null> {
+  const key = optionalEnv("GEMINI_API_KEY") ?? optionalEnv("GOOGLE_API_KEY");
+  if (!key) return null;
+  const model = optionalEnv("GEMINI_TRANSCRIBE_MODEL") ?? "gemini-3.5-flash";
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              {
+                text: "Transcreva literalmente este áudio em português do Brasil. Responda somente com a transcrição, sem comentários, aspas ou formatação.",
+              },
+              {
+                inline_data: {
+                  mime_type: normalizedAudioMime(contentType),
+                  data: bytesToBase64(bytes),
+                },
+              },
+            ],
+          }],
+          generationConfig: { temperature: 0 },
+        }),
+      },
+    );
+    if (!res.ok) {
+      console.warn("gemini transcrição falhou:", res.status, (await res.text()).slice(0, 180));
+      return null;
+    }
+    const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+    const candidates = json.candidates as Array<Record<string, unknown>> | undefined;
+    const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
+    const parts = content?.parts as Array<Record<string, unknown>> | undefined;
+    return parts?.map((part) => typeof part.text === "string" ? part.text : "")
+      .join(" ").trim() || null;
+  } catch (e) {
+    console.warn("gemini transcrição erro:", String(e).slice(0, 140));
+    return null;
+  }
+}
+
+async function transcribeWithOpenAI(
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<string | null> {
   const key = optionalEnv("OPENAI_API_KEY");
-  if (!key || bytes.byteLength === 0 || bytes.byteLength > MAX_AUDIO_BYTES) return null;
+  if (!key) return null;
   try {
     const ext = contentType.includes("ogg") ? "ogg" : contentType.includes("mp4") ? "m4a" : contentType.includes("mpeg") ? "mp3" : "ogg";
     const form = new FormData();
@@ -87,4 +144,17 @@ export async function transcribeAudio(bytes: Uint8Array, contentType: string): P
     console.warn("whisper erro:", String(e).slice(0, 120));
     return null;
   }
+}
+
+function normalizedAudioMime(contentType: string): string {
+  return contentType.split(";", 1)[0]?.trim() || "audio/ogg";
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
