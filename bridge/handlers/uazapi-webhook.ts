@@ -230,10 +230,10 @@ async function handleUazapiIntent(
     : null;
   if (!intent) return;
 
-  const day = new Date().toISOString().slice(0, 10);
+  const intentKey = msg.metaMessageId ?? new Date().toISOString();
   const claimed = await claimDelivery(
     db,
-    `intent-${intent.name}-${channel.id}-${from}-${day}`,
+    `intent-${intent.name}-${channel.id}-${from}-${intentKey}`,
     "intent",
   );
   if (!claimed) return;

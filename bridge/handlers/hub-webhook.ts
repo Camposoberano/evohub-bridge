@@ -247,8 +247,8 @@ async function handleWhatsApp(db: Db, p: Json) {
               }
             }
             if (isPrecoIntent(intentText)) {
-              const dia = new Date().toISOString().slice(0, 10);
-              if (await claimDelivery(db, `intent-preco-${channel.id}-${from}-${dia}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
+              if (await claimDelivery(db, `intent-preco-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handleMenuClick(db, channel as Json, from, "menu_preco", acct);
                 // nota privada com o gatilho (transcrição do áudio ou frase) — contexto pro atendente.
                 if (transcricao) {
@@ -267,8 +267,8 @@ async function handleWhatsApp(db: Db, p: Json) {
                 }
               }
             } else if (isVideoIntent(intentText)) {
-              const dia = new Date().toISOString().slice(0, 10);
-              if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${dia}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
+              if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handleVideoSequence(db, channel as Json, from, acct);
                 if (transcricao) {
                   const { data: ct2 } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -286,18 +286,18 @@ async function handleWhatsApp(db: Db, p: Json) {
                 }
               }
             } else if (isPlantioIntent(intentText)) {
-              const dia = new Date().toISOString().slice(0, 10);
-              if (await claimDelivery(db, `intent-plantio-${channel.id}-${from}-${dia}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
+              if (await claimDelivery(db, `intent-plantio-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handlePlantioSequence(db, channel as Json, from, acct);
               }
             } else if (isNutricaoIntent(intentText)) {
-              const dia = new Date().toISOString().slice(0, 10);
-              if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${dia}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
+              if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
             } else if (isSaudacaoIntent(intentText)) {
-              const dia = new Date().toISOString().slice(0, 10);
-              if (await claimDelivery(db, `intent-saudacao-${channel.id}-${from}-${dia}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
+              if (await claimDelivery(db, `intent-saudacao-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handleSaudacao(db, channel as Json, from, acct);
               }
             }
