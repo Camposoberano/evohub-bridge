@@ -124,6 +124,14 @@ export async function getHybridRoute(
 
 export type SendResult = { ok: boolean; status: number; data: unknown; via: "uazapi" | "official" };
 
+// Uazapi trabalha com número telefônico. IDs numéricos da Meta (LID/BSUID) também
+// podem ter 10-15 dígitos, mas não são números e não devem sair pela rota híbrida.
+// O projeto opera no Brasil, então aceitamos apenas E.164 brasileiro válido.
+export function isHybridRecipient(value: string): boolean {
+  const digits = value.replace(/\D/g, "");
+  return /^55\d{10,11}$/.test(digits);
+}
+
 // Envia texto via uazapi. Retorna null se falhar (caller faz fallback pro oficial).
 export async function hybridSendText(
   route: HybridRoute, to: string, text: string,

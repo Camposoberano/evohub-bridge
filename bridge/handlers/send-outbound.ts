@@ -25,7 +25,7 @@ import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
-import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
+import { getHybridRoute, hybridSendText, hybridSendMedia, isHybridRecipient } from "../shared/hybrid.ts";
 
 type Json = Record<string, unknown>;
 
@@ -54,7 +54,10 @@ export async function handle(req: Request): Promise<Response> {
   const isWhatsapp = channel.type === "whatsapp";
   if (isWhatsapp && !channel.phone_number_id) return json({ error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)" }, 422);
 
-  const hybrid = isWhatsapp ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string) : null;
+  const hybridCandidate = isWhatsapp
+    ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string)
+    : null;
+  const hybrid = hybridCandidate && isHybridRecipient(to) ? hybridCandidate : null;
 
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const channelToken = secret?.channel_token as string | undefined;
