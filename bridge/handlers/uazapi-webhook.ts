@@ -1,14 +1,23 @@
 // uazapi-webhook — recebe eventos do uazapi e grava em events (source=uazapi).
 // Alimenta o monitor de eventos do painel e ingesta inbound de mensagens no Chatwoot.
 // Auth: ?token=<UAZAPI_WEBHOOK_TOKEN|CHATWOOT_WEBHOOK_SECRET>.
-import { admin } from "../shared/supabase.ts";
+import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
-import { isSaudacaoIntent } from "../shared/intent.ts";
+import {
+  isNutricaoIntent,
+  isPlantioIntent,
+  isPrecoIntent,
+  isSaudacaoIntent,
+  isVideoIntent,
+  transcribeAudio,
+} from "../shared/intent.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
+import { autoPauseFunil } from "./funil-control.ts";
+import { handleMenuClick } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -132,8 +141,70 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       } catch (e) {
         console.error("uazapi-webhook auto-enroll erro:", e);
       }
+
+      try {
+        await handleUazapiIntent(db, channel as Json, msg, acct);
+      } catch (e) {
+        console.error("uazapi-webhook intent erro:", e);
+      }
     }
   }
+}
+
+async function handleUazapiIntent(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  msg: Awaited<ReturnType<typeof parseUazapiMessage>>,
+  acct: Awaited<ReturnType<typeof accountForChannel>>,
+): Promise<void> {
+  if (!msg.from) return;
+  const from = msg.from;
+  let intentText = msg.content;
+  if (isAudioType(msg.msgType) && msg.attachments?.length) {
+    const audio = msg.attachments[0];
+    const transcription = await transcribeAudio(audio.bytes, audio.contentType);
+    if (!transcription) {
+      console.warn("uazapi-webhook: áudio recebido, mas não foi transcrito", msg.metaMessageId);
+      return;
+    }
+    intentText = transcription;
+    console.log(
+      "uazapi-webhook: áudio transcrito",
+      msg.metaMessageId,
+      JSON.stringify(transcription.slice(0, 160)),
+    );
+  }
+
+  const intent = isPrecoIntent(intentText)
+    ? { name: "preco", menu: "menu_preco" }
+    : isVideoIntent(intentText)
+    ? { name: "video", menu: "menu_depoimento" }
+    : isPlantioIntent(intentText)
+    ? { name: "plantio", menu: "menu_plantio" }
+    : isNutricaoIntent(intentText)
+    ? { name: "nutricao", menu: "menu_nutricao" }
+    : null;
+  if (!intent) return;
+
+  const day = new Date().toISOString().slice(0, 10);
+  const claimed = await claimDelivery(
+    db,
+    `intent-${intent.name}-${channel.id}-${from}-${day}`,
+    "intent",
+  );
+  if (!claimed) return;
+
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (contact) {
+    const { data: conversation } = await db.from("conversations").select("id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+    if (conversation?.id) await autoPauseFunil(conversation.id as string);
+  }
+
+  await handleMenuClick(db, channel, from, intent.menu, acct);
+  console.log("uazapi-webhook: intent disparado", intent.name, from);
 }
 
 async function findChannelForInstance(
