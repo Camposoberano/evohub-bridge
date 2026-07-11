@@ -89,7 +89,8 @@ export async function handle(req: Request): Promise<Response> {
     const enrollRes = await fetch(`http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-enroll?token=${encodeURIComponent(secret)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chatwoot_conversation_id: cwConvId, force: true }),
+      // Clique manual = disparo imediato de teste; nao cria agenda para outro horario.
+      body: JSON.stringify({ chatwoot_conversation_id: cwConvId, force: true, turbo: true }),
     });
     const enrollData = await enrollRes.json().catch(() => ({})) as Json;
     if (enrollData.ok) {
