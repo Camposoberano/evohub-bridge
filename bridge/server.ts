@@ -294,7 +294,7 @@ function startRetentionLoop() {
 // Ritmo: 1 passo por ENRICH_INTERVAL_MS (default 10s) -> check em lote, depois details 1 a 1.
 function startEnrichLoop() {
   if (optionalEnv("ENRICH_ENABLED") === "false") return; // ligado por padrão; kill-switch = false
-  const instName = optionalEnv("ENRICH_INSTANCE") ?? "0595"; // chip de trabalho default
+  const instName = optionalEnv("ENRICH_INSTANCE") ?? "5895"; // chip de trabalho default
   if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
   // Delay ROTACIONA aleatoriamente entre min e max (mais humano, anti-ban). Compat: se só
   // ENRICH_INTERVAL_MS estiver setado, usa ele como min e max (fixo).
@@ -319,7 +319,7 @@ function startEnrichLoop() {
 // 1 contato por tick, 60-90s aleatório (anti-ban). Kill-switch: AVATAR_SYNC_ENABLED=false.
 function startAvatarLoop() {
   if (optionalEnv("AVATAR_SYNC_ENABLED") === "false") return; // ligado por padrão
-  const instName = optionalEnv("ENRICH_INSTANCE") ?? "0595";
+  const instName = optionalEnv("ENRICH_INSTANCE") ?? "5895";
   if (!uazapiConfigured()) { console.warn("avatar-sync: uazapi não configurado"); return; }
   let tok = "";
   const tick = async () => {
