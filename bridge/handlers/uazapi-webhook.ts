@@ -6,7 +6,7 @@ import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { listInstances } from "../shared/uazapi.ts";
+import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -87,8 +87,9 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   }
 
   const acct = await accountForChannel(channel.id as string);
+  const instanceToken = await tokenForInstance(instanceName);
   for (const rawMsg of messages) {
-    const msg = await parseUazapiMessage(rawMsg, p);
+    const msg = await parseUazapiMessage(rawMsg, p, instanceToken ?? undefined);
     // Saida gerada pela API ja foi criada no Chatwoot pelo webhook de origem.
     // Saida digitada no aparelho precisa entrar como echo na conversa.
     if (msg.direction === "outgoing" && msg.wasSentByApi) continue;
@@ -201,7 +202,11 @@ function extractUazapiMessages(data: Json): Json[] {
   return [data];
 }
 
-async function parseUazapiMessage(message: Json, context: Json) {
+async function parseUazapiMessage(
+  message: Json,
+  context: Json,
+  instanceToken?: string,
+) {
   const fromMe = isTruthy(
     message.fromMe,
     message.from_me,
@@ -275,6 +280,13 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getString(getJson(message, "message"), "id"),
     getString(getJson(context, "message"), "id"),
   );
+  const downloadMessageId = firstString(
+    getString(message, "messageid"),
+    getString(context, "messageid"),
+    getString(message, "message_id"),
+    getString(context, "message_id"),
+    metaMessageId?.split(":").pop(),
+  );
   const sentAt = firstString(
     getString(message, "messageTimestamp"),
     getString(message, "timestamp"),
@@ -305,12 +317,25 @@ async function parseUazapiMessage(message: Json, context: Json) {
     getString(context, "body"),
   ) ?? "";
 
-  let attachments = await buildUazapiAttachment(message);
+  let attachments = await downloadUazapiAttachment(
+    instanceToken,
+    downloadMessageId,
+    msgType,
+  );
+  // URLs de mídia do WhatsApp podem conter o arquivo ainda criptografado.
+  // Quando temos credenciais para descriptografar, nunca persistimos esse fallback.
+  const allowRawUrl = !instanceToken || !downloadMessageId;
   if (!attachments) {
-    attachments = await buildUazapiAttachment(context);
+    attachments = await buildUazapiAttachment(message, allowRawUrl);
   }
   if (!attachments) {
-    attachments = await buildUazapiAttachment({ content: getJson(message, "content"), type: msgType });
+    attachments = await buildUazapiAttachment(context, allowRawUrl);
+  }
+  if (!attachments) {
+    attachments = await buildUazapiAttachment(
+      { content: getJson(message, "content"), type: msgType },
+      allowRawUrl,
+    );
   }
 
   return {
@@ -327,7 +352,61 @@ async function parseUazapiMessage(message: Json, context: Json) {
   };
 }
 
-async function buildUazapiAttachment(obj: Json): Promise<InboundAttachment[] | undefined> {
+async function downloadUazapiAttachment(
+  token: string | undefined,
+  messageId: string | undefined,
+  msgType: string,
+): Promise<InboundAttachment[] | undefined> {
+  if (!token || !messageId || !isMediaType(msgType)) return undefined;
+
+  try {
+    const result = await instPost("/message/download", token, {
+      id: messageId,
+      return_base64: true,
+      return_link: false,
+      generate_mp3: isAudioType(msgType),
+    });
+    if (!result.ok) {
+      console.warn(
+        "uazapi-webhook: download de mídia falhou",
+        result.status,
+        messageId,
+      );
+      return undefined;
+    }
+
+    const data = result.data as Json;
+    const base64Value = firstString(data.base64Data, data.base64);
+    if (!base64Value) {
+      console.warn("uazapi-webhook: download sem base64", messageId);
+      return undefined;
+    }
+
+    const base64 = base64Value.replace(/^data:[^;]+;base64,/, "");
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES) {
+      console.warn("uazapi-webhook: mídia fora do limite", messageId, bytes.byteLength);
+      return undefined;
+    }
+
+    const mimetype = firstString(data.mimetype) ??
+      (isAudioType(msgType) ? "audio/mpeg" : "application/octet-stream");
+    return [{
+      filename: `${normalizedMediaType(msgType)}${extensionForMime(mimetype)}`,
+      contentType: mimetype,
+      bytes,
+      sourceUrl: firstString(data.fileURL),
+    }];
+  } catch (e) {
+    console.error("uazapi-webhook: erro ao descriptografar mídia", messageId, e);
+    return undefined;
+  }
+}
+
+async function buildUazapiAttachment(
+  obj: Json,
+  allowUrl = true,
+): Promise<InboundAttachment[] | undefined> {
   const media = obj.media as Json | undefined;
   if (media) {
     const base64 = firstString(media.base64 as string | undefined);
@@ -353,7 +432,7 @@ async function buildUazapiAttachment(obj: Json): Promise<InboundAttachment[] | u
   }
 
   const content = getJson(obj, "content");
-  if (content) {
+  if (content && allowUrl) {
     const url = firstString(content.URL as string | undefined, content.url as string | undefined);
     if (url) {
       const mimetype = firstString(content.mimetype as string | undefined) ??
@@ -387,6 +466,26 @@ async function buildUazapiAttachment(obj: Json): Promise<InboundAttachment[] | u
   }
 
   return undefined;
+}
+
+function normalizedMediaType(msgType: string): string {
+  const normalized = msgType.toLowerCase();
+  if (isAudioType(normalized)) return "audio";
+  if (normalized.includes("image")) return "imagem";
+  if (normalized.includes("video")) return "video";
+  if (normalized.includes("document")) return "documento";
+  return "arquivo";
+}
+
+function isAudioType(msgType: string): boolean {
+  const normalized = msgType.toLowerCase();
+  return normalized.includes("audio") || normalized.includes("ptt");
+}
+
+function isMediaType(msgType: string): boolean {
+  const normalized = msgType.toLowerCase();
+  return ["audio", "ptt", "image", "video", "document", "sticker"]
+    .some((type) => normalized.includes(type));
 }
 
 function firstString(...values: Array<unknown>): string | undefined {
