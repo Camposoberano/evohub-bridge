@@ -390,11 +390,15 @@ async function parseUazapiMessage(
     getString(message, "direction"),
     getString(context, "direction"),
   ) ?? (fromMe ? "outgoing" : "incoming");
+  const messageContent = getJson(message, "content");
   const msgType = firstString(
-    getString(message, "type"),
     getString(message, "mediaType"),
+    getString(message, "messageType"),
+    messageContent?.PTT === true ? "ptt" : undefined,
+    getString(messageContent, "mimetype"),
     getString(getJson(message, "media"), "type"),
     getString(getJson(context, "media"), "type"),
+    getString(message, "type"),
   ) ?? "text";
 
   const content = firstString(
