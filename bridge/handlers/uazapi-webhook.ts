@@ -119,6 +119,23 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       continue;
     }
 
+    // Clique interativo precisa responder primeiro. A sincronização com Chatwoot
+    // pode sofrer latência e não deve segurar uma ação de compra/novo tamanho.
+    if (msg.direction === "incoming" && msg.menuClickId) {
+      try {
+        const clickClaimed = await claimDelivery(
+          db,
+          `uazapi-click-${channel.id}-${msg.metaMessageId ?? msg.menuClickId}`,
+          "uazapi-click",
+        );
+        if (clickClaimed) {
+          await handleUazapiClick(db, channel as Json, msg.from, msg.menuClickId, acct);
+        }
+      } catch (e) {
+        console.error("uazapi-webhook click erro:", e);
+      }
+    }
+
     await ingestInbound(db, channel as Json, {
       from: msg.from,
       name: msg.name,
@@ -132,20 +149,6 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     });
 
     if (msg.direction === "incoming") {
-      if (msg.menuClickId) {
-        try {
-          const clickClaimed = await claimDelivery(
-            db,
-            `uazapi-click-${channel.id}-${msg.metaMessageId ?? msg.menuClickId}`,
-            "uazapi-click",
-          );
-          if (clickClaimed) {
-            await handleUazapiClick(db, channel as Json, msg.from, msg.menuClickId, acct);
-          }
-        } catch (e) {
-          console.error("uazapi-webhook click erro:", e);
-        }
-      }
       try {
         await autoEnrollFunil(
           db,
