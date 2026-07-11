@@ -17,7 +17,12 @@ import {
 } from "../shared/intent.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
-import { handleMenuClick } from "./hub-webhook.ts";
+import {
+  handleMenuClick,
+  handleNutricaoClick,
+  handlePlantioClick,
+  handlePrecoClick,
+} from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -127,6 +132,20 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     });
 
     if (msg.direction === "incoming") {
+      if (msg.menuClickId) {
+        try {
+          const clickClaimed = await claimDelivery(
+            db,
+            `uazapi-click-${channel.id}-${msg.metaMessageId ?? msg.menuClickId}`,
+            "uazapi-click",
+          );
+          if (clickClaimed) {
+            await handleUazapiClick(db, channel as Json, msg.from, msg.menuClickId, acct);
+          }
+        } catch (e) {
+          console.error("uazapi-webhook click erro:", e);
+        }
+      }
       try {
         await autoEnrollFunil(
           db,
@@ -149,6 +168,28 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       }
     }
   }
+}
+
+async function handleUazapiClick(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+  id: string,
+  acct: Awaited<ReturnType<typeof accountForChannel>>,
+): Promise<void> {
+  if (id.startsWith("menu_")) {
+    await handleMenuClick(db, channel, from, id, acct);
+  } else if (id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")) {
+    await handlePrecoClick(db, channel, from, id, acct);
+  } else if (id.startsWith("plantio_")) {
+    await handlePlantioClick(db, channel, from, id, acct);
+  } else if (id.startsWith("nutricao_")) {
+    await handleNutricaoClick(db, channel, from, id, acct);
+  } else {
+    console.warn("uazapi-webhook: clique sem handler", id);
+    return;
+  }
+  console.log("uazapi-webhook: clique processado", id, from);
 }
 
 async function handleUazapiIntent(
@@ -391,6 +432,13 @@ async function parseUazapiMessage(
     getString(context, "direction"),
   ) ?? (fromMe ? "outgoing" : "incoming");
   const messageContent = getJson(message, "content");
+  const menuClickId = firstString(
+    getString(message, "buttonOrListid"),
+    getString(messageContent, "buttonOrListid"),
+    getString(messageContent, "selectedRowID"),
+    getString(getJson(messageContent, "singleSelectReply"), "selectedRowID"),
+    getString(getJson(messageContent, "buttonReply"), "selectedButtonId"),
+  );
   const msgType = firstString(
     getString(message, "mediaType"),
     getString(message, "messageType"),
@@ -406,6 +454,7 @@ async function parseUazapiMessage(
     getString(getJson(message, "content"), "text"),
     getString(getJson(message, "content"), "body"),
     getString(message, "text"),
+    getString(message, "vote"),
     getString(context, "text"),
     getString(message, "body"),
     getString(context, "body"),
@@ -444,6 +493,7 @@ async function parseUazapiMessage(
     content,
     attachments,
     fromAd: hasAdReferral(message, context),
+    menuClickId,
   };
 }
 

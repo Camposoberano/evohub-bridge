@@ -443,7 +443,7 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
 }
 
 // clique nos botões da sequência de preço.
-async function handlePrecoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+export async function handlePrecoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -821,7 +821,7 @@ async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?:
   }, "📋 Lista de temas de plantio [10 opções]", "interactive");
 }
 
-async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+export async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
   const resumo = PLANTIO_RESUMOS[id];
   if (!resumo) return;
 
@@ -1051,7 +1051,7 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
   }, "🧪 Lista de info nutricional [10 temas]", "interactive");
 }
 
-async function handleNutricaoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+export async function handleNutricaoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
   const resumo = NUTRICAO_RESUMOS[id];
   if (!resumo) return;
 
