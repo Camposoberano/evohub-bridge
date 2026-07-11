@@ -159,6 +159,7 @@ const version = {
     "macro-command-poll-15s",
     "llm-openai-execute-cache",
     "repair-official-5895-single-inbox",
+    "uazapi-device-echo-to-chatwoot",
   ],
   build: "2026-07-10-ryze-inbound-fix",
 };
