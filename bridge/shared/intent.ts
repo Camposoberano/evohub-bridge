@@ -81,39 +81,51 @@ async function transcribeWithGemini(
   if (!key) return null;
   const model = optionalEnv("GEMINI_TRANSCRIBE_MODEL") ?? "gemini-3.5-flash";
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
-      {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const body = JSON.stringify({
+      contents: [{
+        parts: [
+          {
+            text: "Transcreva literalmente este áudio em português do Brasil. Responda somente com a transcrição, sem comentários, aspas ou formatação.",
+          },
+          {
+            inline_data: {
+              mime_type: normalizedAudioMime(contentType),
+              data: bytesToBase64(bytes),
+            },
+          },
+        ],
+      }],
+      generationConfig: { temperature: 0 },
+    });
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              {
-                text: "Transcreva literalmente este áudio em português do Brasil. Responda somente com a transcrição, sem comentários, aspas ou formatação.",
-              },
-              {
-                inline_data: {
-                  mime_type: normalizedAudioMime(contentType),
-                  data: bytesToBase64(bytes),
-                },
-              },
-            ],
-          }],
-          generationConfig: { temperature: 0 },
-        }),
-      },
-    );
-    if (!res.ok) {
-      console.warn("gemini transcrição falhou:", res.status, (await res.text()).slice(0, 180));
-      return null;
+        body,
+      });
+      if (!res.ok) {
+        const detail = (await res.text()).slice(0, 180);
+        const retryable = res.status === 429 || res.status >= 500;
+        console.warn(
+          "gemini transcrição falhou:",
+          res.status,
+          `tentativa ${attempt}/3`,
+          detail,
+        );
+        if (!retryable || attempt === 3) return null;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+        continue;
+      }
+      const json = await res.json().catch(() => ({})) as Record<string, unknown>;
+      const candidates = json.candidates as Array<Record<string, unknown>> | undefined;
+      const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
+      const parts = content?.parts as Array<Record<string, unknown>> | undefined;
+      return parts?.map((part) => typeof part.text === "string" ? part.text : "")
+        .join(" ").trim() || null;
     }
-    const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-    const candidates = json.candidates as Array<Record<string, unknown>> | undefined;
-    const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
-    const parts = content?.parts as Array<Record<string, unknown>> | undefined;
-    return parts?.map((part) => typeof part.text === "string" ? part.text : "")
-      .join(" ").trim() || null;
+    return null;
   } catch (e) {
     console.warn("gemini transcrição erro:", String(e).slice(0, 140));
     return null;
