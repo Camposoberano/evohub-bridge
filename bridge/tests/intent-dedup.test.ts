@@ -10,7 +10,7 @@ Deno.test("daily intent key isolates intent and contact", () => {
   const now = new Date("2026-07-13T12:00:00Z");
   assertEquals(
     dailyIntentKey("canal-1", "+5577999999999", "plantio", now),
-    "commercial-intent:plantio:canal-1:+5577999999999:2026-07-13",
+    "commercial-intent:plantio:canal-1:5577999999999:2026-07-13",
   );
 });
 
