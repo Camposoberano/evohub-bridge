@@ -280,9 +280,19 @@ function normalizedWords(s: string): string {
 }
 
 function isDefaultAdMessage(content: string): boolean {
-  return normalizedWords(content).includes(
-    "ola posso ter mais informacoes sobre isso",
-  );
+  const text = normalizedWords(content);
+  return [
+    // Mensagem pré-preenchida comum dos anúncios em português.
+    "ola posso ter mais informacoes",
+    "posso ter mais informacoes",
+    // Variações em espanhol conforme idioma do aparelho/anúncio.
+    "hola puedo tener mas informacion",
+    "hola puedo obtener mas informacion",
+    "puedo tener mas informacion",
+    "puedo obtener mas informacion",
+    "hola me gustaria conseguir mas informacion",
+    "me gustaria conseguir mas informacion",
+  ].some((phrase) => text.includes(phrase));
 }
 
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
