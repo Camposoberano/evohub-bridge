@@ -401,7 +401,7 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
         type: "button",
         body: { text: "📐 *Qual área o senhor pretende plantar?*\n\nToque abaixo e eu já mostro o pacote certo, o valor e o desconto." },
         action: { buttons: [
-          { type: "reply", reply: { id: "tam_2kg", title: "½ hectare" } },
+          { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
           { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
           { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
         ] },
@@ -529,7 +529,7 @@ export async function handlePrecoClick(db: Db, channel: Json, from: string, id: 
         type: "button",
         body: { text: "📐 *Qual área o senhor quer calcular?*" },
         action: { buttons: [
-          { type: "reply", reply: { id: "tam_2kg", title: "½ hectare" } },
+          { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
           { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
           { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
         ] },

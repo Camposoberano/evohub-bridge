@@ -186,8 +186,9 @@ const version = {
     "price-planting-direct-cta",
     "macro-command-ack-before-consume",
     "meta-message-id-required-for-price",
+    "price-natural-area-labels",
   ],
-  build: "2026-07-12-price-delivery-proof",
+  build: "2026-07-12-price-natural-labels",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
