@@ -30,6 +30,7 @@ export default function Contatos() {
   const [fMorto, setFMorto] = useState("vivos");
   const [regiaoAberta, setRegiaoAberta] = useState(null);
   const [clienteGlobalCount, setClienteGlobalCount] = useState({});
+  const [clienteAberto, setClienteAberto] = useState(null);
 
   const carregar = useCallback(async () => {
     const [ct, cv] = await Promise.all([
@@ -178,7 +179,7 @@ export default function Contatos() {
               {filtrados.length === 0 ? (
                 <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-dim)", padding: 30 }}>Nenhum contato</td></tr>
               ) : filtrados.slice(0, 500).map((c) => (
-                <tr key={c.id}>
+                <tr key={c.id} onClick={() => c.customers && setClienteAberto(c.customers.id)} style={{ cursor: c.customers ? "pointer" : "default" }}>
                   <td>
                     {c.customers?.avatar_url && <img src={c.customers.avatar_url} alt="" style={{ width: 26, height: 26, borderRadius: 999, objectFit: "cover", verticalAlign: "middle", marginRight: 7 }} />}
                     {c.customers?.display_name || <span style={{ color: "var(--text-faint)" }}>Cliente sem nome</span>}
@@ -204,6 +205,40 @@ export default function Contatos() {
           <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 10 }}>Mostrando 500 de {filtrados.length}. Use os filtros pra refinar.</div>
         )}
       </div>
+      {clienteAberto && (() => {
+        const relacionados = enriquecidos.filter((c) => c.customer_id === clienteAberto);
+        const global = relacionados[0]?.customers;
+        if (!global) return null;
+        return (
+          <div onClick={() => setClienteAberto(null)} style={{ position: "fixed", inset: 0, zIndex: 100, background: "rgba(0,0,0,.62)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+            <div className="card" onClick={(e) => e.stopPropagation()} style={{ width: 560, maxWidth: "100%", maxHeight: "85vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18 }}>
+                {global.avatar_url ? <img src={global.avatar_url} alt="" style={{ width: 60, height: 60, borderRadius: 999, objectFit: "cover" }} /> : <div style={{ width: 60, height: 60, borderRadius: 999, background: "var(--surface-2)" }} />}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 19, fontWeight: 700 }}>{global.display_name || "Cliente sem nome"}</div>
+                  <div style={{ color: "var(--text-dim)", fontSize: 13 }}>{global.canonical_phone || "Identidade sem telefone"}</div>
+                </div>
+                <button className="btn-ghost mini" onClick={() => setClienteAberto(null)}>✕</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 18 }}>
+                <div className="stat-card"><div className="stat-label">Canais</div><div className="stat-value">{relacionados.length}</div></div>
+                <div className="stat-card"><div className="stat-label">Conversas</div><div className="stat-value">{relacionados.reduce((n, c) => n + (convCount[c.id] || 0), 0)}</div></div>
+                <div className="stat-card"><div className="stat-label">Último contato</div><div style={{ fontSize: 13, marginTop: 10 }}>{quando(relacionados.map((c) => c.last_seen_at).sort().at(-1))}</div></div>
+              </div>
+              <div className="section-title">Canais relacionados</div>
+              <div style={{ display: "grid", gap: 8 }}>
+                {relacionados.map((c) => (
+                  <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, background: "var(--surface-2)", borderRadius: 8 }}>
+                    <span className="badge badge-gray">{PLAT[c.channels?.type] || c.channels?.type}</span>
+                    <div style={{ flex: 1 }}><div style={{ fontWeight: 600 }}>{c.channels?.name || "Canal"}</div><div style={{ fontSize: 12, color: "var(--text-dim)" }}>{c.name || c.phone || c.external_contact_id}</div></div>
+                    <span style={{ fontSize: 12, color: "var(--text-dim)" }}>{convCount[c.id] || 0} conversa(s)</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 }
