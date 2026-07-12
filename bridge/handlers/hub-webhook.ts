@@ -628,6 +628,10 @@ export async function handleVideoSequence(db: Db, channel: Json, from: string, a
   const envia = async (body: Json, registro: string, tipo: string) => {
     const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
     const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    if (!r.ok || !metaId) {
+      const detail = JSON.stringify(r.data).slice(0, 300);
+      throw new Error(`Meta não confirmou item de vídeo (${r.status}): ${detail}`);
+    }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
       conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
@@ -803,7 +807,7 @@ async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?:
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) throw new Error("canal sem credenciais para enviar plantio");
   const msgPath = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -823,6 +827,10 @@ async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?:
   const envia = async (body: Json, registro: string, tipo: string) => {
     const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
     const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    if (!r.ok || !metaId) {
+      const detail = JSON.stringify(r.data).slice(0, 300);
+      throw new Error(`Meta não confirmou item de plantio (${r.status}): ${detail}`);
+    }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
       conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
@@ -864,7 +872,7 @@ export async function handlePlantioClick(db: Db, channel: Json, from: string, id
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) throw new Error("canal sem credenciais para responder plantio");
   const msgPath = `${phone}/messages`;
 
   const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -884,6 +892,10 @@ export async function handlePlantioClick(db: Db, channel: Json, from: string, id
   // envia resumo
   const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
   const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  if (!r.ok || !metaId) {
+    const detail = JSON.stringify(r.data).slice(0, 300);
+    throw new Error(`Meta não confirmou resumo de plantio (${r.status}): ${detail}`);
+  }
   const cwMsgId = await registra(resumo);
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
@@ -911,6 +923,10 @@ export async function handlePlantioClick(db: Db, channel: Json, from: string, id
     ] } ] },
   } });
   const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  if (!r2.ok || !metaId2) {
+    const detail = JSON.stringify(r2.data).slice(0, 300);
+    throw new Error(`Meta não confirmou lista de plantio (${r2.status}): ${detail}`);
+  }
   const cwMsgId2 = await registra("Quer ver outro tema? [lista 10 temas]");
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
@@ -1037,7 +1053,7 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) throw new Error("canal sem credenciais para enviar nutrição");
   const msgPath = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -1057,6 +1073,10 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
   const envia = async (body: Json, registro: string, tipo: string) => {
     const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
     const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    if (!r.ok || !metaId) {
+      const detail = JSON.stringify(r.data).slice(0, 300);
+      throw new Error(`Meta não confirmou item de nutrição (${r.status}): ${detail}`);
+    }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
       conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
@@ -1094,7 +1114,7 @@ export async function handleNutricaoClick(db: Db, channel: Json, from: string, i
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) throw new Error("canal sem credenciais para responder nutrição");
   const msgPath = `${phone}/messages`;
 
   const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -1113,6 +1133,10 @@ export async function handleNutricaoClick(db: Db, channel: Json, from: string, i
 
   const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
   const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  if (!r.ok || !metaId) {
+    const detail = JSON.stringify(r.data).slice(0, 300);
+    throw new Error(`Meta não confirmou resumo de nutrição (${r.status}): ${detail}`);
+  }
   const cwMsgId = await registra(resumo);
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
@@ -1128,6 +1152,10 @@ export async function handleNutricaoClick(db: Db, channel: Json, from: string, i
     action: { button: "Ver mais temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
   } });
   const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  if (!r2.ok || !metaId2) {
+    const detail = JSON.stringify(r2.data).slice(0, 300);
+    throw new Error(`Meta não confirmou lista de nutrição (${r2.status}): ${detail}`);
+  }
   const cwMsgId2 = await registra("Quer ver outro dado nutricional? [lista 10 temas]");
   await db.from("messages").insert({
     conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
