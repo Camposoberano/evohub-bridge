@@ -28,11 +28,11 @@ const LINKS = [
 ];
 
 const SUBNAV = [
-  { match: ["/conexoes", "/central", "/instancias"], label: "Conexões", items: [["/conexoes", "Canais"], ["/central", "Chatwoot"], ["/instancias", "Instâncias"]] },
+  { match: ["/conexoes", "/central", "/instancias", "/hibridos"], label: "Conexões", items: [["/conexoes", "Canais"], ["/hibridos", "Números híbridos"], ["/central", "Chatwoot"], ["/instancias", "Instâncias"]] },
   { match: ["/conversas"], label: "Atendimento", items: [["/conversas", "Conversas"], ["/contatos", "Clientes atendidos"]] },
   { match: ["/contatos", "/clientes"], label: "Clientes", items: [["/contatos", "Atendidos"], ["/clientes", "Prospecção"]] },
   { match: ["/analytics", "/relatorio"], label: "Métricas", items: [["/analytics", "Métricas"], ["/relatorio", "Diagnóstico"]] },
-  { match: ["/disparos", "/campanhas"], label: "Envios", items: [["/disparos", "Disparos"], ["/campanhas", "Campanhas"]] },
+  { match: ["/disparos", "/campanhas", "/funil"], label: "Envios", items: [["/disparos", "Disparos"], ["/funil", "Funil"], ["/campanhas", "Campanhas"]] },
   { match: ["/eventos", "/ferramentas", "/grupos", "/tecnologias"], label: "Operação", items: [["/eventos", "Eventos"], ["/ferramentas", "Ferramentas"], ["/grupos", "Grupos"], ["/tecnologias", "Tecnologias"]] },
 ];
 
