@@ -33,6 +33,7 @@ export default function FunilPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [sequences, setSequences] = useState([]);
+  const [commercial, setCommercial] = useState([]);
   const [queue, setQueue] = useState([]);
   const [filter, setFilter] = useState("todos");
   const [lastSync, setLastSync] = useState(null);
@@ -49,6 +50,7 @@ export default function FunilPage() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setSequences(data.sequences || []);
+      setCommercial(data.commercial || []);
       setQueue(data.messages || []);
       setServerSummary(data.summary || {});
       setFailureEvents(data.failures || []);
@@ -159,6 +161,14 @@ export default function FunilPage() {
           </div>
           <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Funil</th><th>Cliente</th><th>Conversa</th><th>Status</th><th>Ações</th></tr></thead><tbody>
             {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); return <tr key={item.id}><td>{item.funnel || "—"}</td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}
+          </tbody></table></div>
+        </div>
+
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Sequências comerciais enviadas</div>
+          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>Preço, plantio, nutrição e vídeos disparados nas últimas 48 horas.</div>
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Tipo</th><th>Cliente</th><th>Conversa</th><th>Último envio</th><th>Registros</th><th>Ação</th></tr></thead><tbody>
+            {commercial.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência comercial registrada.</td></tr> : commercial.slice(0, 100).map((item) => { const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); return <tr key={`${item.conversation_id}:${item.intent}`}><td>{item.intent}</td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td>{when(item.sent_at)}</td><td>{item.count || 1}</td><td>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}</td></tr>; })}
           </tbody></table></div>
         </div>
 

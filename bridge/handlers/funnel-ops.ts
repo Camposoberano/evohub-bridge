@@ -72,7 +72,8 @@ export async function handle(req: Request): Promise<Response> {
   if (recentError) return json({ error: recentError.message }, 500);
   const recentIds = (recentConversations ?? []).map((item: Json) => item.id)
     .filter(Boolean);
-  const [activeSequenceResult, recentSequenceResult, messageResult] =
+  const commercialSince = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  const [activeSequenceResult, recentSequenceResult, messageResult, commercialResult] =
     await Promise.all([
       db.from("sales_sequences").select(
         "id,conversation_id,chatwoot_conversation_id,funnel,status",
@@ -85,14 +86,19 @@ export async function handle(req: Request): Promise<Response> {
       db.from("scheduled_messages").select(
         "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
       ).order("send_at", { ascending: true }).limit(2000),
+      db.from("messages").select(
+        "id,conversation_id,content,msg_type,status,sent_at",
+      ).eq("direction", "out").gte("sent_at", commercialSince)
+        .order("sent_at", { ascending: false }).limit(2000),
     ]);
   if (
     activeSequenceResult.error || recentSequenceResult.error ||
-    messageResult.error
+    messageResult.error || commercialResult.error
   ) {
     return json({
       error: activeSequenceResult.error?.message ??
-        recentSequenceResult.error?.message ?? messageResult.error?.message,
+        recentSequenceResult.error?.message ?? messageResult.error?.message ??
+        commercialResult.error?.message,
     }, 500);
   }
   const sequenceMap = new Map<string, Json>();
@@ -106,9 +112,14 @@ export async function handle(req: Request): Promise<Response> {
   }
   const sequences = [...sequenceMap.values()];
   const messages = messageResult.data ?? [];
+  const commercialRows = (commercialResult.data ?? []).map((item: Json) => ({
+    ...item,
+    intent: commercialIntent(String(item.content ?? "")),
+  })).filter((item: Json) => item.intent);
   const conversationIds = [
     ...new Set(
-      sequences.map((item: Json) => item.conversation_id).filter(Boolean),
+      [...sequences, ...commercialRows].map((item: Json) => item.conversation_id)
+        .filter(Boolean),
     ),
   ];
   const { data: conversations } = conversationIds.length
@@ -144,6 +155,24 @@ export async function handle(req: Request): Promise<Response> {
     ...item,
     conversation: conversationMap.get(item.conversation_id) ?? null,
   }));
+  const commercialMap = new Map<string, Json>();
+  for (const item of commercialRows as Json[]) {
+    const key = `${item.conversation_id}:${item.intent}`;
+    const current = commercialMap.get(key);
+    if (!current) {
+      commercialMap.set(key, { ...item, count: 1 });
+    } else {
+      current.count = Number(current.count ?? 1) + 1;
+    }
+  }
+  const commercial = [...commercialMap.values()].map((item: Json) => {
+    const conversation = conversationMap.get(item.conversation_id) as Json | undefined;
+    return {
+      ...item,
+      chatwoot_conversation_id: conversation?.chatwoot_conversation_id ?? null,
+      conversation: conversation ?? null,
+    };
+  });
   const won = (conversations ?? []).filter((item: Json) =>
     item.outcome === "won"
   );
@@ -159,6 +188,7 @@ export async function handle(req: Request): Promise<Response> {
 
   return json({
     sequences: enrichedSequences,
+    commercial,
     messages,
     failures: failureEvents ?? [],
     summary: {
@@ -179,6 +209,15 @@ export async function handle(req: Request): Promise<Response> {
         : null,
     },
   });
+}
+
+function commercialIntent(content: string): string | null {
+  const value = content.toLocaleLowerCase("pt-BR");
+  if (value.includes("qual o tamanho da área") || value.includes("imagem promoção") || value.includes("pacote de ")) return "Preço";
+  if (value.includes("instruções de plantio") || value.includes("temas de plantio") || value.includes("precisa no plantio")) return "Plantio";
+  if (value.includes("análise bromatológica") || value.includes("info nutricional")) return "Nutrição";
+  if (value.includes("preparei 5 vídeos") || value.includes("[vídeo ")) return "Vídeos";
+  return null;
 }
 
 async function audit(
