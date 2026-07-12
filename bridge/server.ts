@@ -184,8 +184,9 @@ const version = {
     "funnel-auto-night-6am",
     "funnel-eligible-lead-recovery",
     "price-planting-direct-cta",
+    "macro-command-ack-before-consume",
   ],
-  build: "2026-07-12-conversion-cta-v1",
+  build: "2026-07-12-macro-delivery-ack",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -485,19 +486,6 @@ function startMacroCommandLoop() {
         const action = CMD_LABELS[cmdLabel];
         console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
 
-        // Remove label ANTES de executar — evita re-disparo no próximo tick
-        try {
-          const freshLabels = await getConversationLabels(cwConvId, acct);
-          const cleaned = freshLabels.filter((l) =>
-            !CMD_LABEL_KEYS.includes(l)
-          );
-          if (cleaned.length !== freshLabels.length) {
-            await setConversationLabels(cwConvId, cleaned, acct);
-          }
-        } catch (e) {
-          console.warn("macro-poll cleanup:", String(e).slice(0, 120));
-        }
-
         try {
           const r = await fetch(
             `http://localhost:${port}/funil-control?token=${
@@ -517,6 +505,29 @@ function startMacroCommandLoop() {
             "macro-poll result:",
             JSON.stringify(result).slice(0, 200),
           );
+          if (!r.ok || result.ok !== true) {
+            console.warn(
+              "macro-poll: comando mantido para nova tentativa",
+              cmdLabel,
+              "conv",
+              cwConvId,
+            );
+            continue;
+          }
+
+          // Só consome a etiqueta depois que o destino confirma a execução.
+          // Em falha, ela permanece e o próximo tick tenta novamente.
+          try {
+            const freshLabels = await getConversationLabels(cwConvId, acct);
+            const cleaned = freshLabels.filter((l) =>
+              !CMD_LABEL_KEYS.includes(l)
+            );
+            if (cleaned.length !== freshLabels.length) {
+              await setConversationLabels(cwConvId, cleaned, acct);
+            }
+          } catch (e) {
+            console.warn("macro-poll cleanup:", String(e).slice(0, 120));
+          }
         } catch (e) {
           console.error("macro-poll exec erro:", e);
         }
