@@ -6,6 +6,7 @@
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
+import { foldText, isDefaultAdMessage } from "../shared/ad-lead.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -445,31 +446,6 @@ function json(obj: unknown, status = 200): Response {
   });
 }
 
-// normaliza pra comparação: minúsculo + sem acentos (NFD separa os diacríticos; regex remove).
-function fold(s: string): string {
-  return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function normalizedWords(s: string): string {
-  return fold(s).replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-function isDefaultAdMessage(content: string): boolean {
-  const text = normalizedWords(content);
-  return [
-    // Mensagem pré-preenchida comum dos anúncios em português.
-    "ola posso ter mais informacoes",
-    "posso ter mais informacoes",
-    // Variações em espanhol conforme idioma do aparelho/anúncio.
-    "hola puedo tener mas informacion",
-    "hola puedo obtener mas informacion",
-    "puedo tener mas informacion",
-    "puedo obtener mas informacion",
-    "hola me gustaria conseguir mas informacion",
-    "me gustaria conseguir mas informacion",
-  ].some((phrase) => text.includes(phrase));
-}
-
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
 // Liga via env (desligado se não setar):
 //   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
@@ -495,7 +471,7 @@ export async function autoEnrollFunil(
   const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
   // match tolerante: ignora maiúscula/minúscula E acentos ("INFORMAÇÕES" == "informacoes"),
   // e basta a palavra-chave estar CONTIDA na msg (lead pode escrever coisa a mais em volta).
-  if (kw && !fold(content).includes(fold(kw))) return;
+  if (kw && !foldText(content).includes(foldText(kw))) return;
 
   await enrollIfNew(db, channel, from);
 }
@@ -535,4 +511,81 @@ export async function enrollIfNew(
     res.status,
     await res.text(),
   );
+}
+
+export async function recoverEligibleFunnels(
+  db: ReturnType<typeof admin>,
+  sinceHours = 48,
+): Promise<{ scanned: number; eligible: number; enrolled: number }> {
+  const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000)
+    .toISOString();
+  const { data: conversations, error } = await db.from("conversations")
+    .select(
+      "id,channel_id,contact_id,chatwoot_conversation_id,origem,status,opened_at",
+    )
+    .neq("status", "resolved").gte("opened_at", since)
+    .order("opened_at", { ascending: false }).limit(500);
+  if (error) throw error;
+  if (!conversations?.length) return { scanned: 0, eligible: 0, enrolled: 0 };
+
+  const conversationIds = conversations.map((item: Json) => item.id);
+  const contactIds = conversations.map((item: Json) => item.contact_id);
+  const channelIds = conversations.map((item: Json) => item.channel_id);
+  const [
+    { data: existing },
+    { data: inbound },
+    { data: contacts },
+    { data: channels },
+  ] = await Promise.all([
+    db.from("sales_sequences").select("conversation_id").in(
+      "conversation_id",
+      conversationIds,
+    ),
+    db.from("messages").select("conversation_id,content,sent_at").in(
+      "conversation_id",
+      conversationIds,
+    )
+      .eq("direction", "in").order("sent_at", { ascending: false }).limit(3000),
+    db.from("contacts").select("id,external_contact_id").in("id", contactIds),
+    db.from("channels").select("*").in("id", channelIds),
+  ]);
+  const enrolledIds = new Set(
+    (existing ?? []).map((item: Json) => String(item.conversation_id)),
+  );
+  const latestInbound = new Map<string, string>();
+  for (const item of inbound ?? []) {
+    const key = String(item.conversation_id);
+    if (!latestInbound.has(key)) {
+      latestInbound.set(key, String(item.content ?? ""));
+    }
+  }
+  const contactMap = new Map(
+    (contacts ?? []).map((item: Json) => [String(item.id), item]),
+  );
+  const channelMap = new Map(
+    (channels ?? []).map((item: Json) => [String(item.id), item]),
+  );
+  let eligible = 0;
+  let enrolled = 0;
+  for (const conversation of conversations as Json[]) {
+    if (
+      enrolledIds.has(String(conversation.id)) ||
+      !conversation.chatwoot_conversation_id
+    ) continue;
+    const content = latestInbound.get(String(conversation.id)) ?? "";
+    if (conversation.origem !== "anuncio" && !isDefaultAdMessage(content)) {
+      continue;
+    }
+    eligible++;
+    const contact = contactMap.get(String(conversation.contact_id)) as
+      | Json
+      | undefined;
+    const channel = channelMap.get(String(conversation.channel_id)) as
+      | Json
+      | undefined;
+    if (!contact?.external_contact_id || !channel) continue;
+    await enrollIfNew(db, channel, String(contact.external_contact_id));
+    enrolled++;
+  }
+  return { scanned: conversations.length, eligible, enrolled };
 }

@@ -18,12 +18,18 @@ import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
 import { handle as ryzeapi } from "./handlers/ryzeapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
-import { handle as funilEnroll } from "./handlers/funil-enroll.ts";
+import {
+  handle as funilEnroll,
+  recoverEligibleFunnels,
+} from "./handlers/funil-enroll.ts";
 import { handle as funilControl } from "./handlers/funil-control.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
-import { handle as channelSync, syncChannels } from "./handlers/channel-sync.ts";
+import {
+  handle as channelSync,
+  syncChannels,
+} from "./handlers/channel-sync.ts";
 import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as syncComments } from "./handlers/sync-comments.ts";
@@ -42,7 +48,11 @@ import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
-import { envAcct, getConversationLabels, setConversationLabels } from "./shared/chatwoot.ts";
+import {
+  envAcct,
+  getConversationLabels,
+  setConversationLabels,
+} from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
 
 const CORS: Record<string, string> = {
@@ -110,7 +120,7 @@ const version = {
     "echo-no-resend-loop",
     "native-inbox-headless",
     "template-from-chat",
-    
+
     "ffmpeg-ld-fix",
     "multi-account-chatwoot",
     "fb-sync-cursor",
@@ -172,8 +182,9 @@ const version = {
     "dashboard-hybrid-channel-control",
     "hybrid-route-observability",
     "funnel-auto-night-6am",
+    "funnel-eligible-lead-recovery",
   ],
-  build: "2026-07-12-night-schedule-fix",
+  build: "2026-07-12-funnel-recovery",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -186,13 +197,18 @@ function startSyncLoop() {
   // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
   // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
   // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
-  const url = `http://internal/sync-facebook?token=${encodeURIComponent(token)}&since_minutes=1440`;
+  const url = `http://internal/sync-facebook?token=${
+    encodeURIComponent(token)
+  }&since_minutes=1440`;
 
   setInterval(async () => {
     try {
       const res = await syncFacebook(new Request(url));
       const body = await res.json();
-      if (body.errors?.length || body.inserted > 0 || body.outgoing_sent > 0 || body.media_repaired > 0) {
+      if (
+        body.errors?.length || body.inserted > 0 || body.outgoing_sent > 0 ||
+        body.media_repaired > 0
+      ) {
         console.log("sync-facebook (auto):", JSON.stringify(body));
       }
     } catch (e) {
@@ -208,12 +224,16 @@ const COMMENTS_INTERVAL_MS = 5 * 60_000;
 function startCommentsLoop() {
   if (optionalEnv("COMMENTS_SYNC_ENABLED") === "false") return; // ligado por padrão
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/sync-comments?token=${encodeURIComponent(token)}&since_minutes=1440`;
+  const url = `http://internal/sync-comments?token=${
+    encodeURIComponent(token)
+  }&since_minutes=1440`;
   const run = async () => {
     try {
       const res = await syncComments(new Request(url));
       const body = await res.json();
-      if (body.inserted > 0 || body.errors?.length) console.log("sync-comments (auto):", JSON.stringify(body));
+      if (body.inserted > 0 || body.errors?.length) {
+        console.log("sync-comments (auto):", JSON.stringify(body));
+      }
     } catch (e) {
       console.error("sync-comments (auto) erro:", e);
     }
@@ -233,7 +253,9 @@ function startChatwootOutLoop() {
     return;
   }
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/sync-chatwoot-out?token=${encodeURIComponent(token)}&since_minutes=30`;
+  const url = `http://internal/sync-chatwoot-out?token=${
+    encodeURIComponent(token)
+  }&since_minutes=30`;
   setInterval(async () => {
     try {
       const res = await syncChatwootOut(new Request(url));
@@ -256,7 +278,9 @@ function startLabelWindowLoop() {
     try {
       const res = await labelWindow(new Request(url));
       const body = await res.json();
-      if (body.labeled > 0 || body.errors?.length) console.log("label-window (auto):", JSON.stringify(body));
+      if (body.labeled > 0 || body.errors?.length) {
+        console.log("label-window (auto):", JSON.stringify(body));
+      }
     } catch (e) {
       console.error("label-window (auto) erro:", e);
     }
@@ -269,7 +293,9 @@ const ROLLUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 function startRollupLoop() {
   const run = async () => {
     try {
-      const res = await metricsRollup(new Request("http://internal/metrics-rollup"));
+      const res = await metricsRollup(
+        new Request("http://internal/metrics-rollup"),
+      );
       console.log("metrics-rollup (auto):", JSON.stringify(await res.json()));
     } catch (e) {
       console.error("metrics-rollup (auto) erro:", e);
@@ -283,12 +309,16 @@ function startRollupLoop() {
 // se MEDIA_RETENTION_ENABLED=true. Usa o token de cron interno.
 function startRetentionLoop() {
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/media-retention?token=${encodeURIComponent(token)}`;
+  const url = `http://internal/media-retention?token=${
+    encodeURIComponent(token)
+  }`;
   const run = async () => {
     try {
       const res = await mediaRetention(new Request(url));
       const body = await res.json();
-      if (body.expired > 0 || body.removed > 0) console.log("media-retention (auto):", JSON.stringify(body));
+      if (body.expired > 0 || body.removed > 0) {
+        console.log("media-retention (auto):", JSON.stringify(body));
+      }
     } catch (e) {
       console.error("media-retention (auto) erro:", e);
     }
@@ -303,23 +333,38 @@ function startRetentionLoop() {
 function startEnrichLoop() {
   if (optionalEnv("ENRICH_ENABLED") === "false") return; // ligado por padrão; kill-switch = false
   const instName = optionalEnv("ENRICH_INSTANCE") ?? "5895"; // chip de trabalho default
-  if (!instName || !uazapiConfigured()) { console.warn("enrich: faltou ENRICH_INSTANCE/uazapi"); return; }
+  if (!instName || !uazapiConfigured()) {
+    console.warn("enrich: faltou ENRICH_INSTANCE/uazapi");
+    return;
+  }
   // Delay ROTACIONA aleatoriamente entre min e max (mais humano, anti-ban). Compat: se só
   // ENRICH_INTERVAL_MS estiver setado, usa ele como min e max (fixo).
-  const min = Number(optionalEnv("ENRICH_MIN_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "40000");
-  const max = Number(optionalEnv("ENRICH_MAX_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ?? "60000");
+  const min = Number(
+    optionalEnv("ENRICH_MIN_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ??
+      "40000",
+  );
+  const max = Number(
+    optionalEnv("ENRICH_MAX_MS") ?? optionalEnv("ENRICH_INTERVAL_MS") ??
+      "60000",
+  );
   let tok = "";
   const tick = async () => {
     try {
       if (!tok) tok = (await tokenForInstance(instName)) ?? "";
-      if (tok) { const res = await enrichStep(admin(), tok); if (res !== "idle") console.log("enrich:", res); }
-      else console.warn("enrich: instância não encontrada", instName);
-    } catch (e) { console.error("enrich erro:", e); }
+      if (tok) {
+        const res = await enrichStep(admin(), tok);
+        if (res !== "idle") console.log("enrich:", res);
+      } else console.warn("enrich: instância não encontrada", instName);
+    } catch (e) {
+      console.error("enrich erro:", e);
+    }
     const delay = min + Math.floor(Math.random() * Math.max(1, max - min + 1));
     setTimeout(tick, delay);
   };
   setTimeout(tick, 5000);
-  console.log(`enrich loop ON (instância=${instName}, ${min}-${max}ms rotacionando)`);
+  console.log(
+    `enrich loop ON (instância=${instName}, ${min}-${max}ms rotacionando)`,
+  );
 }
 
 // Avatar dos contatos — a API oficial Meta não expõe foto de perfil; a instância uazapi de
@@ -328,14 +373,21 @@ function startEnrichLoop() {
 function startAvatarLoop() {
   if (optionalEnv("AVATAR_SYNC_ENABLED") === "false") return; // ligado por padrão
   const instName = optionalEnv("ENRICH_INSTANCE") ?? "5895";
-  if (!uazapiConfigured()) { console.warn("avatar-sync: uazapi não configurado"); return; }
+  if (!uazapiConfigured()) {
+    console.warn("avatar-sync: uazapi não configurado");
+    return;
+  }
   let tok = "";
   const tick = async () => {
     try {
       if (!tok) tok = (await tokenForInstance(instName)) ?? "";
-      if (tok) { const r = await avatarStep(admin(), tok); if (r !== "idle") console.log("avatar-sync:", r); }
-      else console.warn("avatar-sync: instância não encontrada", instName);
-    } catch (e) { console.error("avatar-sync erro:", e); }
+      if (tok) {
+        const r = await avatarStep(admin(), tok);
+        if (r !== "idle") console.log("avatar-sync:", r);
+      } else console.warn("avatar-sync: instância não encontrada", instName);
+    } catch (e) {
+      console.error("avatar-sync erro:", e);
+    }
     const delay = 60_000 + Math.floor(Math.random() * 30_000);
     setTimeout(tick, delay);
   };
@@ -349,10 +401,22 @@ function startDataCleanupLoop() {
     const db = admin();
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
     try {
-      const { count: evDel } = await db.from("events").delete({ count: "exact" }).lt("received_at", cutoff);
-      const { count: dlDel } = await db.from("deliveries").delete({ count: "exact" }).lt("received_at", cutoff);
-      if ((evDel ?? 0) > 0 || (dlDel ?? 0) > 0) console.log(`data-cleanup: events=${evDel} deliveries=${dlDel} (antes de ${cutoff.slice(0, 10)})`);
-    } catch (e) { console.error("data-cleanup erro:", e); }
+      const { count: evDel } = await db.from("events").delete({
+        count: "exact",
+      }).lt("received_at", cutoff);
+      const { count: dlDel } = await db.from("deliveries").delete({
+        count: "exact",
+      }).lt("received_at", cutoff);
+      if ((evDel ?? 0) > 0 || (dlDel ?? 0) > 0) {
+        console.log(
+          `data-cleanup: events=${evDel} deliveries=${dlDel} (antes de ${
+            cutoff.slice(0, 10)
+          })`,
+        );
+      }
+    } catch (e) {
+      console.error("data-cleanup erro:", e);
+    }
   };
   setTimeout(run, 180_000);
   setInterval(run, 24 * 60 * 60 * 1000);
@@ -390,16 +454,23 @@ function startMacroCommandLoop() {
   const secret = env("CHATWOOT_WEBHOOK_SECRET");
   const acct = envAcct();
   const baseUrl = acct.url.replace(/\/+$/, "");
-  const filterUrl = `${baseUrl}/api/v1/accounts/${acct.accountId}/conversations/filter`;
+  const filterUrl =
+    `${baseUrl}/api/v1/accounts/${acct.accountId}/conversations/filter`;
 
   const tick = async () => {
     try {
       const res = await fetch(filterUrl, {
         method: "POST",
-        headers: { "api_access_token": acct.token, "Content-Type": "application/json" },
+        headers: {
+          "api_access_token": acct.token,
+          "Content-Type": "application/json",
+        },
         body: CMD_FILTER_PAYLOAD,
       });
-      if (!res.ok) { console.warn("macro-poll: filter", res.status); return; }
+      if (!res.ok) {
+        console.warn("macro-poll: filter", res.status);
+        return;
+      }
       const json = await res.json();
       const convs = (json.payload ?? []) as Array<Record<string, unknown>>;
       if (convs.length === 0) return;
@@ -416,23 +487,42 @@ function startMacroCommandLoop() {
         // Remove label ANTES de executar — evita re-disparo no próximo tick
         try {
           const freshLabels = await getConversationLabels(cwConvId, acct);
-          const cleaned = freshLabels.filter((l) => !CMD_LABEL_KEYS.includes(l));
+          const cleaned = freshLabels.filter((l) =>
+            !CMD_LABEL_KEYS.includes(l)
+          );
           if (cleaned.length !== freshLabels.length) {
             await setConversationLabels(cwConvId, cleaned, acct);
           }
-        } catch (e) { console.warn("macro-poll cleanup:", String(e).slice(0, 120)); }
+        } catch (e) {
+          console.warn("macro-poll cleanup:", String(e).slice(0, 120));
+        }
 
         try {
-          const r = await fetch(`http://localhost:${port}/funil-control?token=${encodeURIComponent(secret)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action, chatwoot_conversation_id: cwConvId }),
-          });
+          const r = await fetch(
+            `http://localhost:${port}/funil-control?token=${
+              encodeURIComponent(secret)
+            }`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action,
+                chatwoot_conversation_id: cwConvId,
+              }),
+            },
+          );
           const result = await r.json().catch(() => ({}));
-          console.log("macro-poll result:", JSON.stringify(result).slice(0, 200));
-        } catch (e) { console.error("macro-poll exec erro:", e); }
+          console.log(
+            "macro-poll result:",
+            JSON.stringify(result).slice(0, 200),
+          );
+        } catch (e) {
+          console.error("macro-poll exec erro:", e);
+        }
       }
-    } catch (e) { console.error("macro-poll erro:", e); }
+    } catch (e) {
+      console.error("macro-poll erro:", e);
+    }
   };
   setTimeout(tick, 10_000);
   setInterval(tick, MACRO_POLL_INTERVAL_MS);
@@ -453,9 +543,13 @@ Deno.serve({ port }, async (req) => {
     try {
       const db = admin();
       const { data: ch } = await db.from("channels")
-        .select("id,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier,type,status")
+        .select(
+          "id,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier,type,status",
+        )
         .eq("type", "whatsapp").not("phone_number_id", "is", null);
-      const inst = uazapiConfigured() ? await (await import("./shared/uazapi.ts")).listInstances() : [];
+      const inst = uazapiConfigured()
+        ? await (await import("./shared/uazapi.ts")).listInstances()
+        : [];
       const norm = (n: string | null) => (n ?? "").replace(/\D/g, "");
       const diag = (ch ?? []).map((c: Record<string, unknown>) => {
         const cp = norm(c.phone_number as string | null);
@@ -463,21 +557,30 @@ Deno.serve({ port }, async (req) => {
           i.status === "connected" && norm(i.number as string | null) === cp
         );
         return {
-          channel: c.name, phone: c.phone_number, phone_norm: cp || "(vazio)",
+          channel: c.name,
+          phone: c.phone_number,
+          phone_norm: cp || "(vazio)",
           chatwoot_inbox_id: c.chatwoot_inbox_id ?? null,
           chatwoot_inbox_identifier: c.chatwoot_inbox_identifier ?? null,
           uaz_match: match ? (match as Record<string, unknown>).name : null,
         };
       });
       const instList = inst.map((i: Record<string, unknown>) => ({
-        name: i.name, number: i.number, norm: norm(i.number as string | null), status: i.status,
+        name: i.name,
+        number: i.number,
+        norm: norm(i.number as string | null),
+        status: i.status,
       }));
-      return new Response(JSON.stringify({ channels: diag, uazapi_instances: instList }, null, 2), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ channels: diag, uazapi_instances: instList }, null, 2),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (e) {
       return new Response(JSON.stringify({ error: String(e).slice(0, 200) }), {
-        status: 500, headers: { "Content-Type": "application/json" },
+        status: 500,
+        headers: { "Content-Type": "application/json" },
       });
     }
   }
@@ -494,8 +597,12 @@ Deno.serve({ port }, async (req) => {
 // conecta, detecta queda. Complementa o webhook channel_connected (que pode falhar).
 function startChannelSyncLoop() {
   const run = async () => {
-    try { const r = await syncChannels(admin()); if (r.updated) console.log("channel-sync:", JSON.stringify(r)); }
-    catch (e) { console.error("channel-sync erro:", e); }
+    try {
+      const r = await syncChannels(admin());
+      if (r.updated) console.log("channel-sync:", JSON.stringify(r));
+    } catch (e) {
+      console.error("channel-sync erro:", e);
+    }
   };
   setTimeout(run, 45_000);
   setInterval(run, 5 * 60 * 1000);
@@ -505,12 +612,32 @@ function startFunnelQueueLoop() {
   const run = async () => {
     try {
       const result = await pumpFunnelQueue(10);
-      if (result.found) console.log("funnel-queue-pump:", JSON.stringify(result));
-    } catch (e) { console.error("funnel-queue-pump erro:", e); }
+      if (result.found) {
+        console.log("funnel-queue-pump:", JSON.stringify(result));
+      }
+    } catch (e) {
+      console.error("funnel-queue-pump erro:", e);
+    }
   };
   setTimeout(run, 20_000);
   setInterval(run, 30_000);
   console.log("funnel-queue-pump loop ON (30s)");
+}
+
+function startFunnelRecoveryLoop() {
+  const run = async () => {
+    try {
+      const result = await recoverEligibleFunnels(admin(), 48);
+      if (result.eligible || result.enrolled) {
+        console.log("funnel-recovery:", JSON.stringify(result));
+      }
+    } catch (e) {
+      console.error("funnel-recovery erro:", e);
+    }
+  };
+  setTimeout(run, 60_000);
+  setInterval(run, 5 * 60_000);
+  console.log("funnel-recovery loop ON (5min, 48h)");
 }
 
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
@@ -528,5 +655,6 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDataCleanupLoop();
   startMacroCommandLoop();
   startFunnelQueueLoop();
+  startFunnelRecoveryLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);
