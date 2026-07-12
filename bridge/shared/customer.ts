@@ -21,17 +21,17 @@ export async function ensureCustomer(
   input: { channelId: string; externalId: string; phone?: string | null; name?: string | null },
 ): Promise<string> {
   const identity = customerIdentityKey(input.channelId, input.externalId, input.phone);
+  const { data: existing } = await db.from("customers")
+    .select("id,display_name,canonical_phone")
+    .eq("identity_key", identity.key).maybeSingle();
   const { data, error } = await db.from("customers").upsert({
     identity_key: identity.key,
-    canonical_phone: identity.normalizedPhone,
-    display_name: input.name || null,
+    canonical_phone: identity.normalizedPhone || existing?.canonical_phone || null,
+    display_name: input.name || existing?.display_name || null,
     last_seen_at: new Date().toISOString(),
   }, { onConflict: "identity_key" }).select("id,display_name").single();
   if (error) throw error;
 
-  if (input.name && !data?.display_name) {
-    await db.from("customers").update({ display_name: input.name }).eq("id", data.id);
-  }
   return data.id as string;
 }
 
