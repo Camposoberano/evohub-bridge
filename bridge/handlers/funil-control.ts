@@ -39,6 +39,11 @@ export async function handle(req: Request): Promise<Response> {
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "paused" })
       .eq("conversation_id", conv.id).eq("status", "running");
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "manual_paused",
+      payload: { conversation_id: conv.id, chatwoot_conversation_id: cwConvId, reason: "manual" },
+    });
     await nota(cwConvId, `⏸️ *Funil pausado* — ${paused ?? 0} mensagens pendentes suspensas.\nPara retomar: macro "▶️ Retomar Funil".`, acct);
     return json({ ok: true, action: "pause", paused: paused ?? 0 });
   }
@@ -158,7 +163,7 @@ async function nota(cwConvId: number, text: string, acct: CwAcct) {
 }
 
 // Auto-pause: chamado pelo hub-webhook quando intent é detectado em conversa com funil ativo.
-export async function autoPauseFunil(conversationId: string): Promise<boolean> {
+export async function autoPauseFunil(conversationId: string, reason = "intenção comercial"): Promise<boolean> {
   const db = admin();
   const { data: seq } = await db.from("sales_sequences").select("id, status")
     .eq("conversation_id", conversationId).eq("status", "running").maybeSingle();
@@ -166,6 +171,11 @@ export async function autoPauseFunil(conversationId: string): Promise<boolean> {
   await db.from("scheduled_messages").update({ status: "paused" })
     .eq("conversation_id", conversationId).eq("status", "pending");
   await db.from("sales_sequences").update({ status: "paused" }).eq("id", seq.id);
+  await db.from("events").insert({
+    source: "funil",
+    event_type: "auto_paused",
+    payload: { conversation_id: conversationId, reason },
+  });
   console.log("funil auto-paused:", conversationId);
   return true;
 }

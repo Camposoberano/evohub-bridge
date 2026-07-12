@@ -254,7 +254,7 @@ async function handleUazapiIntent(
     const { data: conversation } = await db.from("conversations").select("id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-    if (conversation?.id) await autoPauseFunil(conversation.id as string);
+    if (conversation?.id) await autoPauseFunil(conversation.id as string, intent.name);
   }
 
   await handleMenuClick(db, channel, from, intent.menu, acct);

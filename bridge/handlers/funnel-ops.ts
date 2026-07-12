@@ -151,9 +151,20 @@ export async function handle(req: Request): Promise<Response> {
       contact: contactMap.get(item.contact_id) ?? null,
     }]),
   );
+  const { data: pauseEvents } = await db.from("events")
+    .select("received_at,event_type,payload").eq("source", "funil")
+    .in("event_type", ["auto_paused", "manual_paused"])
+    .order("received_at", { ascending: false }).limit(500);
+  const pauseReasonMap = new Map<string, Json>();
+  for (const event of (pauseEvents ?? []) as Json[]) {
+    const payload = (event.payload as Json) ?? {};
+    const key = String(payload.conversation_id ?? "");
+    if (key && !pauseReasonMap.has(key)) pauseReasonMap.set(key, event);
+  }
   const enrichedSequences = sequences.map((item: Json) => ({
     ...item,
     conversation: conversationMap.get(item.conversation_id) ?? null,
+    pause_event: pauseReasonMap.get(String(item.conversation_id)) ?? null,
   }));
   const commercialMap = new Map<string, Json>();
   for (const item of commercialRows as Json[]) {

@@ -243,12 +243,16 @@ async function handleWhatsApp(db: Db, p: Json) {
               transcricao = await transcribeAudio(attachments[0].bytes, attachments[0].contentType);
               if (transcricao) intentText = transcricao;
             }
-            const anyIntent = isPrecoIntent(intentText) || isVideoIntent(intentText) || isPlantioIntent(intentText) || isNutricaoIntent(intentText);
-            if (anyIntent) {
+            const detectedIntent = isPrecoIntent(intentText) ? "preço"
+              : isVideoIntent(intentText) ? "vídeo"
+              : isPlantioIntent(intentText) ? "plantio"
+              : isNutricaoIntent(intentText) ? "nutrição"
+              : null;
+            if (detectedIntent) {
               const { data: _ct } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
               if (_ct) {
                 const { data: _cv } = await db.from("conversations").select("id").eq("contact_id", _ct.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle();
-                if (_cv) await autoPauseFunil(_cv.id as string);
+                if (_cv) await autoPauseFunil(_cv.id as string, detectedIntent);
               }
             }
             if (isPrecoIntent(intentText)) {
