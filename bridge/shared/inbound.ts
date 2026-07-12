@@ -2,6 +2,7 @@
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
 import { claimDelivery, type DbClient } from "./supabase.ts";
 import { optionalEnv } from "./env.ts";
+import { ensureCustomer } from "./customer.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -97,6 +98,12 @@ export async function ingestInbound(
   const phone = channel.type === "whatsapp" && pareceTelefone
     ? `+${msg.from}`
     : null;
+  const customerId = await ensureCustomer(db, {
+    channelId: channel.id as string,
+    externalId: msg.from,
+    phone,
+    name: msg.name,
+  });
 
   const { data: existing, error: contactQueryError } = await db
     .from("contacts").select("*")
@@ -121,6 +128,7 @@ export async function ingestInbound(
       .upsert({
         channel_id: channel.id,
         external_contact_id: msg.from,
+        customer_id: customerId,
         name: msg.name ?? null,
         phone: phone,
         chatwoot_contact_id: cw?.contact_id ??
@@ -134,7 +142,7 @@ export async function ingestInbound(
     contact = upserted as Json;
   } else {
     const { error: updateError } = await db.from("contacts")
-      .update({ last_seen_at: new Date().toISOString() })
+      .update({ customer_id: customerId, name: msg.name || contact.name, phone, last_seen_at: new Date().toISOString() })
       .eq("id", contact.id);
     if (updateError) throw updateError;
   }

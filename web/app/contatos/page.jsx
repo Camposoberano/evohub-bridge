@@ -29,16 +29,22 @@ export default function Contatos() {
   const [fJanela, setFJanela] = useState("todos");
   const [fMorto, setFMorto] = useState("vivos");
   const [regiaoAberta, setRegiaoAberta] = useState(null);
+  const [clienteGlobalCount, setClienteGlobalCount] = useState({});
 
   const carregar = useCallback(async () => {
     const [ct, cv] = await Promise.all([
-      supabase.from("contacts").select("*, channels(name,type)").order("last_seen_at", { ascending: false }).limit(2000),
+      supabase.from("contacts").select("*, channels(name,type), customers(id,display_name,canonical_phone,avatar_url)").order("last_seen_at", { ascending: false }).limit(2000),
       supabase.from("conversations").select("contact_id"),
     ]);
     setContatos(ct.data || []);
     const m = {};
     for (const r of cv.data || []) m[r.contact_id] = (m[r.contact_id] || 0) + 1;
     setConvCount(m);
+    const globals = {};
+    for (const c of ct.data || []) {
+      if (c.customer_id) globals[c.customer_id] = (globals[c.customer_id] || 0) + 1;
+    }
+    setClienteGlobalCount(globals);
   }, []);
 
   useEffect(() => {
@@ -80,7 +86,8 @@ export default function Contatos() {
 
   const filtrados = enriquecidos.filter((c) => {
     const s = busca.toLowerCase();
-    const txtOk = (c.name || "").toLowerCase().includes(s) || (c.phone || "").includes(s) || (c.external_contact_id || "").includes(s);
+    const globalName = c.customers?.display_name || "";
+    const txtOk = (c.name || "").toLowerCase().includes(s) || globalName.toLowerCase().includes(s) || (c.phone || "").includes(s) || (c.external_contact_id || "").includes(s);
     if (!txtOk) return false;
     if (fUf !== "todos" && c.uf !== fUf) return false;
     if (fJanela === "aberta" && !c.janelaAberta) return false;
@@ -165,13 +172,18 @@ export default function Contatos() {
         <div className="table-wrap">
           <table className="table">
             <thead>
-              <tr><th>Nome</th><th>Canal</th><th>Telefone</th><th>Estado</th><th>Janela 24h</th><th>Conversas</th><th>Último contato</th></tr>
+              <tr><th>Cliente global</th><th>Contato no canal</th><th>Canal</th><th>Telefone</th><th>Estado</th><th>Janela 24h</th><th>Conversas</th><th>Último contato</th></tr>
             </thead>
             <tbody>
               {filtrados.length === 0 ? (
-                <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-dim)", padding: 30 }}>Nenhum contato</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-dim)", padding: 30 }}>Nenhum contato</td></tr>
               ) : filtrados.slice(0, 500).map((c) => (
                 <tr key={c.id}>
+                  <td>
+                    {c.customers?.avatar_url && <img src={c.customers.avatar_url} alt="" style={{ width: 26, height: 26, borderRadius: 999, objectFit: "cover", verticalAlign: "middle", marginRight: 7 }} />}
+                    {c.customers?.display_name || <span style={{ color: "var(--text-faint)" }}>Cliente sem nome</span>}
+                    <div style={{ fontSize: 11, color: "var(--text-faint)" }}>{c.customer_id ? `${clienteGlobalCount[c.customer_id] || 1} canal(is) relacionado(s)` : "sem identidade global"}</div>
+                  </td>
                   <td>
                     {c.name || <span style={{ color: "var(--text-faint)" }}>{c.external_contact_id}</span>}
                     {c.dead && <span className="badge badge-red" style={{ marginLeft: 6, fontSize: 10 }}>morto</span>}
