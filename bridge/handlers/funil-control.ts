@@ -126,7 +126,12 @@ export async function handle(req: Request): Promise<Response> {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) return json({ error: "canal ou contato não encontrado" }, 404);
     try {
-      await handleMenuClick(db, resolved.channel, resolved.from, menuId, acct);
+      const dispatch = await handleMenuClick(db, resolved.channel, resolved.from, menuId, acct);
+      if (!dispatch.sent && dispatch.reason === "already-sent-today") {
+        await nota(cwConvId, `ℹ️ *Sequência "${action}" não repetida* — este conteúdo já foi enviado hoje.`, acct);
+        return json({ ok: true, action, skipped: "already-sent-today" });
+      }
+      if (!dispatch.sent) throw new Error("sequência não confirmou envio");
       await nota(cwConvId, `🚀 *Sequência "${action}" disparada manualmente.*`, acct);
       return json({ ok: true, action, dispatched: menuId });
     } catch (e) {

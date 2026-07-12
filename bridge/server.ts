@@ -187,8 +187,9 @@ const version = {
     "macro-command-ack-before-consume",
     "meta-message-id-required-for-price",
     "price-natural-area-labels",
+    "commercial-intent-once-per-day",
   ],
-  build: "2026-07-12-price-natural-labels",
+  build: "2026-07-12-intent-daily-dedup",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

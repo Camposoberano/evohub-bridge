@@ -18,6 +18,11 @@ import { autoPauseFunil } from "./funil-control.ts";
 import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
 import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
+import {
+  claimDailyIntent,
+  type CommercialIntent,
+  releaseDailyIntent,
+} from "../shared/intent-dedup.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -1137,19 +1142,41 @@ async function handleSaudacao(db: Db, channel: Json, from: string, _acct?: CwAcc
   try { await enrollIfNew(db, channel, from); } catch (e) { console.error("saudacao enroll erro:", e); }
 }
 
-export async function handleMenuClick(db: Db, channel: Json, from: string, menuId: string, acct?: CwAcct): Promise<void> {
-  // preço virou SEQUÊNCIA (imagem + tabela dinâmica + botões) — delega.
-  if (menuId === "menu_preco") return await handlePrecoSequence(db, channel, from, acct);
-  if (menuId === "menu_depoimento") return await handleVideoSequence(db, channel, from, acct);
-  if (menuId === "menu_plantio") return await handlePlantioSequence(db, channel, from, acct);
-  if (menuId === "menu_nutricao") return await handleNutricaoSequence(db, channel, from, acct);
+export async function handleMenuClick(
+  db: Db,
+  channel: Json,
+  from: string,
+  menuId: string,
+  acct?: CwAcct,
+): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+  const intentByMenu: Record<string, CommercialIntent> = {
+    menu_preco: "preco",
+    menu_depoimento: "video",
+    menu_plantio: "plantio",
+    menu_nutricao: "nutricao",
+  };
+  const intent = intentByMenu[menuId];
+  if (intent) {
+    const daily = await claimDailyIntent(db, String(channel.id), from, intent);
+    if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
+    try {
+      if (menuId === "menu_preco") await handlePrecoSequence(db, channel, from, acct);
+      else if (menuId === "menu_depoimento") await handleVideoSequence(db, channel, from, acct);
+      else if (menuId === "menu_plantio") await handlePlantioSequence(db, channel, from, acct);
+      else await handleNutricaoSequence(db, channel, from, acct);
+      return { sent: true };
+    } catch (error) {
+      await releaseDailyIntent(db, daily.key);
+      throw error;
+    }
+  }
   const content = MENU_CONTENT[menuId];
-  if (!content) return;
+  if (!content) return { sent: false };
 
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) return { sent: false };
 
   const r = await sendMeta(token, `${phone}/messages`, { messaging_product: "whatsapp", to: from, type: "text", text: { body: content } });
   const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
@@ -1181,6 +1208,7 @@ export async function handleMenuClick(db: Db, channel: Json, from: string, menuI
     status: r.ok ? "sent" : "failed",
     sent_at: new Date().toISOString(),
   });
+  return { sent: r.ok };
 }
 
 // Erros da Meta que indicam número inexistente / não-WhatsApp (número morto).
