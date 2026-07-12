@@ -21,8 +21,8 @@ const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
-const FIM_ACESSO = 520;                          // último disparo do acesso (lista de fechamento) = +8min40
-const TZ_OFFSET = 3 * 3600 * 1000;               // BRT = UTC-3
+const FIM_ACESSO = 520; // último disparo do acesso (lista de fechamento) = +8min40
+const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 // Empurra um horário pro próximo 6h se ele (ou o acesso inteiro de `durSec`) cair fora de 6h-22h BRT.
 function clampBiz(ms: number, durSec = 0): number {
@@ -41,9 +41,27 @@ type Botao = { id: string; title: string };
 type Peca =
   | { offset: number; kind: "text"; text: string }
   | { offset: number; kind: "text_sequence"; texts: string[] }
-  | { offset: number; kind: "interactive"; text: string; buttons: Botao[]; headerSlot?: string }
-  | { offset: number; kind: "media"; mediaType: "image" | "audio" | "video"; slot: string; caption?: string }
-  | { offset: number; kind: "list"; text: string; buttonLabel: string; sections: { title?: string; rows: Botao[] }[] };
+  | {
+    offset: number;
+    kind: "interactive";
+    text: string;
+    buttons: Botao[];
+    headerSlot?: string;
+  }
+  | {
+    offset: number;
+    kind: "media";
+    mediaType: "image" | "audio" | "video";
+    slot: string;
+    caption?: string;
+  }
+  | {
+    offset: number;
+    kind: "list";
+    text: string;
+    buttonLabel: string;
+    sections: { title?: string; rows: Botao[] }[];
+  };
 
 // Menu de ação — disponível no fechamento de TODA fase. Clique entrega o conteúdo na hora
 // (lógica em hub-webhook.ts: handleMenuClick), sem precisar esperar a fase certa.
@@ -57,9 +75,18 @@ const MENU_ROWS: Botao[] = [
 
 function closingList(gancho: { text: string; row: Botao } | null): Peca {
   const sections = gancho
-    ? [{ title: "Continuar", rows: [gancho.row] }, { title: "Tire sua dúvida", rows: MENU_ROWS }]
+    ? [{ title: "Continuar", rows: [gancho.row] }, {
+      title: "Tire sua dúvida",
+      rows: MENU_ROWS,
+    }]
     : [{ title: "Tire sua dúvida", rows: MENU_ROWS }];
-  return { offset: 0, kind: "list", text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌", buttonLabel: "Ver opções", sections };
+  return {
+    offset: 0,
+    kind: "list",
+    text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌",
+    buttonLabel: "Ver opções",
+    sections,
+  };
 }
 
 function turnoBRT(): string {
@@ -69,28 +96,54 @@ function turnoBRT(): string {
 
 function saudacaoDinamica(): string {
   const aberturas = ["Olá", "Oi", "E aí"];
-  const finais = ["tudo bem?", "que bom ter você aqui!", "como vai?", "tudo certo?"];
+  const finais = [
+    "tudo bem?",
+    "que bom ter você aqui!",
+    "como vai?",
+    "tudo certo?",
+  ];
   const i = Date.now() % aberturas.length;
   const j = (Date.now() >> 4) % finais.length;
   const turno = turnoBRT();
-  return `${aberturas[i]}, ${turno}, vida boa! ${finais[j]} 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾`;
+  return `${aberturas[i]}, ${turno}, vida boa! ${
+    finais[j]
+  } 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾`;
 }
 
 // roteiro de cada fase. offset = segundos DENTRO do acesso (relativo ao início dele).
 function fase1(): Peca[] {
   return [
     { offset: 0, kind: "text", text: saudacaoDinamica() },
-    { offset: 70, kind: "media", mediaType: "image", slot: "logo",
-      caption: "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜" },
-    { offset: 140, kind: "interactive", text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
-      buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, { id: "f1_olhando", title: "Só olhando 👀" }],
-      headerSlot: "image" },
+    {
+      offset: 70,
+      kind: "media",
+      mediaType: "image",
+      slot: "logo",
+      caption:
+        "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜",
+    },
+    {
+      offset: 140,
+      kind: "interactive",
+      text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
+      buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, {
+        id: "f1_olhando",
+        title: "Só olhando 👀",
+      }],
+      headerSlot: "image",
+    },
     { offset: 210, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 280, kind: "media", mediaType: "audio", slot: "audio2" },
     // imagem solta (slot "image") removida 30/06: a imagem já vai junto do botão de abertura
     // (offset 140, headerSlot "image"). Padrão = botão-com-imagem, nunca imagem solta.
     { offset: 350, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊", row: { id: "f1_continuar", title: "📈 Quanto produz?" } }) as Peca, offset: 420 },
+    {
+      ...closingList({
+        text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊",
+        row: { id: "f1_continuar", title: "📈 Quanto produz?" },
+      }) as Peca,
+      offset: 420,
+    },
   ];
 }
 
@@ -99,27 +152,54 @@ function fase1(): Peca[] {
 // por último). Nunca manda imagem solta separada do botão de abertura.
 function fase2(): Peca[] {
   return [
-    { offset: 0, kind: "interactive",
-      text: "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
-      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, { id: "f2_corte", title: "Corte 🥩" }, { id: "f2_ambos", title: "Os dois 🐄" }],
-      headerSlot: "image" },
+    {
+      offset: 0,
+      kind: "interactive",
+      text:
+        "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
+      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, {
+        id: "f2_corte",
+        title: "Corte 🥩",
+      }, { id: "f2_ambos", title: "Os dois 🐄" }],
+      headerSlot: "image",
+    },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽", row: { id: "f2_continuar", title: "🌽 Quero o segredo" } }) as Peca, offset: 280 },
+    {
+      ...closingList({
+        text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽",
+        row: { id: "f2_continuar", title: "🌽 Quero o segredo" },
+      }) as Peca,
+      offset: 280,
+    },
   ];
 }
 
 function fase3(): Peca[] {
   return [
-    { offset: 0, kind: "interactive",
-      text: "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
-      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, { id: "f3_capim", title: "Capim 🌿" }, { id: "f3_nao", title: "Não planto 🤷" }],
-      headerSlot: "image" },
+    {
+      offset: 0,
+      kind: "interactive",
+      text:
+        "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
+      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, {
+        id: "f3_capim",
+        title: "Capim 🌿",
+      }, { id: "f3_nao", title: "Não planto 🤷" }],
+      headerSlot: "image",
+    },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪", row: { id: "f3_continuar", title: "💪 Quero ver" } }) as Peca, offset: 280 },
+    {
+      ...closingList({
+        text:
+          "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪",
+        row: { id: "f3_continuar", title: "💪 Quero ver" },
+      }) as Peca,
+      offset: 280,
+    },
   ];
 }
 
@@ -127,25 +207,48 @@ function fase4(): Peca[] {
   return [
     // abertura = botão-com-imagem (igual fases 2/3): os 2 textos de praga/seca foram fundidos
     // no corpo do interactive -> uma mensagem só, abrindo com a imagem (header_image).
-    { offset: 0, kind: "interactive",
-      text: "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
-      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, { id: "f4_nunca", title: "Nunca, graças 🙏" }],
-      headerSlot: "image" },
+    {
+      offset: 0,
+      kind: "interactive",
+      text:
+        "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
+      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, {
+        id: "f4_nunca",
+        title: "Nunca, graças 🙏",
+      }],
+      headerSlot: "image",
+    },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 210, kind: "media", mediaType: "image", slot: "image", caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!" },
+    {
+      offset: 210,
+      kind: "media",
+      mediaType: "image",
+      slot: "image",
+      caption: "🌾 *Lavoura forte* mesmo no ano mais difícil!",
+    },
     { offset: 280, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList({ text: "Quer *garantir o seu* pra safra 2027? 🚜", row: { id: "f4_continuar", title: "🚜 Quero garantir" } }) as Peca, offset: 350 },
+    {
+      ...closingList({
+        text: "Quer *garantir o seu* pra safra 2027? 🚜",
+        row: { id: "f4_continuar", title: "🚜 Quero garantir" },
+      }) as Peca,
+      offset: 350,
+    },
   ];
 }
 
 // Fase 5: sem gancho (é a última) — fechamento é só o menu de dúvidas.
 function fase5(): Peca[] {
   return [
-    { offset: 0, kind: "interactive",
-      text: "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
+    {
+      offset: 0,
+      kind: "interactive",
+      text:
+        "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
       buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }],
-      headerSlot: "image" },
+      headerSlot: "image",
+    },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
@@ -157,14 +260,18 @@ const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
 
 // calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
 // fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
-function iniciosDosAcessos(agora: number, gaps: number[], skipClamp: boolean): number[] {
+export function iniciosDosAcessos(
+  agora: number,
+  gaps: number[],
+  skipClamp: boolean,
+): number[] {
   const clamp = (ms: number) => skipClamp ? ms : clampBiz(ms, FIM_ACESSO);
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
-    // O primeiro disparo responde ao clique/entrada imediatamente. A janela comercial
-    // só é aplicada às fases seguintes, para não prender a abertura até 06:00.
-    const ini = i === 0 ? agora : clamp(fimAnterior + gaps[i] * 1000);
+    // Automático respeita 6h-22h desde a primeira peça. Manual/fast passa skipClamp=true
+    // e continua imediato, inclusive fora do horário comercial.
+    const ini = i === 0 ? clamp(agora) : clamp(fimAnterior + gaps[i] * 1000);
     inicios.push(ini);
     fimAnterior = ini + FIM_ACESSO * 1000;
   }
@@ -178,16 +285,22 @@ export async function handle(req: Request): Promise<Response> {
   // aceita o segredo principal OU o RYZEAPI_WEBHOOK_TOKEN (pra disparo operacional via API
   // sem precisar do segredo principal -- ex: re-teste do funil pelo painel/CLI).
   const okToken = timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET")) ||
-    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN") ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!) : false);
+    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN")
+      ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!)
+      : false);
   if (!okToken) return json({ error: "unauthorized" }, 401);
 
   const body = await req.json().catch(() => ({})) as Json;
   const cwConvId = Number(body.chatwoot_conversation_id);
-  if (!cwConvId) return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  if (!cwConvId) {
+    return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  }
   const force = body.force === true || body.force === "true";
 
   const db = admin();
-  const { data: conv } = await db.from("conversations").select("id, chatwoot_conversation_id")
+  const { data: conv } = await db.from("conversations").select(
+    "id, chatwoot_conversation_id",
+  )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
 
@@ -198,11 +311,16 @@ export async function handle(req: Request): Promise<Response> {
   if (existing) {
     if (!force) return json({ ok: true, already: true });
     await db.from("scheduled_messages").delete().eq("conversation_id", conv.id);
-    await db.from("sales_sequences").delete().eq("conversation_id", conv.id).eq("funnel", FUNNEL);
+    await db.from("sales_sequences").delete().eq("conversation_id", conv.id).eq(
+      "funnel",
+      FUNNEL,
+    );
   }
 
   // carrega a faixa e agrupa por dia+slot pra sortear
-  const { data: media } = await db.from("funnel_media").select("day,slot,url,caption,type")
+  const { data: media } = await db.from("funnel_media").select(
+    "day,slot,url,caption,type",
+  )
     .eq("funnel", FUNNEL).eq("active", true);
   const banco = new Map<string, Json[]>();
   for (const m of (media ?? []) as Json[]) {
@@ -231,24 +349,73 @@ export async function handle(req: Request): Promise<Response> {
     for (const p of FASES[i]()) {
       const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
       if (p.kind === "text") {
-        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text", payload: { content: p.text }, send_at: sendAt });
+        rows.push({
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          funnel: FUNNEL,
+          day: dia,
+          step: rows.length,
+          type: "text",
+          payload: { content: p.text },
+          send_at: sendAt,
+        });
       } else if (p.kind === "text_sequence") {
-        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "text_sequence", payload: { texts: p.texts }, send_at: sendAt });
+        rows.push({
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          funnel: FUNNEL,
+          day: dia,
+          step: rows.length,
+          type: "text_sequence",
+          payload: { texts: p.texts },
+          send_at: sendAt,
+        });
       } else if (p.kind === "interactive") {
         const header = p.headerSlot ? pick(dia, p.headerSlot) : null;
         const payload: Json = { text: p.text, buttons: p.buttons };
         if (header?.url) payload.header_image = header.url;
-        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "interactive", payload, send_at: sendAt });
+        rows.push({
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          funnel: FUNNEL,
+          day: dia,
+          step: rows.length,
+          type: "interactive",
+          payload,
+          send_at: sendAt,
+        });
       } else if (p.kind === "list") {
-        const payload: Json = { text: p.text, button_label: p.buttonLabel, sections: p.sections };
-        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: "list", payload, send_at: sendAt });
+        const payload: Json = {
+          text: p.text,
+          button_label: p.buttonLabel,
+          sections: p.sections,
+        };
+        rows.push({
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          funnel: FUNNEL,
+          day: dia,
+          step: rows.length,
+          type: "list",
+          payload,
+          send_at: sendAt,
+        });
       } else {
         const m = pick(dia, p.slot);
         if (!m?.url) continue; // sem mídia cadastrada nesse slot -> pula
         const payload: Json = { media_url: m.url };
         const cap = (p.caption ?? "") || (m.caption as string ?? "");
         if (cap && p.mediaType !== "audio") payload.caption = cap;
-        rows.push({ conversation_id: conv.id, chatwoot_conversation_id: cwConvId, funnel: FUNNEL, day: dia, step: rows.length, type: p.mediaType, payload, send_at: sendAt });
+        rows.push({
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          funnel: FUNNEL,
+          day: dia,
+          step: rows.length,
+          type: p.mediaType,
+          payload,
+          send_at: sendAt,
+        });
       }
     }
   }
@@ -259,7 +426,12 @@ export async function handle(req: Request): Promise<Response> {
     funnel: FUNNEL,
     status: "running",
   });
-  if (sequenceError) return json({ error: `falha ao criar sequência: ${sequenceError.message}` }, 500);
+  if (sequenceError) {
+    return json(
+      { error: `falha ao criar sequência: ${sequenceError.message}` },
+      500,
+    );
+  }
   const { error } = await db.from("scheduled_messages").insert(rows);
   if (error) return json({ error: error.message }, 500);
 
@@ -267,7 +439,10 @@ export async function handle(req: Request): Promise<Response> {
 }
 
 function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 // normaliza pra comparação: minúsculo + sem acentos (NFD separa os diacríticos; regex remove).
@@ -333,7 +508,9 @@ export async function enrollIfNew(
   const { data: contact } = await db.from("contacts").select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
   if (!contact) return;
-  const { data: conv } = await db.from("conversations").select("id, chatwoot_conversation_id")
+  const { data: conv } = await db.from("conversations").select(
+    "id, chatwoot_conversation_id",
+  )
     .eq("contact_id", contact.id).neq("status", "resolved")
     .order("opened_at", { ascending: false }).limit(1).maybeSingle();
   if (!conv?.chatwoot_conversation_id) return;
@@ -342,10 +519,20 @@ export async function enrollIfNew(
   if (existing) return;
 
   const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
-  const res = await handle(new Request(`http://internal/funil-enroll?token=${token}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chatwoot_conversation_id: conv.chatwoot_conversation_id }),
-  }));
-  console.log("enrollIfNew: conv", conv.chatwoot_conversation_id, "->", res.status, await res.text());
+  const res = await handle(
+    new Request(`http://internal/funil-enroll?token=${token}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chatwoot_conversation_id: conv.chatwoot_conversation_id,
+      }),
+    }),
+  );
+  console.log(
+    "enrollIfNew: conv",
+    conv.chatwoot_conversation_id,
+    "->",
+    res.status,
+    await res.text(),
+  );
 }

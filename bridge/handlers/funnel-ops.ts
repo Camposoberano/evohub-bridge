@@ -65,20 +65,46 @@ export async function handle(req: Request): Promise<Response> {
   }
   if (req.method !== "GET") return json({ error: "method not allowed" }, 405);
 
-  const [sequenceResult, messageResult] = await Promise.all([
-    db.from("sales_sequences").select(
-      "id,conversation_id,chatwoot_conversation_id,funnel,status",
-    ).limit(1000),
-    db.from("scheduled_messages").select(
-      "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
-    ).order("send_at", { ascending: true }).limit(2000),
-  ]);
-  if (sequenceResult.error || messageResult.error) {
+  const { data: recentConversations, error: recentError } = await db.from(
+    "conversations",
+  )
+    .select("id").order("opened_at", { ascending: false }).limit(500);
+  if (recentError) return json({ error: recentError.message }, 500);
+  const recentIds = (recentConversations ?? []).map((item: Json) => item.id)
+    .filter(Boolean);
+  const [activeSequenceResult, recentSequenceResult, messageResult] =
+    await Promise.all([
+      db.from("sales_sequences").select(
+        "id,conversation_id,chatwoot_conversation_id,funnel,status",
+      ).in("status", ["running", "paused"]).limit(1000),
+      recentIds.length
+        ? db.from("sales_sequences").select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,status",
+        ).in("conversation_id", recentIds)
+        : Promise.resolve({ data: [], error: null }),
+      db.from("scheduled_messages").select(
+        "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
+      ).order("send_at", { ascending: true }).limit(2000),
+    ]);
+  if (
+    activeSequenceResult.error || recentSequenceResult.error ||
+    messageResult.error
+  ) {
     return json({
-      error: sequenceResult.error?.message ?? messageResult.error?.message,
+      error: activeSequenceResult.error?.message ??
+        recentSequenceResult.error?.message ?? messageResult.error?.message,
     }, 500);
   }
-  const sequences = sequenceResult.data ?? [];
+  const sequenceMap = new Map<string, Json>();
+  for (
+    const item of [
+      ...(activeSequenceResult.data ?? []),
+      ...(recentSequenceResult.data ?? []),
+    ] as Json[]
+  ) {
+    sequenceMap.set(String(item.id), item);
+  }
+  const sequences = [...sequenceMap.values()];
   const messages = messageResult.data ?? [];
   const conversationIds = [
     ...new Set(

@@ -171,8 +171,9 @@ const version = {
     "dashboard-funnel-operations",
     "dashboard-hybrid-channel-control",
     "hybrid-route-observability",
+    "funnel-auto-night-6am",
   ],
-  build: "2026-07-12-ops-control",
+  build: "2026-07-12-night-schedule-fix",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
