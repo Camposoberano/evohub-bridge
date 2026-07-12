@@ -14,7 +14,9 @@ type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
 export async function handle(req: Request): Promise<Response> {
-  if (!["GET", "POST"].includes(req.method)) return json({ error: "method not allowed" }, 405);
+  if (!["GET", "POST"].includes(req.method)) {
+    return json({ error: "method not allowed" }, 405);
+  }
   const url = new URL(req.url);
   if (!isAuthorized(req, url)) return json({ error: "unauthorized" }, 401);
 
@@ -28,7 +30,14 @@ export async function handle(req: Request): Promise<Response> {
     .eq("type", "whatsapp").eq("status", "active");
   if (chErr) return json({ error: chErr.message }, 500);
 
-  const totals = { channels: channels?.length ?? 0, conversations_scanned: 0, outgoing_found: 0, dispatched: 0, skipped: 0, errors: [] as string[] };
+  const totals = {
+    channels: channels?.length ?? 0,
+    conversations_scanned: 0,
+    outgoing_found: 0,
+    dispatched: 0,
+    skipped: 0,
+    errors: [] as string[],
+  };
 
   for (const ch of channels ?? []) {
     const cwInboxId = ch.chatwoot_inbox_id as number | undefined;
@@ -37,18 +46,25 @@ export async function handle(req: Request): Promise<Response> {
       .select("id,chatwoot_conversation_id")
       .eq("channel_id", ch.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(convLimit);
-    if (convErr) { totals.errors.push(`${ch.name}: ${convErr.message}`); continue; }
+    if (convErr) {
+      totals.errors.push(`${ch.name}: ${convErr.message}`);
+      continue;
+    }
 
     for (const conv of convs ?? []) {
       const cwConvId = conv.chatwoot_conversation_id as number | undefined;
       if (!cwConvId) continue;
       totals.conversations_scanned++;
       let messages: Json[];
-      try { messages = await listConversationMessages(cwConvId) as Json[]; }
-      catch (e) {
+      try {
+        messages = await listConversationMessages(cwConvId) as Json[];
+      } catch (e) {
         const detail = msg(e);
         if (detail.includes(" 404:")) {
-          await db.from("conversations").update({ status: "resolved" }).eq("id", conv.id);
+          await db.from("conversations").update({ status: "resolved" }).eq(
+            "id",
+            conv.id,
+          );
           continue;
         }
         totals.errors.push(`conv ${cwConvId}: ${detail}`);
@@ -73,29 +89,62 @@ export async function handle(req: Request): Promise<Response> {
         // O status do Chatwoot pode continuar "failed" mesmo depois de um retry aceito
         // pelo provedor. O registro local "sent" é a confirmação do bridge e deve encerrar
         // novas tentativas; caso contrário a mesma mensagem sai a cada ciclo de 20s.
-        if (exist && exist.status !== "failed") { totals.skipped++; continue; }
-        // Uma tentativa anterior pode ter deixado a claim cw-out-<id> presa. Só
-        // removemos essa trava quando o registro correspondente está falho.
+        if (exist && exist.status !== "failed") {
+          totals.skipped++;
+          continue;
+        }
+        // Uma mensagem falha recebe no maximo uma nova tentativa automatica. A claim
+        // separada e duravel impede que o polling repita a mesma midia vencida a cada ciclo.
         if (exist?.status === "failed" || chatwootFailed) {
-          await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
+          const retryClaimed = await claimRetry(db, cwMsgId);
+          if (!retryClaimed) {
+            totals.skipped++;
+            continue;
+          }
+          await db.from("deliveries").delete().eq(
+            "delivery_id",
+            `cw-out-${cwMsgId}`,
+          );
         }
 
         // monta o payload no formato do webhook do Chatwoot e reusa handleOutgoing
         const p: Json = {
-          id: cwMsgId, message_type: "outgoing", private: false,
-          content, attachments,
-          conversation: { id: cwConvId }, inbox: { id: cwInboxId },
+          id: cwMsgId,
+          message_type: "outgoing",
+          private: false,
+          content,
+          attachments,
+          conversation: { id: cwConvId },
+          inbox: { id: cwInboxId },
         };
-        try { await handleOutgoing(db, p); totals.dispatched++; }
-        catch (e) { totals.errors.push(`msg ${cwMsgId}: ${msg(e)}`); }
+        try {
+          await handleOutgoing(db, p);
+          totals.dispatched++;
+        } catch (e) {
+          totals.errors.push(`msg ${cwMsgId}: ${msg(e)}`);
+        }
       }
     }
   }
 
   if (totals.dispatched > 0 || totals.errors.length > 0) {
-    db.from("events").insert({ source: "sync-chatwoot-out", event_type: "sync_completed", payload: { ...totals, since_minutes: sinceMinutes } }).then(() => {}, () => {});
+    db.from("events").insert({
+      source: "sync-chatwoot-out",
+      event_type: "sync_completed",
+      payload: { ...totals, since_minutes: sinceMinutes },
+    }).then(() => {}, () => {});
   }
   return json(totals);
+}
+
+async function claimRetry(db: Db, cwMsgId: number): Promise<boolean> {
+  const { error } = await db.from("deliveries").insert({
+    delivery_id: `cw-retry-${cwMsgId}`,
+    source: "sync-chatwoot-out",
+  });
+  if (!error) return true;
+  if ((error as { code?: string }).code === "23505") return false;
+  throw error;
 }
 
 function isOutgoing(m: Json): boolean {
@@ -104,7 +153,10 @@ function isOutgoing(m: Json): boolean {
 
 function createdAtMs(v: unknown): number | null {
   if (typeof v === "number") return v * 1000;
-  if (typeof v === "string") { const p = Date.parse(v); return Number.isNaN(p) ? null : p; }
+  if (typeof v === "string") {
+    const p = Date.parse(v);
+    return Number.isNaN(p) ? null : p;
+  }
   return null;
 }
 
@@ -116,14 +168,25 @@ function isAuthorized(req: Request, url: URL): boolean {
   return timingSafeEqual(token, expected);
 }
 
-function intParam(url: URL, key: string, fallback: number, min: number, max: number): number {
+function intParam(
+  url: URL,
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const raw = Number(url.searchParams.get(key) ?? fallback);
   if (!Number.isFinite(raw)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(raw)));
 }
 
-function msg(e: unknown): string { return e instanceof Error ? e.message : String(e); }
+function msg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
 
 function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

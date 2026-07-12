@@ -13,7 +13,12 @@ import {
 import { optionalEnv } from "./env.ts";
 
 type Json = Record<string, unknown>;
-type UazInstance = { name: string; number: string | null; status: string; token: string };
+type UazInstance = {
+  name: string;
+  number: string | null;
+  status: string;
+  token: string;
+};
 
 export type HybridRoute = {
   provider: "uazapi";
@@ -37,7 +42,9 @@ async function refreshInstances() {
   try {
     instCache = await listInstances();
     ts = now;
-  } catch (e) { console.warn("hybrid: erro listando uazapi:", String(e).slice(0, 100)); }
+  } catch (e) {
+    console.warn("hybrid: erro listando uazapi:", String(e).slice(0, 100));
+  }
 }
 
 // Normaliza número pra comparação: só dígitos, sem +/espaço/traço.
@@ -107,7 +114,22 @@ export async function getHybridRoute(
 ): Promise<HybridRoute | null> {
   if (!uazapiConfigured() || !channelPhone) return null;
   const policy = hybridPolicy();
-  if (!channelMatchesAllowlist(policy.channelAllowlist, channelId, phoneNumberId, channelPhone)) {
+  if (
+    policy.channelAllowlist.size === 0 && policy.instanceAllowlist.size === 0
+  ) {
+    console.warn(
+      "hybrid: rota desativada; configure HYBRID_CHANNEL_ALLOWLIST ou HYBRID_INSTANCE_ALLOWLIST",
+    );
+    return null;
+  }
+  if (
+    !channelMatchesAllowlist(
+      policy.channelAllowlist,
+      channelId,
+      phoneNumberId,
+      channelPhone,
+    )
+  ) {
     return null;
   }
   await refreshInstances();
@@ -122,7 +144,12 @@ export async function getHybridRoute(
   return { provider: "uazapi", instance: match.name, token: match.token };
 }
 
-export type SendResult = { ok: boolean; status: number; data: unknown; via: "uazapi" | "official" };
+export type SendResult = {
+  ok: boolean;
+  status: number;
+  data: unknown;
+  via: "uazapi" | "official";
+};
 
 // Uazapi trabalha com número telefônico. IDs numéricos da Meta (LID/BSUID) também
 // podem ter 10-15 dígitos, mas não são números e não devem sair pela rota híbrida.
@@ -134,18 +161,32 @@ export function isHybridRecipient(value: string): boolean {
 
 // Envia texto via uazapi. Retorna null se falhar (caller faz fallback pro oficial).
 export async function hybridSendText(
-  route: HybridRoute, to: string, text: string,
+  route: HybridRoute,
+  to: string,
+  text: string,
 ): Promise<SendResult | null> {
   try {
-    const r = await uazInstPost("/send/text", route.token, { number: to, text });
-    if (!r.ok) { console.warn("hybrid text falhou, fallback oficial:", r.status); return null; }
+    const r = await uazInstPost("/send/text", route.token, {
+      number: to,
+      text,
+    });
+    if (!r.ok) {
+      console.warn("hybrid text falhou, fallback oficial:", r.status);
+      return null;
+    }
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
-  } catch (e) { console.warn("hybrid text erro, fallback:", String(e).slice(0, 100)); return null; }
+  } catch (e) {
+    console.warn("hybrid text erro, fallback:", String(e).slice(0, 100));
+    return null;
+  }
 }
 
 // Envia mídia via uazapi. Retorna null pra fallback.
 export async function hybridSendMedia(
-  route: HybridRoute, to: string, mediaUrl: string, mediaType: string,
+  route: HybridRoute,
+  to: string,
+  mediaUrl: string,
+  mediaType: string,
   opts: { caption?: string; fileName?: string; isVoice?: boolean },
 ): Promise<SendResult | null> {
   try {
@@ -162,9 +203,23 @@ export async function hybridSendMedia(
       delete body.ptt;
       delete body.text;
     }
-    console.log("hybrid-media-req:", endpoint, JSON.stringify(body).slice(0, 400));
+    console.log(
+      "hybrid-media-req:",
+      endpoint,
+      JSON.stringify(body).slice(0, 400),
+    );
     const r = await uazInstPost(endpoint, route.token, body);
-    if (!r.ok) { console.warn("hybrid media falhou, fallback oficial:", r.status, JSON.stringify(r.data).slice(0, 300)); return null; }
+    if (!r.ok) {
+      console.warn(
+        "hybrid media falhou, fallback oficial:",
+        r.status,
+        JSON.stringify(r.data).slice(0, 300),
+      );
+      return null;
+    }
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
-  } catch (e) { console.warn("hybrid media erro, fallback:", String(e).slice(0, 100)); return null; }
+  } catch (e) {
+    console.warn("hybrid media erro, fallback:", String(e).slice(0, 100));
+    return null;
+  }
 }

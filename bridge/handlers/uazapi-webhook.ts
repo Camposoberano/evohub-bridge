@@ -7,6 +7,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
+import { redactSecrets } from "../shared/redact.ts";
 import {
   isNutricaoIntent,
   isPlantioIntent,
@@ -51,7 +52,7 @@ export async function handle(req: Request): Promise<Response> {
   db.from("events").insert({
     source: "uazapi",
     event_type: eventType,
-    payload: p,
+    payload: redactSecrets(p),
   }).then(() => {}, () => {});
 
   if (isInboundUazapiEvent(eventType, p)) {
@@ -66,7 +67,9 @@ export async function handle(req: Request): Promise<Response> {
 function isInboundUazapiEvent(eventType: string, p: Json): boolean {
   const data = (p.data ?? {}) as Json;
   if (eventType === "message.exchange") return true;
-  if (eventType === "messages_update" || eventType === "ReadReceipt") return false;
+  if (eventType === "messages_update" || eventType === "ReadReceipt") {
+    return false;
+  }
   if (data.direction === "incoming") return true;
   if (Array.isArray(data.messages) && data.messages.length > 0) return true;
   if (data.message) return true;
@@ -128,7 +131,13 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
           "uazapi-click",
         );
         if (clickClaimed) {
-          await handleUazapiClick(db, channel as Json, msg.from, msg.menuClickId, acct);
+          await handleUazapiClick(
+            db,
+            channel as Json,
+            msg.from,
+            msg.menuClickId,
+            acct,
+          );
         }
       } catch (e) {
         console.error("uazapi-webhook click erro:", e);
@@ -178,7 +187,9 @@ async function handleUazapiClick(
 ): Promise<void> {
   if (id.startsWith("menu_")) {
     await handleMenuClick(db, channel, from, id, acct);
-  } else if (id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")) {
+  } else if (
+    id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
+  ) {
     await handlePrecoClick(db, channel, from, id, acct);
   } else if (id.startsWith("plantio_")) {
     await handlePlantioClick(db, channel, from, id, acct);
@@ -204,7 +215,10 @@ async function handleUazapiIntent(
     const audio = msg.attachments[0];
     const transcription = await transcribeAudio(audio.bytes, audio.contentType);
     if (!transcription) {
-      console.warn("uazapi-webhook: áudio recebido, mas não foi transcrito", msg.metaMessageId);
+      console.warn(
+        "uazapi-webhook: áudio recebido, mas não foi transcrito",
+        msg.metaMessageId,
+      );
       return;
     }
     intentText = transcription;
@@ -296,7 +310,8 @@ async function findChannelForInstance(
 
   if (!targetDigits) {
     const inst = (await listInstances()).find((i) =>
-      i.name === normalizedInstanceName || normDigits(i.name) === normDigits(normalizedInstanceName)
+      i.name === normalizedInstanceName ||
+      normDigits(i.name) === normDigits(normalizedInstanceName)
     );
     if (inst?.number) targetDigits = normDigits(inst.number);
   }
@@ -487,7 +502,8 @@ async function parseUazapiMessage(
     sentAt,
     direction,
     wasSentByApi,
-    isGroup: Boolean(message.isGroup) || Boolean(getJson(context, "chat")?.wa_isGroup),
+    isGroup: Boolean(message.isGroup) ||
+      Boolean(getJson(context, "chat")?.wa_isGroup),
     msgType,
     content,
     attachments,
@@ -529,7 +545,11 @@ async function downloadUazapiAttachment(
     const base64 = base64Value.replace(/^data:[^;]+;base64,/, "");
     const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_ATTACHMENT_BYTES) {
-      console.warn("uazapi-webhook: mídia fora do limite", messageId, bytes.byteLength);
+      console.warn(
+        "uazapi-webhook: mídia fora do limite",
+        messageId,
+        bytes.byteLength,
+      );
       return undefined;
     }
 
@@ -542,7 +562,11 @@ async function downloadUazapiAttachment(
       sourceUrl: firstString(data.fileURL),
     }];
   } catch (e) {
-    console.error("uazapi-webhook: erro ao descriptografar mídia", messageId, e);
+    console.error(
+      "uazapi-webhook: erro ao descriptografar mídia",
+      messageId,
+      e,
+    );
     return undefined;
   }
 }
@@ -565,7 +589,12 @@ async function buildUazapiAttachment(
       const mimetype = firstString(media.mimetype as string | undefined) ??
         "application/octet-stream";
       const filename = firstString(media.filename as string | undefined) ??
-        `${firstString(media.type as string | undefined, obj.type as string | undefined) ?? "arquivo"}${extensionForMime(mimetype)}`;
+        `${
+          firstString(
+            media.type as string | undefined,
+            obj.type as string | undefined,
+          ) ?? "arquivo"
+        }${extensionForMime(mimetype)}`;
       return [{
         filename,
         contentType: mimetype,
@@ -577,14 +606,21 @@ async function buildUazapiAttachment(
 
   const content = getJson(obj, "content");
   if (content && allowUrl) {
-    const url = firstString(content.URL as string | undefined, content.url as string | undefined);
+    const url = firstString(
+      content.URL as string | undefined,
+      content.url as string | undefined,
+    );
     if (url) {
       const mimetype = firstString(content.mimetype as string | undefined) ??
-        firstString(content.type as string | undefined) ?? "application/octet-stream";
+        firstString(content.type as string | undefined) ??
+        "application/octet-stream";
       const filename = firstString(
         content.filename as string | undefined,
         content.fileName as string | undefined,
-        firstString(content.type as string | undefined, obj.type as string | undefined) ?? "arquivo",
+        firstString(
+          content.type as string | undefined,
+          obj.type as string | undefined,
+        ) ?? "arquivo",
       ) + extensionForMime(mimetype);
 
       let bytes = new Uint8Array(0);
@@ -594,7 +630,11 @@ async function buildUazapiAttachment(
           const arrayBuffer = await res.arrayBuffer();
           bytes = new Uint8Array(arrayBuffer);
         } else {
-          console.warn("buildUazapiAttachment: download falhou com status", res.status, url);
+          console.warn(
+            "buildUazapiAttachment: download falhou com status",
+            res.status,
+            url,
+          );
         }
       } catch (e) {
         console.error("buildUazapiAttachment: erro ao baixar", url, e);
@@ -658,7 +698,9 @@ function firstString(...values: Array<unknown>): string | undefined {
 
 function getJson(obj: Json | undefined, key: string): Json | undefined {
   const value = obj?.[key];
-  return typeof value === "object" && value !== null ? value as Json : undefined;
+  return typeof value === "object" && value !== null
+    ? value as Json
+    : undefined;
 }
 
 function getString(obj: Json | undefined, key: string): string | undefined {
@@ -669,7 +711,8 @@ function getString(obj: Json | undefined, key: string): string | undefined {
 function isTruthy(...values: Array<unknown>): boolean {
   return values.some((value) =>
     value === true ||
-    (typeof value === "string" && ["true", "1", "yes"].includes(value.trim().toLowerCase()))
+    (typeof value === "string" &&
+      ["true", "1", "yes"].includes(value.trim().toLowerCase()))
   );
 }
 
