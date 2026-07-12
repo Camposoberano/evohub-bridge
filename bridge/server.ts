@@ -190,8 +190,9 @@ const version = {
     "commercial-intent-once-per-day",
     "commercial-media-delivery-proof",
     "dashboard-commercial-sequences",
+    "daily-intent-normalized-contact",
   ],
-  build: "2026-07-12-commercial-sequences-panel",
+  build: "2026-07-12-dedup-normalized-contact",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

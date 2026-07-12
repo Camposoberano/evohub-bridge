@@ -17,7 +17,14 @@ export function dailyIntentKey(
   intent: CommercialIntent,
   now = new Date(),
 ): string {
-  return `commercial-intent:${intent}:${channelId}:${contactId}:${brtDay(now)}`;
+  const normalizedContact = normalizeContactId(contactId);
+  return `commercial-intent:${intent}:${channelId}:${normalizedContact}:${brtDay(now)}`;
+}
+
+export function normalizeContactId(value: string): string {
+  const base = value.split("@")[0].split(":")[0];
+  const digits = base.replace(/\D/g, "");
+  return digits || value.trim().toLocaleLowerCase("pt-BR");
 }
 
 export async function claimDailyIntent(
