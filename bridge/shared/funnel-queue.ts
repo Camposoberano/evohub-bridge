@@ -7,12 +7,52 @@ import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 type Json = Record<string, unknown>;
 
 let running = false;
+const BRT_OFFSET_MINUTES = 180;
+
+export function businessShiftMinutes(values: string[]): number {
+  const minutes = values.map((value) => {
+    const date = new Date(value);
+    const brt = new Date(date.getTime() - BRT_OFFSET_MINUTES * 60_000);
+    return brt.getUTCHours() * 60 + brt.getUTCMinutes();
+  });
+  if (!minutes.length) return 0;
+  const min = Math.min(...minutes);
+  const max = Math.max(...minutes);
+  if (min < 6 * 60) return 6 * 60 - min;
+  if (max >= 22 * 60) return 24 * 60 - min + 6 * 60;
+  return 0;
+}
+
+async function normalizeBusinessQueue(db: ReturnType<typeof admin>): Promise<number> {
+  const { data, error } = await db.from("scheduled_messages")
+    .select("id,conversation_id,day,send_at,status")
+    .in("status", ["pending", "paused"]).order("send_at", { ascending: true })
+    .limit(2000);
+  if (error) throw error;
+  const groups = new Map<string, Json[]>();
+  for (const row of (data ?? []) as Json[]) {
+    const key = `${row.conversation_id}:${row.day}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  let shifted = 0;
+  for (const rows of groups.values()) {
+    const delta = businessShiftMinutes(rows.map((row) => String(row.send_at)));
+    if (!delta) continue;
+    for (const row of rows) {
+      const sendAt = new Date(new Date(String(row.send_at)).getTime() + delta * 60_000).toISOString();
+      await db.from("scheduled_messages").update({ send_at: sendAt }).eq("id", row.id);
+      shifted++;
+    }
+  }
+  return shifted;
+}
 
 export async function pumpFunnelQueue(limit = 10): Promise<{ found: number; sent: number; failed: number }> {
   if (running) return { found: 0, sent: 0, failed: 0 };
   running = true;
   try {
     const db = admin();
+    await normalizeBusinessQueue(db);
     const now = new Date().toISOString();
     const { data, error } = await db.from("scheduled_messages")
       .select("id,chatwoot_conversation_id,type,payload,send_at")

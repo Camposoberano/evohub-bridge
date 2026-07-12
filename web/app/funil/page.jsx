@@ -116,7 +116,16 @@ export default function FunilPage() {
   }, [sequences, queue, serverSummary]);
 
   const visibleSequences = sequences.filter((item) => filter === "todos" || item.status === filter);
-  const upcoming = queue.filter((item) => ["pending", "paused"].includes(item.status)).slice(0, 80);
+  const upcomingByConversation = useMemo(() => {
+    const groups = new Map();
+    for (const item of queue.filter((row) => ["pending", "paused"].includes(row.status))) {
+      const key = `${item.chatwoot_conversation_id}:${item.status}`;
+      const current = groups.get(key);
+      if (!current) groups.set(key, { ...item, count: 1, types: new Set([item.type]) });
+      else { current.count += 1; current.types.add(item.type); }
+    }
+    return [...groups.values()].sort((a, b) => new Date(a.send_at) - new Date(b.send_at)).slice(0, 100);
+  }, [queue]);
   const failed = queue.filter((item) => item.status === "failed").slice(0, 80);
   const failureByConversation = useMemo(() => {
     const map = new Map();
@@ -174,9 +183,9 @@ export default function FunilPage() {
 
         <div className="card">
           <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Próximos disparos</div>
-          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>A fila abaixo é a fonte de verdade para os intervalos do funil.</div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Quando</th><th>Conversa</th><th>Dia/etapa</th><th>Tipo</th><th>Status</th></tr></thead><tbody>
-            {upcoming.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma mensagem pendente.</td></tr> : upcoming.map((item) => { const [cls, label] = badge(item.status); return <tr key={item.id}><td>{when(item.send_at)}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td></tr>; })}
+          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>Um resumo por conversa. O horário indica o próximo envio e a quantidade mostra todas as peças aguardando.</div>
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Próximo</th><th>Conversa</th><th>Dia</th><th>Peças aguardando</th><th>Tipos</th><th>Status</th></tr></thead><tbody>
+            {upcomingByConversation.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma mensagem pendente.</td></tr> : upcomingByConversation.map((item) => { const [cls, label] = badge(item.status); return <tr key={`${item.chatwoot_conversation_id}:${item.status}`}><td>{when(item.send_at)}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"}</td><td>{item.count}</td><td>{[...item.types].join(", ")}</td><td><span className={`badge ${cls}`}>{label}</span></td></tr>; })}
           </tbody></table></div>
         </div>
 

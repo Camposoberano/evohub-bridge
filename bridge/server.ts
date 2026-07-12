@@ -193,8 +193,10 @@ const version = {
     "daily-intent-normalized-contact",
     "persistent-contact-profile-enrichment",
     "funnel-pause-reason-audit",
+    "funnel-final-business-hours-gate",
+    "dashboard-queue-grouped-by-conversation",
   ],
-  build: "2026-07-12-pause-reason-audit",
+  build: "2026-07-12-queue-business-gate",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
