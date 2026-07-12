@@ -15,7 +15,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
-import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, isSaudacaoIntent, transcribeAudio } from "../shared/intent.ts";
+import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
 import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 
@@ -294,11 +294,6 @@ async function handleWhatsApp(db: Db, p: Json) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
               if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${intentKey}`, "intent")) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
-              }
-            } else if (isSaudacaoIntent(intentText)) {
-              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
-              if (await claimDelivery(db, `intent-saudacao-${channel.id}-${from}-${intentKey}`, "intent")) {
-                await handleSaudacao(db, channel as Json, from, acct);
               }
             }
           } catch (e) { console.error("intent erro:", e); }

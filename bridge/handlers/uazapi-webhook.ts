@@ -11,11 +11,10 @@ import {
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
-  isSaudacaoIntent,
   isVideoIntent,
   transcribeAudio,
 } from "../shared/intent.ts";
-import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
+import { autoEnrollFunil } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
 import {
   handleMenuClick,
@@ -157,9 +156,6 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
           msg.content,
           msg.fromAd,
         );
-        if (isSaudacaoIntent(msg.content)) {
-          await enrollIfNew(db, channel as Json, msg.from);
-        }
       } catch (e) {
         console.error("uazapi-webhook auto-enroll erro:", e);
       }
