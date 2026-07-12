@@ -16,12 +16,15 @@ export default function Eventos() {
   const [pronto, setPronto] = useState(false);
   const [eventos, setEventos] = useState([]);
   const [fonte, setFonte] = useState("uazapi");
+  const [dias, setDias] = useState(7);
   const [auto, setAuto] = useState(true);
   const [msg, setMsg] = useState("");
   const [instancias, setInstancias] = useState([]);
 
-  const carregar = useCallback(async (f) => {
-    let q = supabase.from("events").select("id,source,event_type,created_at,payload").order("created_at", { ascending: false }).limit(100);
+  const carregar = useCallback(async (f, d) => {
+    const desde = new Date(Date.now() - d * 86_400_000).toISOString();
+    let q = supabase.from("events").select("id,source,event_type,received_at,occurred_at,payload")
+      .gte("received_at", desde).order("received_at", { ascending: false }).limit(200);
     if (f !== "todos") q = q.eq("source", f);
     const { data } = await q;
     setEventos(data || []);
@@ -37,16 +40,16 @@ export default function Eventos() {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true);
-      carregar(fonte);
+      carregar(fonte, dias);
       api("instances").then((r) => { if (r.ok) setInstancias(r.data.instances || []); });
     });
-  }, [router, carregar, fonte]);
+  }, [router, carregar, fonte, dias]);
 
   useEffect(() => {
     if (!auto || !pronto) return;
-    const t = setInterval(() => carregar(fonte), 5000);
+    const t = setInterval(() => carregar(fonte, dias), 5000);
     return () => clearInterval(t);
-  }, [auto, pronto, fonte, carregar]);
+  }, [auto, pronto, fonte, dias, carregar]);
 
   async function ligarWebhook() {
     const conectadas = instancias.filter((i) => i.status === "connected");
@@ -75,6 +78,11 @@ export default function Eventos() {
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
           {FONTES.map((f) => <button key={f} className={"tab" + (fonte === f ? " tab-active" : "")} onClick={() => setFonte(f)}>{f}</button>)}
+          <select value={dias} onChange={(e) => setDias(Number(e.target.value))}>
+            <option value={1}>Últimas 24h</option>
+            <option value={7}>Últimos 7 dias</option>
+            <option value={30}>Últimos 30 dias</option>
+          </select>
           <label style={{ fontSize: 13, color: "var(--text-dim)", marginLeft: 8 }}>
             <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto (5s)
           </label>
@@ -89,7 +97,7 @@ export default function Eventos() {
                 <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-dim)", padding: 30 }}>Nenhum evento{fonte === "uazapi" ? " (ligue o webhook + bridge público)" : ""}.</td></tr>
               ) : eventos.map((e) => (
                 <tr key={e.id}>
-                  <td style={{ fontSize: 12, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{quando(e.created_at)}</td>
+                  <td style={{ fontSize: 12, color: "var(--text-dim)", whiteSpace: "nowrap" }}>{quando(e.received_at || e.occurred_at)}</td>
                   <td><span className="badge badge-gray">{e.source}</span></td>
                   <td style={{ fontSize: 13 }}>{e.event_type}</td>
                   <td style={{ fontSize: 12, color: "var(--text-faint)", maxWidth: 420, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

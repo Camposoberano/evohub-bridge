@@ -29,6 +29,7 @@ export default function Conexoes() {
   const [pronto, setPronto] = useState(false);
   const [canais, setCanais] = useState([]);
   const [stats, setStats] = useState({ contatos: {}, conversas: {}, msgs: {} });
+  const [rotasHibridas, setRotasHibridas] = useState([]);
   const [busca, setBusca] = useState("");
   const [modal, setModal] = useState(false);
   const [novoNome, setNovoNome] = useState("");
@@ -45,6 +46,11 @@ export default function Conexoes() {
     ]);
     setCanais(chs.data || []);
     setStats({ contatos: tally(ct.data), conversas: tally(cv.data), msgs: tally(ms.data) });
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session) {
+      const hr = await fetch(`${BRIDGE_URL}/hybrid-routes`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+      if (hr.ok) setRotasHibridas((await hr.json()).routes || []);
+    }
   }, []);
 
   useEffect(() => {
@@ -148,6 +154,7 @@ export default function Conexoes() {
             const plat = PLAT[c.type] || { label: c.type, color: "#888" };
             const [cls, txt] = statusBadge(c.status);
             const ident = c.phone_number || c.display_name || c.page_id || "—";
+            const rota = rotasHibridas.find((r) => r.channel_id === c.id);
             return (
               <div key={c.id} className="card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -158,6 +165,13 @@ export default function Conexoes() {
                 </div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{c.name}</div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 2 }}>{ident}</div>
+                {c.type === "whatsapp" && c.phone_number_id && (
+                  <div style={{ marginTop: 8 }}>
+                    <span className={"badge " + (rota?.hybrid ? "badge-green" : "badge-gray")}>
+                      {rota?.hybrid ? `Híbrido ativo · ${rota.hybrid.instance}` : "Somente oficial"}
+                    </span>
+                  </div>
+                )}
 
                 <div style={{ display: "flex", gap: 18, marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
                   {[["contatos", stats.contatos[c.id] || 0], ["conversas", stats.conversas[c.id] || 0], ["mensagens", stats.msgs[c.id] || 0]].map(([k, v]) => (
@@ -214,4 +228,3 @@ export default function Conexoes() {
     </>
   );
 }
-

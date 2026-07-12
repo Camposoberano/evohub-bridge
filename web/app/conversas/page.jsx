@@ -28,14 +28,19 @@ export default function Conversas() {
   const [pronto, setPronto] = useState(false);
   const [convs, setConvs] = useState([]);
   const [filtroStatus, setFiltroStatus] = useState("todas");
+  const [filtroPeriodo, setFiltroPeriodo] = useState("30");
+  const [filtroCanal, setFiltroCanal] = useState("todos");
   const [busca, setBusca] = useState("");
   const [salvandoId, setSalvandoId] = useState(null);
 
-  const carregar = useCallback(async () => {
-    const { data } = await supabase.from("conversations")
-      .select("*, contacts(name,phone,external_contact_id), channels(name,type)")
-      .order("opened_at", { ascending: false })
-      .limit(300);
+  const carregar = useCallback(async (periodo) => {
+    let q = supabase.from("conversations")
+      .select("*, contacts(name,phone,external_contact_id), channels(id,name,type,phone_number)")
+      .order("opened_at", { ascending: false }).limit(500);
+    if (periodo !== "todos") {
+      q = q.gte("opened_at", new Date(Date.now() - Number(periodo) * 86_400_000).toISOString());
+    }
+    const { data } = await q;
     setConvs(data || []);
   }, []);
 
@@ -44,11 +49,11 @@ export default function Conversas() {
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true);
-      carregar();
-      timer = setInterval(carregar, 8000);
+      carregar(filtroPeriodo);
+      timer = setInterval(() => carregar(filtroPeriodo), 8000);
     });
     return () => clearInterval(timer);
-  }, [router, carregar]);
+  }, [router, carregar, filtroPeriodo]);
 
   async function marcar(conv, outcome) {
     let valueCents = null;
@@ -68,7 +73,7 @@ export default function Conversas() {
       });
       const j = await res.json();
       if (!res.ok) { alert(j.error || "Erro ao salvar"); return; }
-      carregar();
+      carregar(filtroPeriodo);
     } catch (e) {
       alert("Falha: " + e.message);
     } finally {
@@ -80,6 +85,7 @@ export default function Conversas() {
 
   const filtradas = convs.filter((c) => {
     if (filtroStatus !== "todas" && c.status !== filtroStatus) return false;
+    if (filtroCanal !== "todos" && c.channel_id !== filtroCanal) return false;
     const nome = (c.contacts?.name || c.contacts?.external_contact_id || "").toLowerCase();
     return nome.includes(busca.toLowerCase());
   });
@@ -101,6 +107,18 @@ export default function Conversas() {
             <option value="todas">Todas</option>
             <option value="open">Abertas</option>
             <option value="resolved">Resolvidas</option>
+          </select>
+          <select value={filtroPeriodo} onChange={(e) => setFiltroPeriodo(e.target.value)}>
+            <option value="7">Últimos 7 dias</option>
+            <option value="30">Últimos 30 dias</option>
+            <option value="90">Últimos 90 dias</option>
+            <option value="todos">Todo o período</option>
+          </select>
+          <select value={filtroCanal} onChange={(e) => setFiltroCanal(e.target.value)}>
+            <option value="todos">Todos os números/canais</option>
+            {[...new Map(convs.map((c) => [c.channel_id, c.channels])).entries()].map(([id, ch]) => (
+              <option key={id} value={id}>{ch?.name || ch?.phone_number || id}</option>
+            ))}
           </select>
           <span className="badge badge-gray">{filtradas.length}</span>
         </div>
