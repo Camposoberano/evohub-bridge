@@ -21,6 +21,7 @@ Este documento registra o que foi migrado, construido, testado, corrigido, rejei
 - Health check pos-deploy: HTTP 200 / `ok`.
 - Rota hibrida pos-deploy: canal oficial 5895 -> instancia Uazapi 5895.
 - Allowlist ativa: `HYBRID_INSTANCE_ALLOWLIST=5895`.
+- Nginx local sincronizado com os IPs internos atuais do bridge (8000) e dashboard (3000); o timer `evohub-nginx-upstream.timer` foi ampliado para atualizar os dois.
 - Facebook/Instagram: nao devem ser usados como criterio de aprovacao desta fase.
 
 ## Linha do tempo
@@ -61,6 +62,7 @@ Este documento registra o que foi migrado, construido, testado, corrigido, rejei
 6. **Midia 20590 em retry:** falha HTTP 403 do canal de teste foi encerrada como `terminal_failed`; o retry automatico agora permite apenas uma tentativa adicional.
 7. **Segredo em payload:** eventos Uazapi traziam campos sensiveis. A ingestao agora redige chaves sensiveis e o historico foi saneado.
 8. **Instancia nova entrando no hibrido:** allowlist vazia era permissiva. Agora o hibrido desliga sem allowlist e o piloto declara explicitamente `5895`.
+9. **Dashboard 404/502 apos redeploy:** o alias `cofre.2` apontava para o painel corretamente, mas o Nginx mantinha o dashboard no IP interno antigo `10.0.2.9`. O upstream foi atualizado para o container novo e o sincronizador passou a cuidar das portas 8000 e 3000.
 
 ## O que foi testado com sucesso
 
