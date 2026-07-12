@@ -185,8 +185,9 @@ const version = {
     "funnel-eligible-lead-recovery",
     "price-planting-direct-cta",
     "macro-command-ack-before-consume",
+    "meta-message-id-required-for-price",
   ],
-  build: "2026-07-12-macro-delivery-ack",
+  build: "2026-07-12-price-delivery-proof",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

@@ -374,7 +374,9 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
+  if (!token || !phone) {
+    throw new Error("canal sem channel_token ou phone_number_id para enviar preço");
+  }
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -420,7 +422,7 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
     // chatwoot_message_id no insert é OBRIGATÓRIO: sem ele o pull-loop sync-chatwoot-out acha a
     // msg "órfã" no Chatwoot e reenvia como texto (duplicação vista no teste v3).
     let cwMsgId: number | null = null;
-    if (conv?.chatwoot_conversation_id) {
+    if (r.ok && metaId && conv?.chatwoot_conversation_id) {
       try {
         const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: p.registro, messageType: "outgoing" }, acct);
         cwMsgId = (cw?.id as number) ?? null;
@@ -432,6 +434,12 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
       content: p.registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
       status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
     });
+    // A imagem promocional é opcional, mas o CTA interativo é a entrega que confirma
+    // o comando. Sem aceite + message_id da Meta, a macro deve permanecer pendente.
+    if (p.tipo === "interactive" && (!r.ok || !metaId)) {
+      const detail = JSON.stringify(r.data).slice(0, 300);
+      throw new Error(`Meta não confirmou CTA de preço (${r.status}): ${detail}`);
+    }
     if (i < pecas.length - 1) await pause(2500);
   }
 }
