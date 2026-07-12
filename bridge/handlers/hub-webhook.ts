@@ -390,20 +390,19 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
       registro: "[imagem promoção]",
     });
   }
-  // 2) lista de área (botão "Quer saber o preço?")
+  // 2) escolhas visíveis: reply buttons convertem melhor que uma lista fechada.
   pecas.push({
     tipo: "interactive",
     body: {
       type: "interactive",
       interactive: {
-        type: "list",
-        body: { text: "📐 Pra te passar o preço certinho, preciso saber: qual o tamanho da área que o senhor vai plantar?" },
-        action: { button: "Quer saber o preço?", sections: [{ title: "Tamanho da área", rows: [
-          { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
-          { id: "tam_4kg", title: "Até 1 hectare" },
-          { id: "tam_10kg", title: "2 hectares" },
-          { id: "tam_20kg", title: "4 hectares ou mais" },
-        ] } ] },
+        type: "button",
+        body: { text: "📐 *Qual área o senhor pretende plantar?*\n\nToque abaixo e eu já mostro o pacote certo, o valor e o desconto." },
+        action: { buttons: [
+          { type: "reply", reply: { id: "tam_2kg", title: "½ hectare" } },
+          { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
+          { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
+        ] },
       },
     },
     registro: "📐 Qual o tamanho da área? [½ ha / 1 ha / 2 ha / 4+ ha]",
@@ -519,16 +518,30 @@ export async function handlePrecoClick(db: Db, channel: Json, from: string, id: 
     await envia({
       type: "interactive",
       interactive: {
-        type: "list",
-        body: { text: "📐 Me diz o tamanho da área que o senhor quer plantar:" },
-        action: { button: "Quer saber o preço?", sections: [{ title: "Tamanho da área", rows: [
-          { id: "tam_2kg", title: "Até ½ hectare", description: "meio hectare" },
-          { id: "tam_4kg", title: "Até 1 hectare" },
-          { id: "tam_10kg", title: "2 hectares" },
-          { id: "tam_20kg", title: "4 hectares ou mais" },
-        ] } ] },
+        type: "button",
+        body: { text: "📐 *Qual área o senhor quer calcular?*" },
+        action: { buttons: [
+          { type: "reply", reply: { id: "tam_2kg", title: "½ hectare" } },
+          { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
+          { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
+        ] },
       },
     }, "📐 Me diz o tamanho da área [½ ha / 1 ha / 2 ha / 4+ ha]", "interactive");
+    return;
+  }
+
+  if (id === "preco_area_maior") {
+    await envia({
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: "🌱 *Perfeito. Qual destas áreas fica mais próxima?*" },
+        action: { buttons: [
+          { type: "reply", reply: { id: "tam_10kg", title: "2 hectares" } },
+          { type: "reply", reply: { id: "tam_20kg", title: "4 hectares ou mais" } },
+        ] },
+      },
+    }, "Qual área? [2 hectares / 4 hectares ou mais]", "interactive");
     return;
   }
 
@@ -667,6 +680,28 @@ export async function handleVideoSequence(db: Db, channel: Json, from: string, a
 
 // ── Sequência COMO PLANTAR (PDF + lista de resumos) ─────────────────────────
 const PLANTIO_RESUMOS: Record<string, string> = {
+  plantio_inicio:
+    "🌱 *Como começar o plantio*\n\n" +
+    "• Use *4 a 5 kg de sementes por hectare*\n" +
+    "• Plante a *2 a 3 cm de profundidade*\n" +
+    "• Época recomendada: *setembro a março*\n" +
+    "• Em plantio a lanço, use cerca de *10% a mais de sementes*\n\n" +
+    "Se me disser quantos hectares vai plantar, eu também calculo a quantidade de semente.",
+  plantio_solo:
+    "🧪 *Solo e adubação*\n\n" +
+    "• Faça análise do solo antes da safra\n" +
+    "• A calagem deve buscar saturação por bases de até *70%*\n" +
+    "• Na semeadura: *20 a 40 kg/ha de nitrogênio*\n" +
+    "• Fósforo e potássio: ajustar conforme a análise\n" +
+    "• Cobertura: referência de *200 kg/ha da fórmula 20-00-20*, entre 25 e 35 dias\n\n" +
+    "A recomendação final deve ser validada por um agrônomo com a análise da sua área.",
+  plantio_colheita:
+    "✂️ *Corte, silagem e produtividade*\n\n" +
+    "• Primeiro corte: geralmente entre *90 e 110 dias*\n" +
+    "• Corte com matéria seca entre *30% e 35%*\n" +
+    "• Partículas de *1,25 a 1,75 cm*\n" +
+    "• Produtividade esperada: de *45 a 90 toneladas/ha*, conforme solo e manejo\n" +
+    "• Com adubação adequada, apresenta rebrote vigoroso.",
   plantio_1:
     "🌱 *Especificações da Semente*\n\n" +
     "• Recomendação: *5 kg por hectare*\n" +
@@ -794,26 +829,19 @@ async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?:
     await pause(3000);
   }
 
-  // 2) Lista de resumos
+  // 2) Três necessidades visíveis; a lista técnica completa fica como aprofundamento.
   await envia({
     type: "interactive",
     interactive: {
-      type: "list",
-      body: { text: "📋 *Quer um resumo rápido de algum tema?*\n\nEscolha abaixo o assunto que mais te interessa — te mando um resumo fácil de entender, direto no ponto!" },
-      action: { button: "Ver os temas", sections: [{ title: "Temas de plantio", rows: [
-        { id: "plantio_1", title: "🌱 A semente", description: "Características e especificações" },
-        { id: "plantio_2", title: "📏 Plantio em linha", description: "Espaçamento, disco e profundidade" },
-        { id: "plantio_3", title: "🌾 Plantio a lanço", description: "Quantidade e cuidados" },
-        { id: "plantio_4", title: "🧪 Calagem do solo", description: "Preparação e correção do solo" },
-        { id: "plantio_5", title: "💊 Adubação de base", description: "NPK na semeadura" },
-        { id: "plantio_6", title: "🔄 Adubação cobertura", description: "Cobertura e rebrote" },
-        { id: "plantio_7", title: "🌿 Controle de mato", description: "Herbicidas e daninhas" },
-        { id: "plantio_8", title: "🐛 Pragas", description: "Tratamento de sementes e pragas" },
-        { id: "plantio_9", title: "✂️ Corte e silagem", description: "Ponto de corte e partículas" },
-        { id: "plantio_10", title: "📊 Produtividade", description: "Rendimento e rebrote" },
-      ] } ] },
+      type: "button",
+      body: { text: "🌱 *O que o senhor precisa resolver agora no plantio?*\n\nToque em uma opção e eu mando a orientação direto ao ponto." },
+      action: { buttons: [
+        { type: "reply", reply: { id: "plantio_inicio", title: "Como começar" } },
+        { type: "reply", reply: { id: "plantio_solo", title: "Solo e adubação" } },
+        { type: "reply", reply: { id: "plantio_colheita", title: "Corte e silagem" } },
+      ] },
     },
-  }, "📋 Lista de temas de plantio [10 opções]", "interactive");
+  }, "O que precisa no plantio? [Como começar / Solo e adubação / Corte e silagem]", "interactive");
 }
 
 export async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {

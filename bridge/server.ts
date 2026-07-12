@@ -183,8 +183,9 @@ const version = {
     "hybrid-route-observability",
     "funnel-auto-night-6am",
     "funnel-eligible-lead-recovery",
+    "price-planting-direct-cta",
   ],
-  build: "2026-07-12-funnel-recovery",
+  build: "2026-07-12-conversion-cta-v1",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
