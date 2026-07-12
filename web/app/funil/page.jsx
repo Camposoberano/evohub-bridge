@@ -40,13 +40,13 @@ export default function FunilPage() {
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
     const [seq, messages] = await Promise.all([
-      supabase.from("sales_sequences").select("id,conversation_id,chatwoot_conversation_id,funnel,status,created_at").order("created_at", { ascending: false }).limit(250),
-      supabase.from("scheduled_messages").select("id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status,sent_at,error_message").order("send_at", { ascending: true }).limit(500),
+      supabase.from("sales_sequences").select("id,conversation_id,chatwoot_conversation_id,funnel,status").limit(250),
+      supabase.from("scheduled_messages").select("id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status").order("send_at", { ascending: true }).limit(500),
     ]);
     const errors = [seq.error, messages.error].filter(Boolean);
     if (errors.length) setError(errors.map((item) => item.message).join(" | "));
     else setError("");
-    setSequences(seq.data || []);
+    setSequences((seq.data || []).sort((a, b) => String(b.id || "").localeCompare(String(a.id || ""))));
     setQueue(messages.data || []);
     setLastSync(new Date());
     setLoading(false);
@@ -105,16 +105,16 @@ export default function FunilPage() {
             <div><div style={{ fontSize: 17, fontWeight: 700 }}>Sequências por conversa</div><div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 3 }}>Cada conversa deve ter no máximo um funil ativo.</div></div>
             <select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="todos">Todos os status</option><option value="running">Rodando</option><option value="paused">Pausados</option><option value="cancelled">Parados</option><option value="replied">Respondidos</option></select>
           </div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table"><thead><tr><th>Funil</th><th>Conversa</th><th>Status</th><th>Iniciado</th><th>Ação</th></tr></thead><tbody>
-            {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); return <tr key={item.id}><td>{item.funnel || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td>{when(item.created_at)}</td><td>{item.chatwoot_conversation_id ? <Link href={`/conversas?conversation=${item.chatwoot_conversation_id}`} className="btn-ghost mini">Abrir</Link> : "—"}</td></tr>; })}
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table"><thead><tr><th>Funil</th><th>Conversa</th><th>Status</th><th>Ação</th></tr></thead><tbody>
+            {visibleSequences.length === 0 ? <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); return <tr key={item.id}><td>{item.funnel || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td>{item.chatwoot_conversation_id ? <Link href={`/conversas?conversation=${item.chatwoot_conversation_id}`} className="btn-ghost mini">Abrir</Link> : "—"}</td></tr>; })}
           </tbody></table></div>
         </div>
 
         <div className="card">
           <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Próximos disparos</div>
           <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>A fila abaixo é a fonte de verdade para os intervalos do funil.</div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table"><thead><tr><th>Quando</th><th>Conversa</th><th>Dia/etapa</th><th>Tipo</th><th>Status</th><th>Erro</th></tr></thead><tbody>
-            {upcoming.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma mensagem pendente.</td></tr> : upcoming.map((item) => { const [cls, label] = badge(item.status); return <tr key={item.id}><td>{when(item.send_at)}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td style={{ maxWidth: 260, color: item.error_message ? "#ff96a7" : "var(--text-faint)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.error_message || "—"}</td></tr>; })}
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table"><thead><tr><th>Quando</th><th>Conversa</th><th>Dia/etapa</th><th>Tipo</th><th>Status</th></tr></thead><tbody>
+            {upcoming.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma mensagem pendente.</td></tr> : upcoming.map((item) => { const [cls, label] = badge(item.status); return <tr key={item.id}><td>{when(item.send_at)}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td></tr>; })}
           </tbody></table></div>
         </div>
       </main>

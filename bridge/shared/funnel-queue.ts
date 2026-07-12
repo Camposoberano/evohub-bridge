@@ -42,10 +42,10 @@ export async function pumpFunnelQueue(limit = 10): Promise<{ found: number; sent
       }));
       const body = await res.json().catch(() => ({} as Json));
       if (res.ok && body.ok !== false && !body.blocked) {
-        await db.from("scheduled_messages").update({ status: "sent", sent_at: new Date().toISOString(), error_message: null }).eq("id", id);
+        await db.from("scheduled_messages").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", id);
         sent++;
       } else {
-        await db.from("scheduled_messages").update({ status: "failed", error_message: JSON.stringify(body).slice(0, 1000) }).eq("id", id);
+        await db.from("scheduled_messages").update({ status: "failed" }).eq("id", id);
         await db.from("deliveries").delete().eq("delivery_id", claimKey);
         failed++;
       }
