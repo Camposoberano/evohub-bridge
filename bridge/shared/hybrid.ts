@@ -11,6 +11,8 @@ import {
   uazapiConfigured,
 } from "./uazapi.ts";
 import { optionalEnv } from "./env.ts";
+import { admin } from "./supabase.ts";
+import { configuredChannel, readHybridConfig } from "./hybrid-config.ts";
 
 type Json = Record<string, unknown>;
 type UazInstance = {
@@ -24,6 +26,7 @@ export type HybridRoute = {
   provider: "uazapi";
   instance: string;
   token: string;
+  channelId: string;
 };
 
 // Cache das instâncias uazapi (recarrega a cada 60s).
@@ -113,8 +116,11 @@ export async function getHybridRoute(
   channelPhone?: string,
 ): Promise<HybridRoute | null> {
   if (!uazapiConfigured() || !channelPhone) return null;
+  const stored = configuredChannel(await readHybridConfig(), channelId);
+  if (stored?.enabled === false) return null;
   const policy = hybridPolicy();
   if (
+    !stored &&
     policy.channelAllowlist.size === 0 && policy.instanceAllowlist.size === 0
   ) {
     console.warn(
@@ -123,6 +129,7 @@ export async function getHybridRoute(
     return null;
   }
   if (
+    !stored &&
     !channelMatchesAllowlist(
       policy.channelAllowlist,
       channelId,
@@ -138,10 +145,11 @@ export async function getHybridRoute(
   const match = instCache.find((i) =>
     i.status === "connected" &&
     norm(i.number) === target &&
-    instanceMatchesAllowlist(policy.instanceAllowlist, i)
+    (stored?.instance ? i.name === stored.instance : true) &&
+    (stored ? true : instanceMatchesAllowlist(policy.instanceAllowlist, i))
   );
   if (!match) return null;
-  return { provider: "uazapi", instance: match.name, token: match.token };
+  return { provider: "uazapi", instance: match.name, token: match.token, channelId };
 }
 
 export type SendResult = {
@@ -172,11 +180,14 @@ export async function hybridSendText(
     });
     if (!r.ok) {
       console.warn("hybrid text falhou, fallback oficial:", r.status);
+      await recordRouteEvent(route, "fallback_requested", "text", to, r.status);
       return null;
     }
+    await recordRouteEvent(route, "send_success", "text", to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
     console.warn("hybrid text erro, fallback:", String(e).slice(0, 100));
+    await recordRouteEvent(route, "fallback_requested", "text", to, 0);
     return null;
   }
 }
@@ -215,11 +226,41 @@ export async function hybridSendMedia(
         r.status,
         JSON.stringify(r.data).slice(0, 300),
       );
+      await recordRouteEvent(route, "fallback_requested", mediaType, to, r.status);
       return null;
     }
+    await recordRouteEvent(route, "send_success", mediaType, to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
     console.warn("hybrid media erro, fallback:", String(e).slice(0, 100));
+    await recordRouteEvent(route, "fallback_requested", mediaType, to, 0);
     return null;
+  }
+}
+
+async function recordRouteEvent(
+  route: HybridRoute,
+  eventType: "send_success" | "fallback_requested",
+  messageType: string,
+  recipient: string,
+  status: number,
+): Promise<void> {
+  try {
+    const digits = recipient.replace(/\D/g, "");
+    await admin().from("events").insert({
+      source: "hybrid",
+      event_type: eventType,
+      channel_id: route.channelId,
+      payload: {
+        provider: route.provider,
+        instance: route.instance,
+        message_type: messageType,
+        provider_status: status,
+        recipient_suffix: digits.slice(-4),
+      },
+      occurred_at: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn("hybrid event falhou:", String(error).slice(0, 100));
   }
 }

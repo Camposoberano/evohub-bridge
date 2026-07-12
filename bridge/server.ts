@@ -33,6 +33,8 @@ import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { handle as relatorio } from "./handlers/relatorio.ts";
 import { handle as hybridRoutes } from "./handlers/hybrid-routes.ts";
+import { handle as hybridOps } from "./handlers/hybrid-ops.ts";
+import { handle as funnelOps } from "./handlers/funnel-ops.ts";
 import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
 import { handle as funnelQueuePump } from "./handlers/funil-queue-pump.ts";
 import { env, optionalEnv } from "./shared/env.ts";
@@ -76,6 +78,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/llm-orchestrate": llmOrchestrate,
   "/relatorio": relatorio,
   "/hybrid-routes": hybridRoutes,
+  "/hybrid-ops": hybridOps,
+  "/funnel-ops": funnelOps,
   "/repair-official-5895": repairOfficial5895,
   "/funil-queue-pump": funnelQueuePump,
 };
@@ -164,8 +168,11 @@ const version = {
     "repair-official-5895-single-inbox",
     "uazapi-device-echo-to-chatwoot",
     "funnel-queue-pump",
+    "dashboard-funnel-operations",
+    "dashboard-hybrid-channel-control",
+    "hybrid-route-observability",
   ],
-  build: "2026-07-10-ryze-inbound-fix",
+  build: "2026-07-12-ops-control",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

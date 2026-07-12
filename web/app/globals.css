@@ -126,7 +126,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--mint); width: 
 .table tr:hover td { background: var(--surface-2); }
 .table tr.row-selected td { background: rgba(177,92,255,.1); }
 .table tr.row-selected:hover td { background: rgba(177,92,255,.16); }
-.table-wrap { background: linear-gradient(180deg, var(--surface), #140d24); border: 1px solid var(--border-soft); border-radius: 18px; overflow: hidden; }
+.table-wrap { background: linear-gradient(180deg, var(--surface), #140d24); border: 1px solid var(--border-soft); border-radius: 18px; overflow-x: auto; overflow-y: hidden; }
+.table-ops { min-width: 780px; }
 
 /* ── Bar chart ────────────────────────────────────────────────────────────── */
 .bars { display: flex; align-items: flex-end; gap: 6px; height: 150px; padding-top: 8px; }

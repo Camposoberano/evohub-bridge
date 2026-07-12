@@ -20,13 +20,15 @@ export default function HibridosPage() {
   const [routes, setRoutes] = useState([]);
   const [instances, setInstances] = useState([]);
   const [lastSync, setLastSync] = useState(null);
+  const [acting, setActing] = useState("");
+  const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { router.replace("/login"); return; }
     try {
-      const response = await fetch(`${BRIDGE_URL}/hybrid-routes`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+      const response = await fetch(`${BRIDGE_URL}/hybrid-ops`, { headers: { Authorization: `Bearer ${session.access_token}` } });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setRoutes(data.routes || []);
@@ -39,6 +41,30 @@ export default function HibridosPage() {
       setLoading(false);
     }
   }, [router]);
+
+  async function setEnabled(route, enabled) {
+    if (!enabled && !confirm(`Colocar ${route.channel_name || route.phone_number} em modo somente oficial agora?`)) return;
+    setActing(route.channel_id);
+    setMessage("");
+    const { data: { session } } = await supabase.auth.getSession();
+    try {
+      const response = await fetch(`${BRIDGE_URL}/hybrid-ops`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ channel_id: route.channel_id, enabled, instance: route.hybrid?.instance || route.configured?.instance || undefined }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setRoutes(data.routes || []);
+      setInstances(data.instances || []);
+      setMessage(enabled ? "Rota híbrida ativada e persistida." : "Modo somente oficial ativado imediatamente.");
+      setLastSync(new Date());
+    } catch (err) {
+      setMessage(`Falha: ${err.message}`);
+    } finally {
+      setActing("");
+    }
+  }
 
   useEffect(() => {
     let timer;
@@ -64,6 +90,7 @@ export default function HibridosPage() {
         </div>
 
         {error && <div className="card" style={{ borderColor: "rgba(251,93,118,.45)", marginBottom: 14 }}><strong style={{ color: "var(--red)" }}>Falha na leitura das rotas</strong><div style={{ color: "var(--text-dim)", marginTop: 5 }}>{error}</div></div>}
+        {message && <div className="card" style={{ marginBottom: 14, fontSize: 13 }}>{message}</div>}
 
         <div className="stat-grid" style={{ marginBottom: 18 }}>
           <div className="stat-card"><div className="stat-label">Canais oficiais</div><div className="stat-value">{routes.length}</div><div className="stat-sub">WhatsApp com Phone ID</div></div>
@@ -74,8 +101,8 @@ export default function HibridosPage() {
 
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Mapa de operação</div><div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>A rota só é considerada híbrida quando o número oficial e a instância alternativa coincidem e estão permitidos pela allowlist.</div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table"><thead><tr><th>Canal oficial</th><th>Número</th><th>Status oficial</th><th>Espelho</th><th>Provedor</th><th>Rota</th></tr></thead><tbody>
-            {routes.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum canal oficial encontrado.</td></tr> : routes.map((item) => { const [cls, label] = statusInfo(item.status); return <tr key={item.channel_id}><td>{item.channel_name || "—"}</td><td>{item.phone_number || item.phone_number_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td>{item.hybrid?.instance || "—"}</td><td>{item.hybrid?.provider || "—"}</td><td><span className={`badge ${item.hybrid ? "badge-green" : "badge-gray"}`}>{item.hybrid ? "Híbrida ativa" : "Somente oficial"}</span></td></tr>; })}
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Canal oficial</th><th>Número</th><th>Status</th><th>Espelho</th><th>24h</th><th>Rota</th><th>Ação</th></tr></thead><tbody>
+            {routes.length === 0 ? <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhum canal oficial encontrado.</td></tr> : routes.map((item) => { const [cls, label] = statusInfo(item.status); const active = Boolean(item.hybrid); return <tr key={item.channel_id}><td><div>{item.channel_name || "—"}</div>{item.last_error && <div style={{ color: "var(--red)", fontSize: 11, marginTop: 3, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={item.last_error}>{item.last_error}</div>}</td><td>{item.phone_number || item.phone_number_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span></td><td>{item.hybrid?.instance || item.configured?.instance || "—"}</td><td><span style={{ color: "var(--green)" }}>{item.metrics_24h?.success || 0} ok</span> · <span style={{ color: item.metrics_24h?.fallback ? "var(--amber)" : "var(--text-faint)" }}>{item.metrics_24h?.fallback || 0} fallbacks</span></td><td><span className={`badge ${active ? "badge-green" : item.configured?.enabled ? "badge-amber" : "badge-gray"}`}>{active ? "Híbrida ativa" : item.configured?.enabled ? "Ativa sem espelho" : "Somente oficial"}</span></td><td>{active || item.configured?.enabled ? <button className="btn-ghost mini" disabled={acting === item.channel_id} onClick={() => setEnabled(item, false)} style={{ color: "var(--red)" }}>{acting === item.channel_id ? "Aplicando..." : "Somente oficial"}</button> : <button className="btn-ghost mini" disabled={acting === item.channel_id} onClick={() => setEnabled(item, true)}>{acting === item.channel_id ? "Aplicando..." : "Ativar híbrido"}</button>}</td></tr>; })}
           </tbody></table></div>
         </div>
 
