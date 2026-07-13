@@ -3,7 +3,7 @@
 // conversa pra mensagens de ENTRADA de forma confiável (bug observado, achado testando) --
 // por isso processamos a entrada por aqui, com ingestInbound() (mesma função usada pro Hub
 // oficial), em vez de depender da ponte deles. Saída continua pela ponte nativa deles.
-import { admin } from "../shared/supabase.ts";
+import { admin, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
@@ -112,17 +112,26 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   const attachments = buildAttachment(message);
   const acct = await accountForChannel(channel.id as string);
 
-  await ingestInbound(db, channel as Json, {
-    from,
-    name: (chat.name as string) || (sender.name as string) || undefined,
-    metaMessageId: messageId,
-    msgType,
-    content,
-    attachments,
-    sentAt: data.timestamp as string | undefined,
-    outgoing,
-    acct,
-  });
+  try {
+    await ingestInbound(db, channel as Json, {
+      from,
+      name: outgoing
+        ? (chat.name as string) || (recipient.name as string) || undefined
+        : (chat.name as string) || (sender.name as string) || undefined,
+      metaMessageId: messageId,
+      msgType,
+      content,
+      attachments,
+      sentAt: data.timestamp as string | undefined,
+      outgoing,
+      acct,
+    });
+  } catch (error) {
+    if (messageId) {
+      await releaseDelivery(db, `wa-${channel.id}-${messageId}`).catch(() => {});
+    }
+    throw error;
+  }
 }
 
 // mídia chega decriptada em base64 (webhook configurado com mediaBase64=true) -- a URL crua

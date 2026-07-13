@@ -150,7 +150,7 @@ export async function ingestInbound(
   const { data: openConv, error: convQueryError } = await db
     .from("conversations").select("*")
     .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).maybeSingle();
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
   if (convQueryError) throw convQueryError;
 
   let conv = openConv as Json | null;
