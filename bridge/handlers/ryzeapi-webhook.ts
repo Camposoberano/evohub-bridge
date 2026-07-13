@@ -16,6 +16,27 @@ function jidDigits(value: unknown): string {
   return String(value ?? "").replace(/@.*/, "").replace(/\D/g, "");
 }
 
+export function resolveRyzeRouting(input: {
+  direction: string;
+  source: string;
+  ownDigits: string;
+  senderDigits: string;
+  chatDigits: string;
+  recipientDigits: string;
+}): { from: string; outgoing: boolean } | null {
+  const { direction, source, ownDigits, senderDigits, chatDigits, recipientDigits } = input;
+  if (direction === "incoming") {
+    if (senderDigits && senderDigits !== ownDigits) return { from: senderDigits, outgoing: false };
+    if (chatDigits && chatDigits !== ownDigits) return { from: chatDigits, outgoing: false };
+    return null;
+  }
+  if (direction !== "outgoing" || source === "api") return null;
+  if (recipientDigits && recipientDigits !== ownDigits) return { from: recipientDigits, outgoing: true };
+  if (chatDigits && chatDigits !== ownDigits) return { from: chatDigits, outgoing: true };
+  if (senderDigits && senderDigits !== ownDigits) return { from: senderDigits, outgoing: true };
+  return null;
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
   const url = new URL(req.url);
@@ -74,23 +95,11 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
   const direction = String(data.direction ?? "");
   const source = String(message.source ?? "");
 
-  // A Ryze tem entregue alguns eventos do cliente como "outgoing" e, logo depois,
-  // um espelho "incoming" com o número da própria caixa. Aqui escolhemos o lado que
-  // representa o cliente e ignoramos o espelho/eco da própria instância.
-  let from = "";
-  if (direction === "incoming") {
-    if (senderDigits && senderDigits !== ownDigits) from = senderDigits;
-    else if (chatDigits && chatDigits !== ownDigits) from = chatDigits;
-    else return; // espelho da própria caixa
-  } else if (direction === "outgoing") {
-    if (source === "api") return; // saída iniciada pelo Chatwoot/API
-    if (senderDigits && senderDigits !== ownDigits) from = senderDigits;
-    else if (chatDigits && chatDigits !== ownDigits) from = chatDigits;
-    else if (recipientDigits && recipientDigits !== ownDigits) from = recipientDigits;
-    else return;
-  } else {
-    return;
-  }
+  // Saída pelo aparelho pertence ao destinatário e deve entrar como outgoing.
+  // Saída da API já existe no Chatwoot e é descartada para não duplicar.
+  const routing = resolveRyzeRouting({ direction, source, ownDigits, senderDigits, chatDigits, recipientDigits });
+  if (!routing) return;
+  const { from, outgoing } = routing;
 
   const content = (message.content as string) ?? "";
 
@@ -111,6 +120,7 @@ async function handleMessageExchange(db: ReturnType<typeof admin>, p: Json) {
     content,
     attachments,
     sentAt: data.timestamp as string | undefined,
+    outgoing,
     acct,
   });
 }

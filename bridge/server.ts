@@ -202,8 +202,10 @@ const version = {
     "social-webhook-safe-retry",
     "social-outgoing-failure-note",
     "social-comments-pagination",
+    "ryze-device-message-direction",
+    "social-comment-keyword-autoreply",
   ],
-  build: "2026-07-13-social-operational-hardening",
+  build: "2026-07-13-social-autoreply-ready",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

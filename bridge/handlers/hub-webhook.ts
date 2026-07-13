@@ -24,6 +24,7 @@ import {
   releaseDailyIntent,
 } from "../shared/intent-dedup.ts";
 import { parseSocialCommentChanges } from "../shared/social.ts";
+import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -1308,10 +1309,11 @@ async function handleMessenger(db: Db, p: Json) {
 
     const acct = await accountForChannel(channel.id as string);
     for (const comment of parseSocialCommentChanges(String(p.object ?? ""), entry, channel as Json)) {
-      await ingestInbound(db, channel as Json, {
+      const ingest = await ingestInbound(db, channel as Json, {
         from: comment.from, name: comment.name, metaMessageId: comment.commentId,
         msgType: "text", content: comment.content, sentAt: comment.sentAt, acct,
       });
+      if (ingest.inserted) await maybeAutoReplySocialComment(db, channel as Json, comment);
     }
 
     for (const m of ((entry.messaging ?? []) as Json[])) {

@@ -11,6 +11,7 @@ import { getMeta } from "../shared/hub.ts";
 import { ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { commentContactExternalId, withMetaCursor } from "../shared/social.ts";
+import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -125,6 +126,13 @@ async function syncFbComments(
       });
       if (ingest.inserted) res.inserted++;
       else if (ingest.reason === "duplicate") res.duplicates++;
+      if (ingest.inserted) {
+        await maybeAutoReplySocialComment(db, channel, {
+          from: commentContactExternalId("fb", uid, c.id as string),
+          commentId: c.id as string,
+          text: (c.message as string) ?? "",
+        });
+      }
     }
   }
   return res;
@@ -179,6 +187,13 @@ async function syncIgComments(
       });
       if (ingest.inserted) res.inserted++;
       else if (ingest.reason === "duplicate") res.duplicates++;
+      if (ingest.inserted) {
+        await maybeAutoReplySocialComment(db, channel, {
+          from: commentContactExternalId("ig", username || authorId, c.id as string),
+          commentId: c.id as string,
+          text: (c.text as string) ?? "",
+        });
+      }
     }
   }
   return res;

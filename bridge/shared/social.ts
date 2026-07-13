@@ -18,6 +18,7 @@ export type SocialCommentInbound = {
   name: string;
   commentId: string;
   content: string;
+  text: string;
   sentAt?: string;
 };
 
@@ -63,6 +64,7 @@ export function parseSocialCommentChanges(
         from: commentContactExternalId("fb", senderId, commentId),
         name: `💬 ${senderName}`,
         commentId,
+        text: String(value.message ?? ""),
         content: `💬 ${senderName} comentou:\n\n${
           String(value.message ?? "[sem texto]")
         }`,
@@ -84,6 +86,7 @@ export function parseSocialCommentChanges(
         from: commentContactExternalId("ig", identity, commentId),
         name: `💬 @${username || "anônimo"}`,
         commentId,
+        text: String(value.text ?? ""),
         content: `💬 @${username || "anônimo"} comentou:\n\n${
           String(value.text ?? "[sem texto]")
         }`,

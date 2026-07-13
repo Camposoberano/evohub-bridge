@@ -6,6 +6,10 @@ import {
   parseSocialCommentChanges,
   withMetaCursor,
 } from "../shared/social.ts";
+import {
+  matchSocialAutoReply,
+  normalizeSocialText,
+} from "../shared/social-autoreply.ts";
 
 Deno.test("comentário usa a rota correta para cada plataforma", () => {
   assertEquals(
@@ -57,6 +61,7 @@ Deno.test("converte comentários de Facebook e Instagram em entradas", () => {
   }, { page_id: "page-1" });
   assertEquals(fb[0]?.from, "cmt-fb-person-1-fb-comment");
   assertEquals(fb[0]?.commentId, "fb-comment");
+  assertEquals(fb[0]?.text, "Quero saber mais");
 
   const ig = parseSocialCommentChanges("instagram", {
     changes: [{
@@ -70,6 +75,47 @@ Deno.test("converte comentários de Facebook e Instagram em entradas", () => {
   }, { ig_id: "ig-1" });
   assertEquals(ig[0]?.from, "cmt-ig-cliente-ig-comment");
   assertEquals(ig[0]?.commentId, "ig-comment");
+  assertEquals(ig[0]?.text, "Preço?");
+});
+
+Deno.test("autorresposta social reconhece silagem e a variação cilagem", () => {
+  const config = {
+    rules: [{
+      id: "silagem",
+      enabled: true,
+      channels: ["facebook", "instagram"] as ("facebook" | "instagram")[],
+      keywords: ["silagem", "cilagem"],
+      reply: "Resposta configurada",
+    }],
+  };
+  assertEquals(normalizeSocialText("  SILÁGEM  "), "silagem");
+  assertEquals(
+    matchSocialAutoReply(config, "facebook", "fb-1", "Quero SILAGEM")?.id,
+    "silagem",
+  );
+  assertEquals(
+    matchSocialAutoReply(config, "instagram", "ig-1", "Preço da cilagem?")?.id,
+    "silagem",
+  );
+  assertEquals(
+    matchSocialAutoReply(config, "instagram", "ig-1", "Quero sementes"),
+    null,
+  );
+});
+
+Deno.test("autorresposta não dispara sem texto definitivo", () => {
+  const config = {
+    rules: [{
+      id: "silagem",
+      enabled: true,
+      keywords: ["silagem"],
+      reply: "",
+    }],
+  };
+  assertEquals(
+    matchSocialAutoReply(config, "facebook", "fb-1", "silagem"),
+    null,
+  );
 });
 
 Deno.test("leitura do Chatwoot tenta token admin quando agente não vê a inbox", async () => {
