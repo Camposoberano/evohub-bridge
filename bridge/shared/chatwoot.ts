@@ -289,6 +289,15 @@ export async function createIncomingMessage(
       body: JSON.stringify({ content }),
     },
   );
+  if (
+    (res.status === 401 || res.status === 403 || res.status === 404) &&
+    acct.adminToken
+  ) {
+    return await createConversationMessage(conversationId, {
+      content,
+      messageType: "incoming",
+    }, acct) as { id: number };
+  }
   if (!res.ok) {
     throw new Error(
       `Chatwoot createIncomingMessage ${res.status}: ${await res.text()}`,

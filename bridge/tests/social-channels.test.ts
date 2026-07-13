@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createConversationMessage,
+  createIncomingMessage,
   listConversationMessages,
 } from "../shared/chatwoot.ts";
 import { releaseDelivery } from "../shared/supabase.ts";
@@ -173,6 +174,31 @@ Deno.test("envio ao Chatwoot tenta token admin quando agente não vê a inbox", 
     });
     assertEquals(tokens, ["agent-token", "admin-token"]);
     assertEquals(message.id, 77);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("entrada usa API admin quando a rota pública antiga retorna 404", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = ((url: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    calls.push(`${String(url).includes("/public/") ? "public" : "app"}:${headers.get("api_access_token") ?? ""}`);
+    if (calls.length === 1) return Promise.resolve(new Response("not found", { status: 404 }));
+    if (calls.length === 2) return Promise.resolve(new Response("unauthorized", { status: 401 }));
+    return Promise.resolve(Response.json({ id: 88 }));
+  }) as typeof fetch;
+
+  try {
+    const message = await createIncomingMessage("inbox-id", "old-source", 416, "Resposta", {
+      url: "https://chatwoot.example",
+      accountId: "1",
+      token: "agent-token",
+      adminToken: "admin-token",
+    });
+    assertEquals(calls, ["public:", "app:agent-token", "app:admin-token"]);
+    assertEquals(message.id, 88);
   } finally {
     globalThis.fetch = originalFetch;
   }
