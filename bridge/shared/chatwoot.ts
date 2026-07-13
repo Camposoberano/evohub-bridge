@@ -309,31 +309,35 @@ export async function createConversationMessage(
 ): Promise<Record<string, unknown> & { id?: number }> {
   const attachments = input.attachments ?? [];
   const isPrivate = input.private === true;
+  const url = `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`;
 
   if (attachments.length > 0) {
-    const form = new FormData();
-    form.set("content", input.content);
-    form.set("message_type", input.messageType);
-    form.set("private", isPrivate ? "true" : "false");
-    form.set("content_type", "text");
-
-    for (const attachment of attachments) {
-      const blob = new Blob([arrayBufferFromBytes(attachment.bytes)], {
-        type: attachment.contentType,
-      });
-      form.append("attachments[]", blob, attachment.filename);
-    }
-
-    const res = await fetch(
-      `${
-        baseOf(acct)
-      }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`,
-      {
+    const makeForm = () => {
+      const form = new FormData();
+      form.set("content", input.content);
+      form.set("message_type", input.messageType);
+      form.set("private", isPrivate ? "true" : "false");
+      form.set("content_type", "text");
+      for (const attachment of attachments) {
+        const blob = new Blob([arrayBufferFromBytes(attachment.bytes)], {
+          type: attachment.contentType,
+        });
+        form.append("attachments[]", blob, attachment.filename);
+      }
+      return form;
+    };
+    let res = await fetch(url, {
+      method: "POST",
+      headers: appAuthHeaders(acct),
+      body: makeForm(),
+    });
+    if ((res.status === 401 || res.status === 403) && acct.adminToken) {
+      res = await fetch(url, {
         method: "POST",
-        headers: appAuthHeaders(acct),
-        body: form,
-      },
-    );
+        headers: { "api_access_token": acct.adminToken },
+        body: makeForm(),
+      });
+    }
     if (!res.ok) {
       throw new Error(
         `Chatwoot createConversationMessage ${res.status}: ${await res.text()}`,
@@ -342,22 +346,28 @@ export async function createConversationMessage(
     return await res.json();
   }
 
-  const res = await fetch(
-    `${
-      baseOf(acct)
-    }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`,
-    {
+  const body = JSON.stringify({
+    content: input.content,
+    message_type: input.messageType,
+    private: isPrivate,
+    content_type: "text",
+    content_attributes: {},
+  });
+  let res = await fetch(url, {
+    method: "POST",
+    headers: appHeaders(acct),
+    body,
+  });
+  if ((res.status === 401 || res.status === 403) && acct.adminToken) {
+    res = await fetch(url, {
       method: "POST",
-      headers: appHeaders(acct),
-      body: JSON.stringify({
-        content: input.content,
-        message_type: input.messageType,
-        private: isPrivate,
-        content_type: "text",
-        content_attributes: {},
-      }),
-    },
-  );
+      headers: {
+        "api_access_token": acct.adminToken,
+        "Content-Type": "application/json",
+      },
+      body,
+    });
+  }
   if (!res.ok) {
     throw new Error(
       `Chatwoot createConversationMessage ${res.status}: ${await res.text()}`,

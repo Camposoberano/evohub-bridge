@@ -206,8 +206,9 @@ const version = {
     "social-comment-keyword-autoreply",
     "latest-open-conversation-selection",
     "ryze-failed-ingest-retry",
+    "chatwoot-admin-send-fallback",
   ],
-  build: "2026-07-13-ryze-conversation-recovery",
+  build: "2026-07-13-chatwoot-send-recovery",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

@@ -1,5 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { listConversationMessages } from "../shared/chatwoot.ts";
+import {
+  createConversationMessage,
+  listConversationMessages,
+} from "../shared/chatwoot.ts";
 import { releaseDelivery } from "../shared/supabase.ts";
 import {
   commentReplyPath,
@@ -141,6 +144,35 @@ Deno.test("leitura do Chatwoot tenta token admin quando agente não vê a inbox"
     });
     assertEquals(tokens, ["agent-token", "admin-token"]);
     assertEquals(messages, [{ id: 10 }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("envio ao Chatwoot tenta token admin quando agente não vê a inbox", async () => {
+  const originalFetch = globalThis.fetch;
+  const tokens: string[] = [];
+  globalThis.fetch = ((_: RequestInfo | URL, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    tokens.push(headers.get("api_access_token") ?? "");
+    if (tokens.length === 1) {
+      return Promise.resolve(new Response('{"error":"unauthorized"}', { status: 401 }));
+    }
+    return Promise.resolve(Response.json({ id: 77 }));
+  }) as typeof fetch;
+
+  try {
+    const message = await createConversationMessage(416, {
+      content: "Boa tarde",
+      messageType: "outgoing",
+    }, {
+      url: "https://chatwoot.example",
+      accountId: "1",
+      token: "agent-token",
+      adminToken: "admin-token",
+    });
+    assertEquals(tokens, ["agent-token", "admin-token"]);
+    assertEquals(message.id, 77);
   } finally {
     globalThis.fetch = originalFetch;
   }
