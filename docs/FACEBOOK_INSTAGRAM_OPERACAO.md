@@ -27,7 +27,9 @@ Centralizar no Chatwoot:
 2. O bridge identifica o canal, cria ou reutiliza contato e conversa no Chatwoot e salva no Supabase.
 3. A resposta escrita no Chatwoot é enviada pela Graph API.
 4. Um pull de segurança roda a cada 30 segundos para mensagens e a cada 5 minutos para comentários.
-5. A deduplicação por ID da Meta impede que webhook e pull criem duas mensagens.
+5. Cada comentário usa uma conversa própria, evitando responder ao comentário errado quando
+   a mesma pessoa comenta mais de uma publicação.
+6. A deduplicação por ID da Meta impede que webhook e pull criem duas mensagens.
 
 Facebook responde comentário em `/{comment-id}/comments`. Instagram responde em
 `/{comment-id}/replies`. Comentários da própria página/conta são ignorados na entrada.

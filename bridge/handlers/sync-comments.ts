@@ -10,6 +10,7 @@ import { timingSafeEqual } from "../shared/hmac.ts";
 import { getMeta } from "../shared/hub.ts";
 import { ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { commentContactExternalId } from "../shared/social.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -107,7 +108,7 @@ async function syncFbComments(
       const uid = (from.id as string) ?? `anon-${String(post.id).slice(-8)}`;
       const name = (from.name as string) ?? "Comentário FB";
       const ingest = await ingestInbound(db, channel, {
-        from: `cmt-fb-${uid}`,
+        from: commentContactExternalId("fb", uid, c.id as string),
         name: `💬 ${name}`,
         metaMessageId: c.id as string,
         msgType: "text",
@@ -142,18 +143,20 @@ async function syncIgComments(
 
   for (const post of posts) {
     res.posts_scanned++;
-    const cr = await getMeta(token, `${post.id}/comments?fields=id,text,username,timestamp&limit=${opts.commentLimit}`);
+    const cr = await getMeta(token, `${post.id}/comments?fields=id,text,username,from{id,username},timestamp&limit=${opts.commentLimit}`);
     if (!cr.ok) throw new Error(`IG comments ${cr.status}: ${JSON.stringify(cr.data).slice(0, 200)}`);
     const comments = (((cr.data as Json).data ?? []) as Json[]);
 
     for (const c of comments) {
       const createdMs = Date.parse((c.timestamp as string) ?? "");
       if (!Number.isNaN(createdMs) && createdMs < opts.cutoffMs) continue;
-      const username = ((c.username as string) ?? "").trim();
+      const author = (c.from ?? {}) as Json;
+      const username = ((c.username as string) ?? (author.username as string) ?? "").trim();
+      const authorId = ((author.id as string) ?? "").trim();
       if (username && username.toLowerCase() === ownUsername) { res.skipped_own++; continue; }
       res.comments_found++;
       const ingest = await ingestInbound(db, channel, {
-        from: `cmt-ig-${username || "anon"}`,
+        from: commentContactExternalId("ig", username || authorId, c.id as string),
         name: `💬 @${username || "anônimo"}`,
         metaMessageId: c.id as string,
         msgType: "text",

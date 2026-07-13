@@ -30,7 +30,7 @@ Deno.test("converte comentários de Facebook e Instagram em entradas", () => {
       },
     }],
   }, { page_id: "page-1" });
-  assertEquals(fb[0]?.from, "cmt-fb-person-1");
+  assertEquals(fb[0]?.from, "cmt-fb-person-1-fb-comment");
   assertEquals(fb[0]?.commentId, "fb-comment");
 
   const ig = parseSocialCommentChanges("instagram", {
@@ -43,7 +43,7 @@ Deno.test("converte comentários de Facebook e Instagram em entradas", () => {
       },
     }],
   }, { ig_id: "ig-1" });
-  assertEquals(ig[0]?.from, "cmt-ig-cliente");
+  assertEquals(ig[0]?.from, "cmt-ig-cliente-ig-comment");
   assertEquals(ig[0]?.commentId, "ig-comment");
 });
 

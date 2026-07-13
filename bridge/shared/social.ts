@@ -21,6 +21,15 @@ export type SocialCommentInbound = {
   sentAt?: string;
 };
 
+export function commentContactExternalId(
+  platform: "fb" | "ig",
+  identity: string,
+  commentId: string,
+): string {
+  const safeIdentity = identity.trim() || "anon";
+  return `cmt-${platform}-${safeIdentity}-${commentId}`;
+}
+
 export function parseSocialCommentChanges(
   object: string,
   entry: Json,
@@ -45,7 +54,7 @@ export function parseSocialCommentChanges(
         value.sender_name ?? from.name ?? "Comentário FB",
       );
       out.push({
-        from: `cmt-fb-${senderId}`,
+        from: commentContactExternalId("fb", senderId, commentId),
         name: `💬 ${senderName}`,
         commentId,
         content: `💬 ${senderName} comentou:\n\n${
@@ -66,7 +75,7 @@ export function parseSocialCommentChanges(
       ) continue;
       const identity = username || senderId;
       out.push({
-        from: `cmt-ig-${identity}`,
+        from: commentContactExternalId("ig", identity, commentId),
         name: `💬 @${username || "anônimo"}`,
         commentId,
         content: `💬 @${username || "anônimo"} comentou:\n\n${
