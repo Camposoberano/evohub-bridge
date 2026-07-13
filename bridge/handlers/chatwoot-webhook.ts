@@ -62,9 +62,10 @@ export async function handle(req: Request): Promise<Response> {
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
   if (eventName === "message_created" && isOutgoing(p) && !p.private) {
-    handleOutgoing(db, p).catch((e) =>
-      console.error("chatwoot-webhook handleOutgoing erro:", e)
-    );
+    handleOutgoing(db, p).catch(async (e) => {
+      console.error("chatwoot-webhook handleOutgoing erro:", e);
+      await reportOutgoingException(db, p, e);
+    });
   }
   return new Response("ok", { status: 200 });
 }
@@ -101,28 +102,28 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   if (cwMsgId) {
-    // 1) Claim ATÔMICO: 2 webhooks do mesmo message_created (retry/concorrência) -> só 1 envia.
-    //    Evita o cliente receber a mensagem 2x (era a duplicação reportada).
-    const claimed = await claimDelivery(db, `cw-out-${cwMsgId}`, "chatwoot");
-    if (!claimed) {
-      console.log("cw msg já reivindicada — não reenvia", cwMsgId);
-      return;
-    }
-    // 2) Anti-loop echo: mensagem já no banco (echo do aparelho que injetamos) -> não reenviar.
+    // Falha anterior libera o claim antes de uma nova tentativa. Mensagem já entregue continua
+    // bloqueada, mantendo a proteção contra duplicação.
     const { data: dup } = await db.from("messages").select(
       "id,status,direction,meta_message_id",
     )
       .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-    if (dup && dup.status !== "failed") {
-      console.log("msg já ingerida (echo) — não reenvia", cwMsgId);
-      return;
-    }
     if (dup?.status === "failed") {
       retryingFailedMessage = dup as Json;
       await db.from("deliveries").delete().eq(
         "delivery_id",
         `cw-out-${cwMsgId}`,
       );
+    } else if (dup) {
+      console.log("msg já ingerida (echo) — não reenvia", cwMsgId);
+      return;
+    }
+
+    // Claim ATÔMICO: 2 webhooks do mesmo message_created (retry/concorrência) -> só 1 envia.
+    const claimed = await claimDelivery(db, `cw-out-${cwMsgId}`, "chatwoot");
+    if (!claimed) {
+      console.log("cw msg já reivindicada — não reenvia", cwMsgId);
+      return;
     }
 
     // 3) Segunda checagem DEFENSIVA depois de um delay: foi observado (sem causa raiz achada)
@@ -524,11 +525,52 @@ export async function handleOutgoing(db: Db, p: Json) {
     await db.from("messages").insert(messageRow);
   }
 
+  if (!res.ok) {
+    const acct = await accountForChannel(channel.id as string);
+    const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
+    const detail = JSON.stringify(redactSecrets(res.data as Json)).slice(0, 240);
+    await createConversationMessage(cwConversationId, {
+      content: `Falha ao publicar no canal (${res.status}). Tente novamente. ${detail}`,
+      messageType: "outgoing",
+      private: true,
+    }, noteAcct).catch((error) =>
+      console.error("chatwoot failure note erro:", error)
+    );
+    await db.from("events").insert({
+      source: "chatwoot",
+      event_type: "outgoing_failed",
+      payload: { chatwoot_message_id: cwMsgId, channel_id: channel.id, status: res.status },
+    });
+  }
+
   if (conv && !conv.first_response_at) {
     await db.from("conversations").update({
       first_response_at: new Date().toISOString(),
     }).eq("id", conv.id);
   }
+}
+
+async function reportOutgoingException(db: Db, p: Json, error: unknown) {
+  const cwMsgId = p.id as number | undefined;
+  const conversation = (p.conversation ?? {}) as Json;
+  const inbox = (p.inbox ?? {}) as Json;
+  const cwConversationId = (conversation.id ?? p.conversation_id) as number | undefined;
+  const cwInboxId = (inbox.id ?? p.inbox_id) as number | undefined;
+  if (cwMsgId) {
+    await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
+  }
+  if (!cwConversationId || !cwInboxId) return;
+  const { data: channel } = await db.from("channels").select("id")
+    .eq("chatwoot_inbox_id", cwInboxId).maybeSingle();
+  if (!channel?.id) return;
+  const acct = await accountForChannel(channel.id as string);
+  const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
+  const detail = (error instanceof Error ? error.message : String(error)).slice(0, 240);
+  await createConversationMessage(cwConversationId, {
+    content: `Falha interna ao enviar. O envio foi liberado para nova tentativa. ${detail}`,
+    messageType: "outgoing",
+    private: true,
+  }, noteAcct).catch(() => {});
 }
 
 // Mapeia file_type do Chatwoot pro tipo de attachment da Messenger Send API.

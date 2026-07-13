@@ -10,7 +10,7 @@ import { timingSafeEqual } from "../shared/hmac.ts";
 import { getMeta } from "../shared/hub.ts";
 import { ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { commentContactExternalId } from "../shared/social.ts";
+import { commentContactExternalId, withMetaCursor } from "../shared/social.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -23,6 +23,7 @@ export async function handle(req: Request): Promise<Response> {
   const sinceMinutes = intParam(url, "since_minutes", 1440, 1, 10_080);
   const postLimit = intParam(url, "post_limit", 10, 1, 25);
   const commentLimit = intParam(url, "comment_limit", 25, 1, 100);
+  const pageLimit = intParam(url, "page_limit", 3, 1, 5);
   const cutoffMs = Date.now() - sinceMinutes * 60_000;
 
   const db = admin();
@@ -38,8 +39,8 @@ export async function handle(req: Request): Promise<Response> {
     try {
       const acct = await accountForChannel(channel.id as string);
       const r = channel.type === "instagram"
-        ? await syncIgComments(db, channel as Json, { cutoffMs, postLimit, commentLimit }, acct)
-        : await syncFbComments(db, channel as Json, { cutoffMs, postLimit, commentLimit }, acct);
+        ? await syncIgComments(db, channel as Json, { cutoffMs, postLimit, commentLimit, pageLimit }, acct)
+        : await syncFbComments(db, channel as Json, { cutoffMs, postLimit, commentLimit, pageLimit }, acct);
       totals.posts_scanned += r.posts_scanned;
       totals.comments_found += r.comments_found;
       totals.inserted += r.inserted;
@@ -51,12 +52,12 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (totals.inserted > 0 || totals.errors.length > 0) {
-    db.from("events").insert({ source: "sync-comments", event_type: "sync_completed", payload: { ...totals, since_minutes: sinceMinutes } }).then(() => {}, () => {});
+    db.from("events").insert({ source: "sync-comments", event_type: "sync_completed", payload: { ...totals, since_minutes: sinceMinutes, page_limit: pageLimit } }).then(() => {}, () => {});
   }
   return json(totals);
 }
 
-type Opts = { cutoffMs: number; postLimit: number; commentLimit: number };
+type Opts = { cutoffMs: number; postLimit: number; commentLimit: number; pageLimit: number };
 type Res = { posts_scanned: number; comments_found: number; inserted: number; duplicates: number; skipped_own: number };
 
 async function channelToken(db: Db, channelId: string): Promise<string> {
@@ -83,9 +84,12 @@ async function syncFbComments(
   const token = await channelToken(db, channel.id as string);
   const res: Res = { posts_scanned: 0, comments_found: 0, inserted: 0, duplicates: 0, skipped_own: 0 };
 
-  const feed = await getMeta(token, `${pageId}/feed?fields=id,message,updated_time,permalink_url&limit=${opts.postLimit}`);
-  if (!feed.ok) throw new Error(`FB feed ${feed.status}: ${JSON.stringify(feed.data).slice(0, 200)}`);
-  const posts = (((feed.data as Json).data ?? []) as Json[]);
+  const posts = await getMetaCollection(
+    token,
+    `${pageId}/feed?fields=id,message,updated_time,permalink_url&limit=${opts.postLimit}`,
+    opts.pageLimit,
+    "FB feed",
+  );
 
   for (const post of posts) {
     const updatedMs = Date.parse((post.updated_time as string) ?? "");
@@ -93,9 +97,12 @@ async function syncFbComments(
     res.posts_scanned++;
 
     // filter=stream inclui respostas aninhadas; reverse pega os mais novos primeiro.
-    const cr = await getMeta(token, `${post.id}/comments?fields=id,message,from,created_time&filter=stream&order=reverse_chronological&limit=${opts.commentLimit}`);
-    if (!cr.ok) throw new Error(`FB comments ${cr.status}: ${JSON.stringify(cr.data).slice(0, 200)}`);
-    const comments = (((cr.data as Json).data ?? []) as Json[]);
+    const comments = await getMetaCollection(
+      token,
+      `${post.id}/comments?fields=id,message,from,created_time&filter=stream&order=reverse_chronological&limit=${opts.commentLimit}`,
+      opts.pageLimit,
+      "FB comments",
+    );
 
     for (const c of comments) {
       const createdMs = Date.parse((c.created_time as string) ?? "");
@@ -137,15 +144,21 @@ async function syncIgComments(
   const me = await getMeta(token, `${igId}?fields=username`);
   const ownUsername = ((me.data as Json)?.username as string | undefined)?.toLowerCase() ?? "";
 
-  const media = await getMeta(token, `${igId}/media?fields=id,caption,timestamp,permalink&limit=${opts.postLimit}`);
-  if (!media.ok) throw new Error(`IG media ${media.status}: ${JSON.stringify(media.data).slice(0, 200)}`);
-  const posts = (((media.data as Json).data ?? []) as Json[]);
+  const posts = await getMetaCollection(
+    token,
+    `${igId}/media?fields=id,caption,timestamp,permalink&limit=${opts.postLimit}`,
+    opts.pageLimit,
+    "IG media",
+  );
 
   for (const post of posts) {
     res.posts_scanned++;
-    const cr = await getMeta(token, `${post.id}/comments?fields=id,text,username,from{id,username},timestamp&limit=${opts.commentLimit}`);
-    if (!cr.ok) throw new Error(`IG comments ${cr.status}: ${JSON.stringify(cr.data).slice(0, 200)}`);
-    const comments = (((cr.data as Json).data ?? []) as Json[]);
+    const comments = await getMetaCollection(
+      token,
+      `${post.id}/comments?fields=id,text,username,from{id,username},timestamp&limit=${opts.commentLimit}`,
+      opts.pageLimit,
+      "IG comments",
+    );
 
     for (const c of comments) {
       const createdMs = Date.parse((c.timestamp as string) ?? "");
@@ -169,6 +182,30 @@ async function syncIgComments(
     }
   }
   return res;
+}
+
+async function getMetaCollection(
+  token: string,
+  initialPath: string,
+  maxPages: number,
+  label: string,
+): Promise<Json[]> {
+  const rows: Json[] = [];
+  let path = initialPath;
+  for (let page = 0; page < maxPages; page++) {
+    const response = await getMeta(token, path);
+    if (!response.ok) {
+      throw new Error(`${label} ${response.status}: ${JSON.stringify(response.data).slice(0, 200)}`);
+    }
+    const body = response.data as Json;
+    rows.push(...(((body.data ?? []) as Json[])));
+    const paging = (body.paging ?? {}) as Json;
+    const cursors = (paging.cursors ?? {}) as Json;
+    const after = cursors.after as string | undefined;
+    if (!paging.next || !after) break;
+    path = withMetaCursor(initialPath, after);
+  }
+  return rows;
 }
 
 function isAuthorized(req: Request, url: URL): boolean {

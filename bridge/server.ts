@@ -199,8 +199,11 @@ const version = {
     "facebook-instagram-comment-replies",
     "social-comments-realtime-webhook",
     "social-comment-isolated-conversation",
+    "social-webhook-safe-retry",
+    "social-outgoing-failure-note",
+    "social-comments-pagination",
   ],
-  build: "2026-07-13-social-comment-identity",
+  build: "2026-07-13-social-operational-hardening",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

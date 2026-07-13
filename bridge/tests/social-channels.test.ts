@@ -1,8 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
+import { releaseDelivery } from "../shared/supabase.ts";
 import {
   commentReplyPath,
   parseSocialCommentChanges,
+  withMetaCursor,
 } from "../shared/social.ts";
 
 Deno.test("comentário usa a rota correta para cada plataforma", () => {
@@ -14,6 +16,29 @@ Deno.test("comentário usa a rota correta para cada plataforma", () => {
     commentReplyPath("cmt-ig-user", "comment-2"),
     "comment-2/replies",
   );
+});
+
+Deno.test("paginação Meta preserva filtros e acrescenta cursor", () => {
+  assertEquals(
+    withMetaCursor("123/comments?fields=id,text&limit=25", "cursor+/="),
+    "123/comments?fields=id%2Ctext&limit=25&after=cursor%2B%2F%3D",
+  );
+});
+
+Deno.test("falha de webhook libera delivery para retry", async () => {
+  let released = "";
+  const db = {
+    from: () => ({
+      delete: () => ({
+        eq: (_column: string, value: string) => {
+          released = value;
+          return Promise.resolve({ error: null });
+        },
+      }),
+    }),
+  };
+  await releaseDelivery(db as never, "hub-delivery-1");
+  assertEquals(released, "hub-delivery-1");
 });
 
 Deno.test("converte comentários de Facebook e Instagram em entradas", () => {

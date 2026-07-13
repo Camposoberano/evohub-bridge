@@ -30,6 +30,12 @@ export function commentContactExternalId(
   return `cmt-${platform}-${safeIdentity}-${commentId}`;
 }
 
+export function withMetaCursor(path: string, after: string): string {
+  const url = new URL(path, "https://graph.invalid/");
+  url.searchParams.set("after", after);
+  return `${url.pathname.replace(/^\//, "")}${url.search}`;
+}
+
 export function parseSocialCommentChanges(
   object: string,
   entry: Json,

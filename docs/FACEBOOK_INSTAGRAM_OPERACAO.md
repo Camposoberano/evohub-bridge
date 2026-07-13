@@ -30,6 +30,9 @@ Centralizar no Chatwoot:
 5. Cada comentário usa uma conversa própria, evitando responder ao comentário errado quando
    a mesma pessoa comenta mais de uma publicação.
 6. A deduplicação por ID da Meta impede que webhook e pull criem duas mensagens.
+7. Falha no processamento libera a entrega e retorna erro para permitir retry do webhook.
+8. A varredura percorre páginas adicionais da Graph API; falhas de envio geram nota privada
+   no Chatwoot para o atendente não confundir tentativa com entrega confirmada.
 
 Facebook responde comentário em `/{comment-id}/comments`. Instagram responde em
 `/{comment-id}/replies`. Comentários da própria página/conta são ignorados na entrada.

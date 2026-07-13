@@ -4,7 +4,7 @@
 //
 // Fase 1: WhatsApp TEXTO ponta a ponta (Meta -> Chatwoot + Postgres).
 // FB/IG e mídia: evento é persistido; tradução fica para Fase 2/3 (TODO marcados).
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { getChannelDetail, getMeta, sendMeta } from "../shared/hub.ts";
@@ -75,7 +75,18 @@ export async function handle(req: Request): Promise<Response> {
     }
   } catch (e) {
     console.error("hub-webhook erro:", e);
-    return new Response("ok (logged error)", { status: 200 });
+    await releaseDelivery(db, deliveryId).catch((releaseError) =>
+      console.error("hub-webhook release delivery erro:", releaseError)
+    );
+    await db.from("events").insert({
+      source: "hub",
+      event_type: "processing_failed",
+      payload: {
+        delivery_id: deliveryId,
+        error: e instanceof Error ? e.message : String(e),
+      },
+    });
+    return new Response("processing failed", { status: 500 });
   }
 
   return new Response("ok", { status: 200 });

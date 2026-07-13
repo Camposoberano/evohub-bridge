@@ -33,3 +33,15 @@ export async function claimDelivery(
   }
   return true;
 }
+
+export async function releaseDelivery(
+  db: DbClient,
+  deliveryId: string | null,
+): Promise<void> {
+  if (!deliveryId) return;
+  const { error } = await db.from("deliveries").delete().eq(
+    "delivery_id",
+    deliveryId,
+  );
+  if (error) throw error;
+}
