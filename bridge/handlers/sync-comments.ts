@@ -9,6 +9,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { getMeta } from "../shared/hub.ts";
 import { ingestInbound } from "../shared/inbound.ts";
+import { accountForChannel } from "../shared/accounts.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -34,9 +35,10 @@ export async function handle(req: Request): Promise<Response> {
 
   for (const channel of channels) {
     try {
+      const acct = await accountForChannel(channel.id as string);
       const r = channel.type === "instagram"
-        ? await syncIgComments(db, channel as Json, { cutoffMs, postLimit, commentLimit })
-        : await syncFbComments(db, channel as Json, { cutoffMs, postLimit, commentLimit });
+        ? await syncIgComments(db, channel as Json, { cutoffMs, postLimit, commentLimit }, acct)
+        : await syncFbComments(db, channel as Json, { cutoffMs, postLimit, commentLimit }, acct);
       totals.posts_scanned += r.posts_scanned;
       totals.comments_found += r.comments_found;
       totals.inserted += r.inserted;
@@ -70,7 +72,12 @@ function postRef(text: string | undefined, link: string | undefined): string {
   return parts.length ? ` no post ${parts.join(" — ")}` : "";
 }
 
-async function syncFbComments(db: Db, channel: Json, opts: Opts): Promise<Res> {
+async function syncFbComments(
+  db: Db,
+  channel: Json,
+  opts: Opts,
+  acct: Awaited<ReturnType<typeof accountForChannel>>,
+): Promise<Res> {
   const pageId = channel.page_id as string;
   const token = await channelToken(db, channel.id as string);
   const res: Res = { posts_scanned: 0, comments_found: 0, inserted: 0, duplicates: 0, skipped_own: 0 };
@@ -106,6 +113,7 @@ async function syncFbComments(db: Db, channel: Json, opts: Opts): Promise<Res> {
         msgType: "text",
         content: `💬 ${name} comentou${postRef(post.message as string, post.permalink_url as string)}:\n\n${(c.message as string) || "[sem texto]"}`,
         sentAt: c.created_time as string,
+        acct,
       });
       if (ingest.inserted) res.inserted++;
       else if (ingest.reason === "duplicate") res.duplicates++;
@@ -114,7 +122,12 @@ async function syncFbComments(db: Db, channel: Json, opts: Opts): Promise<Res> {
   return res;
 }
 
-async function syncIgComments(db: Db, channel: Json, opts: Opts): Promise<Res> {
+async function syncIgComments(
+  db: Db,
+  channel: Json,
+  opts: Opts,
+  acct: Awaited<ReturnType<typeof accountForChannel>>,
+): Promise<Res> {
   const igId = channel.ig_id as string;
   const token = await channelToken(db, channel.id as string);
   const res: Res = { posts_scanned: 0, comments_found: 0, inserted: 0, duplicates: 0, skipped_own: 0 };
@@ -146,6 +159,7 @@ async function syncIgComments(db: Db, channel: Json, opts: Opts): Promise<Res> {
         msgType: "text",
         content: `💬 @${username || "anônimo"} comentou${postRef(post.caption as string, post.permalink as string)}:\n\n${(c.text as string) || "[sem texto]"}`,
         sentAt: c.timestamp as string,
+        acct,
       });
       if (ingest.inserted) res.inserted++;
       else if (ingest.reason === "duplicate") res.duplicates++;

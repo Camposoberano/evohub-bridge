@@ -21,6 +21,7 @@ import {
 } from "../shared/hybrid.ts";
 import type { SendResult } from "../shared/hybrid.ts";
 import { redactSecrets } from "../shared/redact.ts";
+import { commentReplyPath } from "../shared/social.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -428,7 +429,9 @@ export async function handleOutgoing(db: Db, p: Json) {
       );
       return;
     }
-    res = await sendMeta(token, `${commentId}/replies`, { message: content });
+    res = await sendMeta(token, commentReplyPath(to, commentId), {
+      message: content,
+    });
     msgType = "text";
   } else {
     // facebook / instagram (Messenger): texto e anexo são mensagens separadas (não há caption).

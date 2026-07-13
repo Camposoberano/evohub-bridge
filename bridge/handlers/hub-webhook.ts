@@ -23,6 +23,7 @@ import {
   type CommercialIntent,
   releaseDailyIntent,
 } from "../shared/intent-dedup.ts";
+import { parseSocialCommentChanges } from "../shared/social.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -1294,6 +1295,14 @@ async function handleMessenger(db: Db, p: Json) {
       continue;
     }
 
+    const acct = await accountForChannel(channel.id as string);
+    for (const comment of parseSocialCommentChanges(String(p.object ?? ""), entry, channel as Json)) {
+      await ingestInbound(db, channel as Json, {
+        from: comment.from, name: comment.name, metaMessageId: comment.commentId,
+        msgType: "text", content: comment.content, sentAt: comment.sentAt, acct,
+      });
+    }
+
     for (const m of ((entry.messaging ?? []) as Json[])) {
       const sender = (m.sender as Json)?.id as string | undefined;
       const message = m.message as Json | undefined;
@@ -1313,6 +1322,7 @@ async function handleMessenger(db: Db, p: Json) {
         metaMessageId: (message.mid as string) ?? "",
         msgType: "text",
         content: text,
+        acct,
       });
     }
   }

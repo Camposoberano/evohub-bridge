@@ -195,8 +195,11 @@ const version = {
     "funnel-pause-reason-audit",
     "funnel-final-business-hours-gate",
     "dashboard-queue-grouped-by-conversation",
+    "social-channel-auth-fallback",
+    "facebook-instagram-comment-replies",
+    "social-comments-realtime-webhook",
   ],
-  build: "2026-07-12-queue-business-gate",
+  build: "2026-07-13-social-channel-validation",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -229,8 +232,8 @@ function startSyncLoop() {
   }, SYNC_LOOP_INTERVAL_MS);
 }
 
-// Comentários de posts/anúncios (FB Pages + Instagram) — Meta não manda webhook de comentário
-// pelo Hub, então é pull (Graph) a cada 5min. Cada comentário vira conversa no Chatwoot
+// Comentários de posts/anúncios (FB Pages + Instagram) — fallback por pull (Graph) a cada
+// 5min para cobrir atraso ou ausência de entrega do webhook pelo Hub. Cada comentário vira conversa no Chatwoot
 // (contato cmt-fb-*/cmt-ig-*). Kill-switch: COMMENTS_SYNC_ENABLED=false.
 const COMMENTS_INTERVAL_MS = 5 * 60_000;
 function startCommentsLoop() {

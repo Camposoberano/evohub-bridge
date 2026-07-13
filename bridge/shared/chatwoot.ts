@@ -414,14 +414,21 @@ export async function listConversationMessages(
   conversationId: number,
   acct: CwAcct = envAcct(),
 ): Promise<Record<string, unknown>[]> {
-  const res = await fetch(
-    `${
-      baseOf(acct)
-    }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`,
-    {
-      headers: appHeaders(acct),
-    },
-  );
+  const url = `${
+    baseOf(acct)
+  }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`;
+  let res = await fetch(url, { headers: appHeaders(acct) });
+
+  // O token do agente pode não ser membro de todas as inboxes. O pull de segurança
+  // precisa enxergar a conversa mesmo assim; quando disponível, tenta o token admin.
+  if ((res.status === 401 || res.status === 403) && acct.adminToken) {
+    res = await fetch(url, {
+      headers: {
+        "api_access_token": acct.adminToken,
+        "Content-Type": "application/json",
+      },
+    });
+  }
   if (!res.ok) {
     throw new Error(
       `Chatwoot listConversationMessages ${res.status}: ${await res.text()}`,
