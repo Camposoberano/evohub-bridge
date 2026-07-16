@@ -1,6 +1,27 @@
 import { admin } from "../shared/supabase.ts";
+import { isDefaultAdMessage } from "../shared/ad-lead.ts";
 
 type Json = Record<string, unknown>;
+
+// Fingerprints do funil Campo Soberano — presença em msg outbound marca a conversa como campanha
+const FUNIL_FINGERPRINT = /mega sorgo|santa elisa|campo soberano|c[ií]cero sobreira/i;
+
+// Rejeição explícita, não qualquer "não" (número é pessoal + campanha; substring gerava falso-positivo)
+const NEGATIVA_RE =
+  /(n[ãa]o)\s+(quero|tenho\s+interesse|gostei|me\s+interessa)|\b(par[ae]\s+de|chega\s+de|spam|remover|me\s+tir[ae]|sair\s+da\s+lista|denunciar)\b/i;
+
+function isSystemJunk(content: string): boolean {
+  return content.includes("_WaSeller:_") ||
+    content.includes("Backup realizado pelo sistema");
+}
+
+function isPagamentoMsg(content: string): boolean {
+  return content.includes("mpago.la") ||
+    content.includes("camposoberano.shop") ||
+    content.includes("pag_pix") ||
+    content.includes("Preciso destes dados para envio") ||
+    (content.includes("CPF ou CNPJ") && content.includes("CEP"));
+}
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204 });
@@ -19,31 +40,63 @@ export async function handle(req: Request): Promise<Response> {
     .lt("sent_at", fimUTC)
     .order("sent_at", { ascending: true });
 
-  const { data: convs } = await db.from("conversations")
-    .select("id,contact_id,status,opened_at,chatwoot_conversation_id")
-    .gte("opened_at", inicioUTC)
-    .lt("opened_at", fimUTC);
-
-  const { data: contacts } = await db.from("contacts")
-    .select("id,name,external_contact_id,channel_id");
-
-  const contactMap = new Map<string, Json>();
-  for (const c of (contacts ?? [])) contactMap.set(c.id as string, c as Json);
-
-  const convMap = new Map<string, Json>();
-  for (const c of (convs ?? [])) convMap.set(c.id as string, c as Json);
-
+  // Agrupa por conversa, descartando lixo de sistema e duplicatas do ingest
   const porConv = new Map<string, Json[]>();
   for (const m of (msgs ?? [])) {
     const cid = m.conversation_id as string;
     if (!cid) continue;
+    const content = (m.content as string) || "";
+    if (isSystemJunk(content)) continue;
     if (!porConv.has(cid)) porConv.set(cid, []);
-    porConv.get(cid)!.push(m as Json);
+    const lista = porConv.get(cid)!;
+    if (content.trim()) {
+      const ts = new Date((m.sent_at as string) || 0).getTime();
+      const dup = lista.some((k) =>
+        k.direction === m.direction && k.msg_type === m.msg_type &&
+        ((k.content as string) || "") === content &&
+        Math.abs(ts - new Date((k.sent_at as string) || 0).getTime()) <=
+          120_000
+      );
+      if (dup) continue;
+    }
+    lista.push(m as Json);
   }
+
+  const convIds = [...porConv.keys()];
+
+  // Busca as conversas das mensagens do dia (não só as abertas no dia — senão contato vira "Desconhecido")
+  const { data: convRows } = convIds.length
+    ? await db.from("conversations")
+      .select("id,contact_id,status,opened_at,chatwoot_conversation_id,channel_id,origem")
+      .in("id", convIds)
+    : { data: [] as Json[] };
+
+  // sales_sequences = registro real de enrolamento no funil
+  const { data: seqRows } = convIds.length
+    ? await db.from("sales_sequences").select("conversation_id")
+      .in("conversation_id", convIds)
+    : { data: [] as Json[] };
+  const enrolledSet = new Set(
+    (seqRows ?? []).map((s: Json) => String(s.conversation_id)),
+  );
+
+  const convMap = new Map<string, Json>();
+  for (const c of (convRows ?? [])) convMap.set(c.id as string, c as Json);
+
+  const contactIds = (convRows ?? []).map((c: Json) => c.contact_id as string)
+    .filter(Boolean);
+  const { data: contacts } = contactIds.length
+    ? await db.from("contacts").select("id,name,external_contact_id")
+      .in("id", contactIds)
+    : { data: [] as Json[] };
+
+  const contactMap = new Map<string, Json>();
+  for (const c of (contacts ?? [])) contactMap.set(c.id as string, c as Json);
 
   let totalIn = 0, totalOut = 0, totalFailed = 0;
   let intentPreco = 0, intentVideo = 0, intentPlantio = 0, intentNutricao = 0;
   let funilEnroll = 0, funilPedidoPreco = 0, funilPagamento = 0;
+  let novasConvs = 0, foraDeCampanha = 0;
   const semResposta: { conv: string; contato: string; msg: string; ts: string }[] = [];
   const msgsIgnoradas: { conv: string; contato: string; msg: string; ts: string }[] = [];
   const reacoesNegativas: { conv: string; contato: string; msg: string; contexto: string }[] = [];
@@ -60,46 +113,51 @@ export async function handle(req: Request): Promise<Response> {
     const tel = (contact?.external_contact_id as string) || "?";
     const cwId = (conv?.chatwoot_conversation_id as number) ?? null;
 
-    let convIn = 0, convOut = 0;
+    let convIn = 0, convOut = 0, convFailed = 0;
     let teveFunil = false, tevePreco = false, tevePagamento = false;
     let teveVideo = false, tevePlantio = false, teveNutricao = false;
+    let teveAdLead = false, teveFingerprint = false;
     const resumoLinhas: string[] = [];
-    const etapas: string[] = [];
+    const etapasSet = new Set<string>();
     let ultimoBot = "";
+    const localIgnoradas: typeof msgsIgnoradas = [];
+    const localNegativas: typeof reacoesNegativas = [];
+    const localPerguntas: string[] = [];
 
     for (let i = 0; i < mensagens.length; i++) {
       const m = mensagens[i];
       const dir = m.direction as string;
       const content = (m.content as string) || "";
 
-      if (dir === "in") { totalIn++; convIn++; }
-      else if (dir === "out") { totalOut++; convOut++; }
-      if (m.status === "failed") totalFailed++;
+      if (dir === "in") convIn++;
+      else if (dir === "out") convOut++;
+      if (m.status === "failed") convFailed++;
 
       if (dir === "out") {
         ultimoBot = content;
-        if (content.includes("Preparei 5 vídeos") || content.includes("Separei 5 vídeos")) { intentVideo++; teveVideo = true; etapas.push("video"); }
-        if (content.includes("Lista de temas de plantio")) { intentPlantio++; tevePlantio = true; etapas.push("plantio"); }
-        if (content.includes("Lista de info nutricional") || content.includes("Análise Bromatológica")) { intentNutricao++; teveNutricao = true; etapas.push("nutricao"); }
-        if (content.includes("imagem preco_") || content.includes("Tabela de preços")) { intentPreco++; tevePreco = true; etapas.push("preco"); }
-        if (content.includes("Cícero Sobreira") || content.includes("Campo Soberano")) { teveFunil = true; funilEnroll++; etapas.push("funil"); }
-        if (content.includes("pag_pix") || content.includes("PIX") || content.includes("Boleto")) { tevePagamento = true; funilPagamento++; etapas.push("pagamento"); }
+        if (FUNIL_FINGERPRINT.test(content)) teveFingerprint = true;
+        if (content.includes("Preparei 5 vídeos") || content.includes("Separei 5 vídeos")) { teveVideo = true; etapasSet.add("video"); }
+        if (content.includes("Lista de temas de plantio")) { tevePlantio = true; etapasSet.add("plantio"); }
+        if (content.includes("Lista de info nutricional") || content.includes("Análise Bromatológica")) { teveNutricao = true; etapasSet.add("nutricao"); }
+        if (content.includes("imagem preco_") || content.includes("Tabela de preços")) { tevePreco = true; etapasSet.add("preco"); }
+        if (content.includes("Cícero Sobreira") || content.includes("Campo Soberano")) { teveFunil = true; etapasSet.add("funil"); }
+        if (isPagamentoMsg(content)) { tevePagamento = true; etapasSet.add("pagamento"); }
       }
 
       if (dir === "in" && content.trim()) {
+        if (isDefaultAdMessage(content)) teveAdLead = true;
+
         const nextOut = mensagens.slice(i + 1).find(x => (x.direction as string) === "out");
         if (!nextOut && convOut > 0) {
-          msgsIgnoradas.push({ conv: convId.slice(0, 8), contato: nome, msg: content.slice(0, 100), ts: ((m.sent_at as string) || "").slice(11, 16) });
+          localIgnoradas.push({ conv: convId.slice(0, 8), contato: nome, msg: content.slice(0, 100), ts: ((m.sent_at as string) || "").slice(11, 16) });
         }
 
-        const lower = content.toLowerCase();
-        if (lower.includes("não") || lower.includes("nao") || lower.includes("parar") || lower.includes("chega") || lower.includes("spam")) {
-          reacoesNegativas.push({ conv: convId.slice(0, 8), contato: nome, msg: content.slice(0, 100), contexto: ultimoBot.slice(0, 80) });
+        if (NEGATIVA_RE.test(content)) {
+          localNegativas.push({ conv: convId.slice(0, 8), contato: nome, msg: content.slice(0, 100), contexto: ultimoBot.slice(0, 80) });
         }
 
         if (convOut === 0 && content.length > 2 && !content.startsWith("[")) {
-          const key = content.toLowerCase().trim().slice(0, 50);
-          perguntasMap.set(key, (perguntasMap.get(key) || 0) + 1);
+          localPerguntas.push(content.toLowerCase().trim().slice(0, 50));
         }
       }
 
@@ -111,7 +169,36 @@ export async function handle(req: Request): Promise<Response> {
       resumoLinhas.push(`${hora} ${emoji} [${tipo}]${statusIcon} ${texto}`);
     }
 
-    if (tevePreco) funilPedidoPreco++;
+    // Campanha vs fora-de-campanha: o número é pessoal + disparo, então conversa
+    // sem nenhum sinal de funil/anúncio é pessoal (ou de outro sistema) e fica fora
+    // de todas as métricas e da listagem (relatório é HTTP público).
+    const isCampanha = enrolledSet.has(convId) ||
+      conv?.origem === "anuncio" || teveAdLead || teveFingerprint ||
+      tevePagamento;
+    if (!isCampanha) {
+      foraDeCampanha++;
+      continue;
+    }
+
+    totalIn += convIn;
+    totalOut += convOut;
+    totalFailed += convFailed;
+    const openedAt = (conv?.opened_at as string) || "";
+    if (openedAt >= inicioUTC && openedAt < fimUTC) novasConvs++;
+
+    // Funil e intents contam uma vez por conversa, não por mensagem
+    if (teveFunil || enrolledSet.has(convId)) funilEnroll++;
+    if (tevePreco) { funilPedidoPreco++; intentPreco++; }
+    if (teveVideo) intentVideo++;
+    if (tevePlantio) intentPlantio++;
+    if (teveNutricao) intentNutricao++;
+    if (tevePagamento) funilPagamento++;
+
+    msgsIgnoradas.push(...localIgnoradas);
+    reacoesNegativas.push(...localNegativas);
+    for (const key of localPerguntas) {
+      perguntasMap.set(key, (perguntasMap.get(key) || 0) + 1);
+    }
 
     let lastIn: Json | null = null;
     for (const m of mensagens) {
@@ -134,7 +221,7 @@ export async function handle(req: Request): Promise<Response> {
 
     conversas.push({
       convId: convId.slice(0, 8), cwId, contato: nome, telefone: tel.slice(-4),
-      msgs: mensagens, resumo: resumoLinhas.join("\n"), etapas,
+      msgs: mensagens, resumo: resumoLinhas.join("\n"), etapas: [...etapasSet],
       status: statusConv, totalIn: convIn, totalOut: convOut,
     });
   }
@@ -154,8 +241,8 @@ export async function handle(req: Request): Promise<Response> {
   });
 
   const html = renderHTML(hoje, {
-    totalConvs: porConv.size,
-    novasConvs: convs?.length ?? 0,
+    totalConvs: conversas.length,
+    novasConvs, foraDeCampanha,
     totalIn, totalOut, totalFailed,
     intentPreco, intentVideo, intentPlantio, intentNutricao,
     funilEnroll, funilPedidoPreco, funilPagamento,
@@ -282,7 +369,8 @@ function gerarRecomendacoes(d: {
 }
 
 interface ReportData {
-  totalConvs: number; novasConvs: number; totalIn: number; totalOut: number; totalFailed: number;
+  totalConvs: number; novasConvs: number; foraDeCampanha: number;
+  totalIn: number; totalOut: number; totalFailed: number;
   intentPreco: number; intentVideo: number; intentPlantio: number; intentNutricao: number;
   funilEnroll: number; funilPedidoPreco: number; funilPagamento: number;
   semResposta: { conv: string; contato: string; msg: string; ts: string }[];
@@ -310,7 +398,7 @@ function renderHTML(data: string, r: ReportData): string {
     <div class="funil">
       <div class="funil-step"><div class="funil-num">${r.funilEnroll}</div><div class="funil-label">Entraram no funil</div></div>
       <div class="funil-arrow">→</div>
-      <div class="funil-step"><div class="funil-num">${r.intentPreco}</div><div class="funil-label">Pediram preço</div></div>
+      <div class="funil-step"><div class="funil-num">${r.funilPedidoPreco}</div><div class="funil-label">Pediram preço</div></div>
       <div class="funil-arrow">→</div>
       <div class="funil-step"><div class="funil-num">${r.funilPagamento}</div><div class="funil-label">Pagamento</div></div>
     </div>
@@ -445,6 +533,7 @@ function renderHTML(data: string, r: ReportData): string {
 <div class="section">
   <h2>💬 Conversas (${r.conversas.length})</h2>
   ${convsHTML}
+  ${r.foraDeCampanha > 0 ? `<p style="color:#999;font-size:.8rem;margin-top:10px">🔒 ${r.foraDeCampanha} conversa(s) fora de campanha ignoradas (pessoais/outros sistemas)</p>` : ""}
 </div>
 
 <textarea id="export-area"></textarea>
@@ -460,7 +549,7 @@ function exportar() {
   document.querySelectorAll('.card').forEach(c => {
     txt += "  " + c.querySelector('.num').textContent + " " + c.querySelector('.label').textContent + "\\n";
   });
-  txt += "\\nFUNIL: Entraram: ${r.funilEnroll} → Preço: ${r.intentPreco} → Pagamento: ${r.funilPagamento}\\n";
+  txt += "\\nFUNIL: Entraram: ${r.funilEnroll} → Preço: ${r.funilPedidoPreco} → Pagamento: ${r.funilPagamento}\\n";
   txt += "\\nSTATUS: Converteu: ${countByStatus.converteu} | Engajou: ${countByStatus.engajou} | Sem interação: ${countByStatus.ignorou} | Perdeu: ${countByStatus.perdeu}\\n";
   txt += "\\nRECOMENDAÇÕES:\\n";
   recs.forEach(r => {
