@@ -215,8 +215,10 @@ const version = {
     "funnel-silence-followup",
     "funnel-auto-resume-after-intent",
     "funnel-completion-reconciliation",
+    "funnel-48h-business-cadence",
+    "funnel-business-clock-pause",
   ],
-  build: "2026-07-18-funnel-recovery",
+  build: "2026-07-18-funnel-48h-cadence",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -698,7 +700,9 @@ function startFunnelRecoveryLoop() {
   };
   setTimeout(run, 60_000);
   setInterval(run, 5 * 60_000);
-  console.log("funnel-recovery loop ON (5min, follow-up + auto-resume)");
+  console.log(
+    "funnel-recovery loop ON (5min, follow-up 10h úteis + auto-resume)",
+  );
 }
 
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {

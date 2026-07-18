@@ -1,11 +1,12 @@
 import type { DbClient } from "./supabase.ts";
+import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
 
 type Json = Record<string, unknown>;
 
 const AUTO_RESUME_AFTER_MS = 90 * 60_000;
-const MAX_CONTACT_AGE_MS = 20 * 60 * 60_000;
+const MAX_CONTACT_AGE_MS = 72 * 60 * 60_000;
 const MAX_AUTO_RESUME_INBOUND_AGE_MS = 6 * 60 * 60_000;
-const FOLLOW_UP_AFTER_MS = 2 * 60 * 60_000;
+const FOLLOW_UP_AFTER_SECONDS = 10 * 60 * 60;
 const FOLLOW_UP_FUNNEL = "mega-sorgo-followup";
 
 export type FunnelMaintenanceResult = {
@@ -39,6 +40,13 @@ export function canAutoResume(input: {
     input.now - input.pauseAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastActivityAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastInboundAt <= MAX_AUTO_RESUME_INBOUND_AGE_MS;
+}
+
+export function silentFollowupAt(lastSentAt: number, now: number): number {
+  return clampBusinessTime(Math.max(
+    now + 60_000,
+    addBusinessSeconds(lastSentAt, FOLLOW_UP_AFTER_SECONDS),
+  ));
 }
 
 export async function maintainFunnels(
@@ -199,7 +207,7 @@ async function scheduleSilentFollowup(
     .maybeSingle();
   if (existing) return false;
 
-  const desiredAt = Math.max(now + 60_000, lastSentAt + FOLLOW_UP_AFTER_MS);
+  const desiredAt = silentFollowupAt(lastSentAt, now);
   const latestSafeAt = activity.lastInboundAt + MAX_CONTACT_AGE_MS;
   if (desiredAt > latestSafeAt) return false;
   const { error } = await db.from("scheduled_messages").insert({

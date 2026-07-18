@@ -7,36 +7,25 @@ import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { foldText, isDefaultAdMessage } from "../shared/ad-lead.ts";
+import {
+  addBusinessSeconds,
+  clampBusinessTime,
+} from "../shared/business-time.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
-// ESTRATÉGIA JANELA: número oficial tem janela de 24h (conta da última msg do cliente). Se
-// esperar resposta em dias, perde a janela e o lead. Então TODO o conteúdo vai num dia só.
-// 5 acessos; o intervalo conta a partir do ÚLTIMO disparo do acesso anterior (vídeo/lista, ~+10min):
-// +30min, +2h, +4h, +8h. Cada disparo respeita HORÁRIO COMERCIAL 6h-22h (BRT): o que cairia de
-// madrugada para e retoma às 6h, contando dali. Tudo fica abaixo de 24h (cabe na janela).
-const GAPS = [0, 1_800, 7_200, 14_400, 28_800]; // gap antes de cada acesso (s): -, 30min, 2h, 4h, 8h
+// Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
+// da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
+// A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
+const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): fases fluem em sequência (~70s entre fases, sem horário comercial),
-// pra revisar o funil todo em ~30min sem clicar. Produção usa GAPS (30min-8h) pra caber na janela 24h.
+// pra revisar o funil todo em ~30min sem clicar. Produção usa a jornada comercial de até 48h.
 const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
 const FIM_ACESSO = 520; // último disparo do acesso (lista de fechamento) = +8min40
 const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
-
-// Empurra um horário pro próximo 6h se ele (ou o acesso inteiro de `durSec`) cair fora de 6h-22h BRT.
-function clampBiz(ms: number, durSec = 0): number {
-  const brt = new Date(ms - TZ_OFFSET);
-  const startMin = brt.getUTCHours() * 60 + brt.getUTCMinutes();
-  const endMin = startMin + durSec / 60;
-  const OPEN = 6 * 60, CLOSE = 22 * 60;
-  if (startMin >= OPEN && endMin <= CLOSE) return ms;
-  const t = new Date(brt);
-  if (startMin >= CLOSE || endMin > CLOSE) t.setUTCDate(t.getUTCDate() + 1); // noite -> 6h do dia seguinte
-  t.setUTCHours(6, 0, 0, 0); // madrugada -> 6h do mesmo dia
-  return t.getTime() + TZ_OFFSET;
-}
 
 type Botao = { id: string; title: string };
 type Peca =
@@ -265,14 +254,20 @@ export function iniciosDosAcessos(
   agora: number,
   gaps: number[],
   skipClamp: boolean,
+  immediateFirst = false,
 ): number[] {
-  const clamp = (ms: number) => skipClamp ? ms : clampBiz(ms, FIM_ACESSO);
+  const clamp = (ms: number) =>
+    skipClamp ? ms : clampBusinessTime(ms, FIM_ACESSO);
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
     // Automático respeita 6h-22h desde a primeira peça. Manual/fast passa skipClamp=true
     // e continua imediato, inclusive fora do horário comercial.
-    const ini = i === 0 ? clamp(agora) : clamp(fimAnterior + gaps[i] * 1000);
+    const ini = i === 0
+      ? immediateFirst ? agora : clamp(agora)
+      : skipClamp
+      ? fimAnterior + gaps[i] * 1000
+      : addBusinessSeconds(fimAnterior, gaps[i], FIM_ACESSO);
     inicios.push(ini);
     fimAnterior = ini + FIM_ACESSO * 1000;
   }
@@ -343,7 +338,9 @@ export async function handle(req: Request): Promise<Response> {
   const turboGaps = [0, 0, 0, 0, 0];
   const inicios = turbo
     ? iniciosDosAcessos(agora, turboGaps, true)
-    : iniciosDosAcessos(agora, fast ? GAPS_FAST : GAPS, fast || manual);
+    : fast
+    ? iniciosDosAcessos(agora, GAPS_FAST, true)
+    : iniciosDosAcessos(agora, GAPS, false, manual);
   const rows: Json[] = [];
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;

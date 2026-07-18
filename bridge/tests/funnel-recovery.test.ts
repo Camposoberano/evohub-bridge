@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canAutoResume,
   rebasePausedSchedule,
+  silentFollowupAt,
 } from "../shared/funnel-recovery.ts";
 
 Deno.test("retomada preserva os intervalos restantes", () => {
@@ -16,6 +17,15 @@ Deno.test("retomada preserva os intervalos restantes", () => {
       "2026-07-18T15:02:00.000Z",
       "2026-07-18T16:00:00.000Z",
     ],
+  );
+});
+
+Deno.test("follow-up final conta dez horas úteis e pausa durante a noite", () => {
+  const lastSentAt = Date.parse("2026-07-12T00:00:00.000Z"); // 21h BRT
+  const now = lastSentAt;
+  assertEquals(
+    silentFollowupAt(lastSentAt, now),
+    Date.parse("2026-07-12T18:00:00.000Z"), // 15h BRT do dia seguinte
   );
 });
 
