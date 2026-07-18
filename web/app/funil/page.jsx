@@ -11,6 +11,7 @@ const STATUS = {
   paused: ["badge-amber", "Pausado"],
   cancelled: ["badge-gray", "Parado"],
   replied: ["badge-gray", "Respondido"],
+  completed: ["badge-green", "Concluído"],
   pending: ["badge-amber", "Pendente"],
   sent: ["badge-green", "Enviado"],
   failed: ["badge-red", "Falhou"],
@@ -110,6 +111,7 @@ export default function FunilPage() {
       sent: serverSummary.sent ?? queue.filter((item) => item.status === "sent").length,
       won: serverSummary.won ?? 0,
       lost: serverSummary.lost ?? 0,
+      completed: serverSummary.completed ?? sequences.filter((item) => item.status === "completed").length,
       wonValue: serverSummary.won_value_cents ?? 0,
       conversion: serverSummary.conversion_rate,
     };
@@ -157,6 +159,7 @@ export default function FunilPage() {
         <div className="stat-grid" style={{ marginBottom: 18 }}>
           <div className="stat-card"><div className="stat-label">Funis rodando</div><div className="stat-value">{summary.running}</div><div className="stat-sub">sequências ativas</div></div>
           <div className="stat-card"><div className="stat-label">Funis pausados</div><div className="stat-value">{summary.paused}</div><div className="stat-sub">aguardando retomada</div></div>
+          <div className="stat-card"><div className="stat-label">Concluídos</div><div className="stat-value">{summary.completed}</div><div className="stat-sub">roteiro entregue</div></div>
           <div className="stat-card"><div className="stat-label">Na fila</div><div className="stat-value">{summary.pending}</div><div className="stat-sub">mensagens pendentes</div></div>
           <div className="stat-card"><div className="stat-label">Falhas</div><div className="stat-value">{summary.failed}</div><div className="stat-sub">exigem diagnóstico</div></div>
           <div className="stat-card"><div className="stat-label">Conversões</div><div className="stat-value">{summary.won}</div><div className="stat-sub">{summary.conversion == null ? "sem base decidida" : `${summary.conversion}% de conversão`}</div></div>
@@ -166,7 +169,7 @@ export default function FunilPage() {
         <div className="card" style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
             <div><div style={{ fontSize: 17, fontWeight: 700 }}>Sequências por conversa</div><div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 3 }}>Cada conversa deve ter no máximo um funil ativo.</div></div>
-            <select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="todos">Todos os status</option><option value="running">Rodando</option><option value="paused">Pausados</option><option value="cancelled">Parados</option><option value="replied">Respondidos</option></select>
+            <select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="todos">Todos os status</option><option value="running">Rodando</option><option value="paused">Pausados</option><option value="completed">Concluídos</option><option value="cancelled">Parados</option><option value="replied">Respondidos</option></select>
           </div>
           <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Funil</th><th>Cliente</th><th>Conversa</th><th>Status</th><th>Ações</th></tr></thead><tbody>
             {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); const pauseReason = item.pause_event?.payload?.reason; return <tr key={item.id}><td>{item.funnel || "—"}</td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span>{item.status === "paused" && pauseReason && <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 4 }}>Motivo: {pauseReason}</div>}</td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}

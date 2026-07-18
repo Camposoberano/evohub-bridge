@@ -213,6 +213,9 @@ export async function handle(req: Request): Promise<Response> {
       sent: messages.filter((item: Json) => item.status === "sent").length,
       won: won.length,
       lost: lost.length,
+      completed: sequences.filter((item: Json) =>
+        item.status === "completed"
+      ).length,
       won_value_cents: won.reduce((total: number, item: Json) =>
         total + Number(item.outcome_value_cents ?? 0), 0),
       conversion_rate: won.length + lost.length

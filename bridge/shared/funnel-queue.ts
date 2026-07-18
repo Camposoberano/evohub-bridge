@@ -55,7 +55,7 @@ export async function pumpFunnelQueue(limit = 10): Promise<{ found: number; sent
     await normalizeBusinessQueue(db);
     const now = new Date().toISOString();
     const { data, error } = await db.from("scheduled_messages")
-      .select("id,chatwoot_conversation_id,type,payload,send_at")
+      .select("id,conversation_id,chatwoot_conversation_id,funnel,day,type,payload,send_at")
       .eq("status", "pending")
       .lte("send_at", now)
       .order("send_at", { ascending: true })
@@ -82,7 +82,14 @@ export async function pumpFunnelQueue(limit = 10): Promise<{ found: number; sent
       }));
       const body = await res.json().catch(() => ({} as Json));
       if (res.ok && body.ok !== false && !body.blocked) {
-        await db.from("scheduled_messages").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", id);
+        const sentAt = new Date().toISOString();
+        await db.from("scheduled_messages").update({ status: "sent", sent_at: sentAt }).eq("id", id);
+        await db.from("sales_sequences").update({
+          current_day: Number(row.day ?? 0),
+          last_sent_at: sentAt,
+        }).eq("conversation_id", row.conversation_id)
+          .eq("funnel", row.funnel ?? "mega-sorgo")
+          .in("status", ["running", "paused"]);
         sent++;
       } else {
         await db.from("scheduled_messages").update({ status: "failed" }).eq("id", id);

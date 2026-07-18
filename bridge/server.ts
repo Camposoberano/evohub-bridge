@@ -54,6 +54,7 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
+import { maintainFunnels } from "./shared/funnel-recovery.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -211,8 +212,11 @@ const version = {
     "ryze-private-media-relay",
     "meta-window-terminal-failure",
     "chatwoot-out-5s-single-flight",
+    "funnel-silence-followup",
+    "funnel-auto-resume-after-intent",
+    "funnel-completion-reconciliation",
   ],
-  build: "2026-07-18-channel-delivery-recovery",
+  build: "2026-07-18-funnel-recovery",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -678,8 +682,15 @@ function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
       const result = await recoverEligibleFunnels(admin(), 48);
-      if (result.eligible || result.enrolled) {
-        console.log("funnel-recovery:", JSON.stringify(result));
+      const maintenance = await maintainFunnels(admin());
+      if (
+        result.eligible || result.enrolled || maintenance.completed ||
+        maintenance.resumed || maintenance.followups
+      ) {
+        console.log(
+          "funnel-recovery:",
+          JSON.stringify({ eligible: result, maintenance }),
+        );
       }
     } catch (e) {
       console.error("funnel-recovery erro:", e);
@@ -687,7 +698,7 @@ function startFunnelRecoveryLoop() {
   };
   setTimeout(run, 60_000);
   setInterval(run, 5 * 60_000);
-  console.log("funnel-recovery loop ON (5min, 48h)");
+  console.log("funnel-recovery loop ON (5min, follow-up + auto-resume)");
 }
 
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
