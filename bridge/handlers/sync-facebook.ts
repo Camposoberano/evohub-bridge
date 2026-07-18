@@ -3,6 +3,7 @@
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
+import { metaDeliveryStatus } from "../shared/meta-errors.ts";
 import { getMeta, sendMeta } from "../shared/hub.ts";
 import { ingestInbound, type InboundAttachment, repairInboundMedia } from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
@@ -287,7 +288,9 @@ async function syncOutgoing(
         .limit(1);
       if (existingError) throw existingError;
       const existing = existingMessages?.[0];
-      if (existing?.status === "sent") {
+      // O webhook é o caminho primário e controla retries. O pull não deve martelar
+      // automaticamente uma falha já registrada (principalmente janela Meta encerrada).
+      if (existing) {
         result.outgoing_duplicates++;
         continue;
       }
@@ -301,7 +304,7 @@ async function syncOutgoing(
         content,
         meta_message_id: sent.metaId,
         chatwoot_message_id: cwMessageId,
-        status: sent.ok ? "sent" : "failed",
+        status: sent.ok ? "sent" : metaDeliveryStatus(sent.status, sent.data),
         sent_at: new Date().toISOString(),
       };
 
@@ -492,6 +495,8 @@ async function sendMessenger(channelToken: string, to: string, content: string) 
   const data = res.data as Json;
   return {
     ok: res.ok,
+    status: res.status,
+    data: res.data,
     metaId: (data.message_id as string | undefined) ?? null,
   };
 }

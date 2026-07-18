@@ -22,6 +22,8 @@ import {
 import type { SendResult } from "../shared/hybrid.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import { commentReplyPath } from "../shared/social.ts";
+import { relayProviderMedia } from "../shared/media-relay.ts";
+import { isMetaWindowError, metaDeliveryStatus } from "../shared/meta-errors.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -183,6 +185,7 @@ export async function handleOutgoing(db: Db, p: Json) {
   let res: { ok: boolean; status: number; data: unknown } | undefined;
   let msgType = "text";
   let mediaUrl: string | null = null;
+  let isSocialDirectMessage = false;
   if (isRyze) {
     // canal ryzeapi (whatsapp não-oficial): a ponte nativa deles não entrega SAÍDA de forma
     // confiável (bug achado testando, igual a entrada) -- manda direto pela API deles.
@@ -203,14 +206,24 @@ export async function handleOutgoing(db: Db, p: Json) {
           att.file_type as string | undefined,
         );
         msgType = attachType === "file" ? "document" : attachType;
-        mediaUrl = aUrl;
+        const fileName = (att.fallback_title as string) ?? "arquivo";
+        try {
+          mediaUrl = await relayProviderMedia(aUrl, fileName);
+        } catch (error) {
+          res = {
+            ok: false,
+            status: 502,
+            data: { error: { message: `Falha ao preparar mídia para Ryze: ${String(error)}` } },
+          };
+          continue;
+        }
         res = await instPost(
           `/message/media/${encodeURIComponent(instance)}`,
           rzToken,
           {
             number: to,
             mediaType: msgType,
-            mediaUrl: aUrl,
+            mediaUrl,
             message: content || undefined,
             fileName: msgType === "document"
               ? ((att.fallback_title as string) ?? "arquivo")
@@ -436,6 +449,7 @@ export async function handleOutgoing(db: Db, p: Json) {
     msgType = "text";
   } else {
     // facebook / instagram (Messenger): texto e anexo são mensagens separadas (não há caption).
+    isSocialDirectMessage = true;
     for (const att of attachments) {
       const aUrl = (att.data_url as string) ?? null;
       if (!aUrl) {
@@ -505,6 +519,9 @@ export async function handleOutgoing(db: Db, p: Json) {
       ? (d as { id: string }).id
       : null);
 
+  const failureStatus = !res.ok && isSocialDirectMessage
+    ? metaDeliveryStatus(res.status, res.data)
+    : "failed";
   const messageRow = {
     conversation_id: conv?.id ?? null,
     channel_id: channel.id,
@@ -514,7 +531,7 @@ export async function handleOutgoing(db: Db, p: Json) {
     media_url: mediaUrl,
     meta_message_id: metaId,
     chatwoot_message_id: (p.id as number) ?? null,
-    status: res.ok ? "sent" : "failed",
+    status: res.ok ? "sent" : failureStatus,
   };
   if (retryingFailedMessage?.id) {
     await db.from("messages").update(messageRow).eq(
@@ -529,8 +546,11 @@ export async function handleOutgoing(db: Db, p: Json) {
     const acct = await accountForChannel(channel.id as string);
     const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
     const detail = JSON.stringify(redactSecrets(res.data as Json)).slice(0, 240);
+    const windowBlocked = isSocialDirectMessage && isMetaWindowError(res.status, res.data);
     await createConversationMessage(cwConversationId, {
-      content: `Falha ao publicar no canal (${res.status}). Tente novamente. ${detail}`,
+      content: windowBlocked
+        ? "🚫 Janela de resposta da Meta encerrada. A mensagem não foi enviada. Aguarde o cliente mandar uma nova mensagem para reabrir a janela de 24 horas."
+        : `Falha ao publicar no canal (${res.status}). Tente novamente. ${detail}`,
       messageType: "outgoing",
       private: true,
     }, noteAcct).catch((error) =>
@@ -539,7 +559,13 @@ export async function handleOutgoing(db: Db, p: Json) {
     await db.from("events").insert({
       source: "chatwoot",
       event_type: "outgoing_failed",
-      payload: { chatwoot_message_id: cwMsgId, channel_id: channel.id, status: res.status },
+      payload: {
+        chatwoot_message_id: cwMsgId,
+        channel_id: channel.id,
+        status: res.status,
+        terminal: windowBlocked,
+        detail,
+      },
     });
   }
 

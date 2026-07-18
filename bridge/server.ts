@@ -208,8 +208,11 @@ const version = {
     "ryze-failed-ingest-retry",
     "chatwoot-admin-send-fallback",
     "chatwoot-stale-source-incoming-fallback",
+    "ryze-private-media-relay",
+    "meta-window-terminal-failure",
+    "chatwoot-out-5s-single-flight",
   ],
-  build: "2026-07-13-chatwoot-incoming-recovery",
+  build: "2026-07-18-channel-delivery-recovery",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -226,7 +229,10 @@ function startSyncLoop() {
     encodeURIComponent(token)
   }&since_minutes=1440`;
 
+  let running = false;
   setInterval(async () => {
+    if (running) return;
+    running = true;
     try {
       const res = await syncFacebook(new Request(url));
       const body = await res.json();
@@ -238,6 +244,8 @@ function startSyncLoop() {
       }
     } catch (e) {
       console.error("sync-facebook (auto) erro:", e);
+    } finally {
+      running = false;
     }
   }, SYNC_LOOP_INTERVAL_MS);
 }
@@ -270,8 +278,8 @@ function startCommentsLoop() {
 // Saída do WhatsApp por PULL — fallback pro webhook do Chatwoot quando ele para de
 // disparar (Sidekiq travado / webhook pausado por downtime). Varre conversas WhatsApp e
 // entrega as msgs de saída pendentes. Idempotente (claim cw-out-<id> impede duplicar com
-// o webhook). Curto (20s) pra latência baixa do atendimento.
-const SYNC_OUT_INTERVAL_MS = 20_000;
+// o webhook). Curto (5s) pra latência baixa do atendimento.
+const SYNC_OUT_INTERVAL_MS = 5_000;
 function startChatwootOutLoop() {
   if (optionalEnv("SYNC_OUT_ENABLED") === "false") {
     console.log("sync-chatwoot-out loop OFF (SYNC_OUT_ENABLED=false)");
@@ -281,13 +289,20 @@ function startChatwootOutLoop() {
   const url = `http://internal/sync-chatwoot-out?token=${
     encodeURIComponent(token)
   }&since_minutes=30`;
+  let running = false;
   setInterval(async () => {
+    if (running) return;
+    running = true;
     try {
       const res = await syncChatwootOut(new Request(url));
       const body = await res.json();
-      console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
+      if (body.dispatched > 0 || body.errors?.length) {
+        console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
+      }
     } catch (e) {
       console.error("sync-chatwoot-out (auto) erro:", e);
+    } finally {
+      running = false;
     }
   }, SYNC_OUT_INTERVAL_MS);
 }
