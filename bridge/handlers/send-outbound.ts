@@ -33,6 +33,7 @@ import {
   isHybridRecipient,
 } from "../shared/hybrid.ts";
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
+import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
 
 type Json = Record<string, unknown>;
 
@@ -70,6 +71,13 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   const isWhatsapp = channel.type === "whatsapp";
+  const isSocialComment = to.startsWith("cmt-fb-") || to.startsWith("cmt-ig-");
+  if (!isWhatsapp && isSocialComment) {
+    return json({
+      error: "funil disponível apenas em conversa privada do Facebook/Instagram",
+      blocked: "comentario-publico",
+    }, 422);
+  }
   if (isWhatsapp && !channel.phone_number_id) {
     return json({
       error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)",
@@ -381,18 +389,28 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  if (!res) {
-    const path = isWhatsapp
-      ? `${channel.phone_number_id}/messages`
-      : "me/messages";
-    const metaPayload = isWhatsapp
-      ? { messaging_product: "whatsapp", to, ...metaBody }
-      : {
+  if (!res && !isWhatsapp) {
+    const socialMessages = renderSocialFunnelMessages(type, payload);
+    if (socialMessages.length === 0) {
+      return json({ error: `conteúdo ${type} inválido para canal social` }, 400);
+    }
+    for (const item of socialMessages) {
+      const itemResult = await sendMeta(channelToken!, "me/messages", {
         recipient: { id: to },
-        message: { text: registroTexto },
+        message: item.message,
         messaging_type: "RESPONSE",
-      };
-    res = await sendMeta(channelToken!, path, metaPayload);
+      });
+      res = itemResult;
+      if (!itemResult.ok) break;
+    }
+  }
+
+  if (!res) {
+    res = await sendMeta(channelToken!, `${channel.phone_number_id}/messages`, {
+      messaging_product: "whatsapp",
+      to,
+      ...metaBody,
+    });
   }
 
   const d = res.data as Json;

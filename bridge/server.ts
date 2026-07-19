@@ -220,8 +220,10 @@ const version = {
     "customer-recovery-macros-v1",
     "customer-recovery-label-tracking",
     "chatwoot-callback-fast-ack",
+    "social-funnel-private-messages",
+    "social-price-quick-replies",
   ],
-  build: "2026-07-19-chatwoot-callback-fast-ack",
+  build: "2026-07-19-social-funnel-private-messages",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

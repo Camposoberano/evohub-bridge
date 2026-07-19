@@ -25,6 +25,7 @@ import {
 } from "../shared/intent-dedup.ts";
 import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
+import { handle as sendOutbound } from "./send-outbound.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -393,6 +394,10 @@ function tamanhoCard(id: string): string | null {
 }
 
 async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await handleSocialPrecoSequence(db, channel, from);
+    return;
+  }
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -464,6 +469,169 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
     }
     if (i < pecas.length - 1) await pause(2500);
   }
+}
+
+async function handleSocialPrecoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+): Promise<void> {
+  const { data: media } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true)
+    .limit(1).maybeSingle();
+  const pieces: { type: string; payload: Json }[] = [];
+  if (media?.url) {
+    pieces.push({
+      type: "image",
+      payload: {
+        media_url: media.url,
+        caption: "Vou te passar os valores! 👇",
+      },
+    });
+  }
+  pieces.push({
+    type: "interactive",
+    payload: {
+      text:
+        "📐 Qual área o senhor pretende plantar?\n\nEscolha abaixo e eu já mostro o pacote certo, o valor e o desconto.",
+      buttons: [
+        { id: "tam_2kg", title: "Meio hectare" },
+        { id: "tam_4kg", title: "1 hectare" },
+        { id: "preco_area_maior", title: "2 hectares ou mais" },
+      ],
+    },
+  });
+
+  await sendSocialPieces(db, channel, from, pieces);
+}
+
+async function sendSocialPieces(
+  db: Db,
+  channel: Json,
+  from: string,
+  pieces: { type: string; payload: Json }[],
+): Promise<void> {
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("chatwoot_conversation_id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  const cwConvId = Number(conv?.chatwoot_conversation_id);
+  if (!cwConvId) throw new Error("conversa privada não encontrada para enviar funil");
+
+  for (const piece of pieces) {
+    const response = await sendOutbound(
+      new Request(
+        `http://internal/send-outbound?token=${
+          encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+        }`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chatwoot_conversation_id: cwConvId,
+            type: piece.type,
+            payload: piece.payload,
+          }),
+        },
+      ),
+    );
+    const result = await response.json().catch(() => ({})) as Json;
+    if (!response.ok || result.ok === false || result.blocked) {
+      throw new Error(
+        String(result.error ?? result.blocked ?? `envio ${response.status}`),
+      );
+    }
+  }
+}
+
+async function handleSocialPrecoClick(
+  db: Db,
+  channel: Json,
+  from: string,
+  id: string,
+): Promise<void> {
+  if (id === "preco_tamanho") {
+    await handleSocialPrecoSequence(db, channel, from);
+    return;
+  }
+  if (id === "preco_area_maior") {
+    await sendSocialPieces(db, channel, from, [{
+      type: "interactive",
+      payload: {
+        text: "🌱 Perfeito. Qual destas áreas fica mais próxima?",
+        buttons: [
+          { id: "tam_10kg", title: "2 hectares" },
+          { id: "tam_20kg", title: "4 hectares ou mais" },
+        ],
+      },
+    }]);
+    return;
+  }
+  if (id === "preco_pagamento") {
+    await sendSocialPieces(db, channel, from, [{
+      type: "interactive",
+      payload: {
+        text: "💳 Como o senhor prefere pagar?",
+        buttons: [
+          { id: "pag_pix", title: "PIX" },
+          { id: "pag_cartao", title: "Cartão" },
+          { id: "pag_boleto", title: "Boleto" },
+        ],
+      },
+    }]);
+    return;
+  }
+
+  const paymentText: Record<string, string> = {
+    pag_pix:
+      "💰 PIX direto com a empresa, no CNPJ. O Cícero vai enviar a chave para concluir o pedido.",
+    pag_cartao:
+      "💳 Cartão de crédito ou débito pelo site, com a Garantia Mercado Pago. O Cícero vai enviar o link para concluir.",
+    pag_boleto:
+      "📄 Boleto pelo site, com a Garantia Mercado Pago. A liberação ocorre após a confirmação do pagamento.",
+    preco_comprar:
+      "🤝 Fechado! O Cícero vai chamar em instantes para concluir o pedido.",
+  };
+  if (paymentText[id]) {
+    await sendSocialPieces(db, channel, from, [{
+      type: "text",
+      payload: { content: paymentText[id] },
+    }]);
+    return;
+  }
+
+  const card = tamanhoCard(id);
+  if (!card) return;
+  const imgSlot = `preco_${id.replace("tam_", "")}`;
+  const { data: image } = await db.from("funnel_media").select("url,caption")
+    .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true)
+    .limit(1).maybeSingle();
+  const pieces: { type: string; payload: Json }[] = [];
+  if (image?.url) {
+    pieces.push({
+      type: "image",
+      payload: { media_url: image.url, caption: image.caption ?? "" },
+    });
+  }
+  pieces.push(
+    { type: "text", payload: { content: card } },
+    { type: "text", payload: { content: FRETE_MSG } },
+    {
+      type: "interactive",
+      payload: {
+        text: "Posso garantir o seu? 👇",
+        buttons: [
+          { id: "preco_comprar", title: "Quero garantir" },
+          { id: "preco_pagamento", title: "Pagamento" },
+          { id: "preco_tamanho", title: "Outra área" },
+        ],
+      },
+    },
+  );
+  await sendSocialPieces(db, channel, from, pieces);
 }
 
 // clique nos botões da sequência de preço.
@@ -1323,6 +1491,7 @@ async function handleMessenger(db: Db, p: Json) {
       if (message.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
       if (hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
       const text = (message.text as string) ?? "[anexo]"; // TODO Fase 3: mídia/attachments
+      const quickReplyId = ((message.quick_reply as Json | undefined)?.payload as string | undefined) ?? "";
 
       // o webhook não manda o nome do remetente -- a Graph API devolve via GET /{id}?fields=name
       // mesmo quando o evento não traz (comum no Instagram). Sem isso, Chatwoot cria nome
@@ -1337,6 +1506,12 @@ async function handleMessenger(db: Db, p: Json) {
         content: text,
         acct,
       });
+
+      if (quickReplyId === "menu_preco") {
+        await handleMenuClick(db, channel as Json, sender, quickReplyId, acct);
+      } else if (/^(?:preco_|tam_|pag_)/.test(quickReplyId)) {
+        await handleSocialPrecoClick(db, channel as Json, sender, quickReplyId);
+      }
     }
   }
 }
