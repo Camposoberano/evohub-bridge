@@ -28,6 +28,14 @@ import { isMetaWindowError, metaDeliveryStatus } from "../shared/meta-errors.ts"
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
+export function deferBackground(task: () => Promise<void> | void) {
+  setTimeout(() => {
+    Promise.resolve().then(task).catch((error) => {
+      console.error("chatwoot-webhook background erro:", error);
+    });
+  }, 0);
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
@@ -55,18 +63,24 @@ export async function handle(req: Request): Promise<Response> {
   const db = admin();
   const eventName = (p.event as string) ?? "unknown";
 
-  db.from("events").insert({
-    source: "chatwoot",
-    event_type: eventName,
-    payload: redactSecrets(p),
-  }).then(() => {}, () => {});
+  deferBackground(async () => {
+    await db.from("events").insert({
+      source: "chatwoot",
+      event_type: eventName,
+      payload: redactSecrets(p),
+    });
+  });
 
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
   if (eventName === "message_created" && isOutgoing(p) && !p.private) {
-    handleOutgoing(db, p).catch(async (e) => {
-      console.error("chatwoot-webhook handleOutgoing erro:", e);
-      await reportOutgoingException(db, p, e);
+    deferBackground(async () => {
+      try {
+        await handleOutgoing(db, p);
+      } catch (e) {
+        console.error("chatwoot-webhook handleOutgoing erro:", e);
+        await reportOutgoingException(db, p, e);
+      }
     });
   }
   return new Response("ok", { status: 200 });
