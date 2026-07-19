@@ -222,8 +222,9 @@ const version = {
     "chatwoot-callback-fast-ack",
     "social-funnel-private-messages",
     "social-price-quick-replies",
+    "meta-thread-control-terminal-block",
   ],
-  build: "2026-07-19-social-funnel-private-messages",
+  build: "2026-07-19-meta-thread-control-guard",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -559,13 +560,22 @@ function startMacroCommandLoop() {
             JSON.stringify(result).slice(0, 200),
           );
           if (!r.ok || result.ok !== true) {
-            console.warn(
-              "macro-poll: comando mantido para nova tentativa",
-              cmdLabel,
-              "conv",
-              cwConvId,
-            );
-            continue;
+            if (result.terminal === true) {
+              console.warn(
+                "macro-poll: falha terminal, removendo comando",
+                cmdLabel,
+                "conv",
+                cwConvId,
+              );
+            } else {
+              console.warn(
+                "macro-poll: comando mantido para nova tentativa",
+                cmdLabel,
+                "conv",
+                cwConvId,
+              );
+              continue;
+            }
           }
 
           // Só consome a etiqueta depois que o destino confirma a execução.

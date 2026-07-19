@@ -23,6 +23,17 @@ export function isMetaWindowError(status: number, data: unknown): boolean {
   );
 }
 
+export function isMetaThreadControlError(data: unknown): boolean {
+  const error = data && typeof data === "object" ? (data as Json).error : null;
+  const subcode = error && typeof error === "object"
+    ? Number((error as Json).error_subcode)
+    : NaN;
+  const detail = metaErrorDetail(data).toLowerCase();
+  return subcode === 2018300 ||
+    detail.includes("outro app está controlando") ||
+    detail.includes("another app is controlling");
+}
+
 export function metaDeliveryStatus(
   status: number,
   data: unknown,

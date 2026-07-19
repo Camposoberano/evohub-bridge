@@ -14,6 +14,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
+import { isMetaThreadControlError } from "../shared/meta-errors.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -260,7 +261,21 @@ export async function handle(req: Request): Promise<Response> {
       );
       return json({ ok: true, action, dispatched: menuId });
     } catch (e) {
-      return json({ error: String(e).slice(0, 200) }, 500);
+      const detail = String(e).slice(0, 240);
+      if (isMetaThreadControlError(detail)) {
+        await nota(
+          cwConvId,
+          "🚫 *Funil não enviado:* outro aplicativo está controlando esta conversa na Meta. Ajuste o receptor principal da Página para Evolution Foundation/EvoHub e execute a macro novamente.",
+          acct,
+        );
+        return json({
+          ok: false,
+          terminal: true,
+          blocked: "meta-thread-control",
+          error: detail,
+        }, 409);
+      }
+      return json({ error: detail }, 500);
     }
   }
 

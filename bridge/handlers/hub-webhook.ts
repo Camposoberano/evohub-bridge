@@ -26,6 +26,7 @@ import {
 import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
+import { metaErrorDetail } from "../shared/meta-errors.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -541,7 +542,9 @@ async function sendSocialPieces(
     const result = await response.json().catch(() => ({})) as Json;
     if (!response.ok || result.ok === false || result.blocked) {
       throw new Error(
-        String(result.error ?? result.blocked ?? `envio ${response.status}`),
+        result.error
+          ? metaErrorDetail(result)
+          : String(result.blocked ?? `envio ${response.status}`),
       );
     }
   }

@@ -23,7 +23,11 @@ import type { SendResult } from "../shared/hybrid.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import { commentReplyPath } from "../shared/social.ts";
 import { relayProviderMedia } from "../shared/media-relay.ts";
-import { isMetaWindowError, metaDeliveryStatus } from "../shared/meta-errors.ts";
+import {
+  isMetaThreadControlError,
+  isMetaWindowError,
+  metaDeliveryStatus,
+} from "../shared/meta-errors.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -561,8 +565,12 @@ export async function handleOutgoing(db: Db, p: Json) {
     const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
     const detail = JSON.stringify(redactSecrets(res.data as Json)).slice(0, 240);
     const windowBlocked = isSocialDirectMessage && isMetaWindowError(res.status, res.data);
+    const threadBlocked = isSocialDirectMessage &&
+      isMetaThreadControlError(res.data);
     await createConversationMessage(cwConversationId, {
-      content: windowBlocked
+      content: threadBlocked
+        ? "🚫 A Meta entregou o controle desta conversa a outro aplicativo. O envio foi bloqueado e não será repetido automaticamente. Defina o Evolution Foundation/EvoHub como receptor principal em Roteamento de conversas da Página."
+        : windowBlocked
         ? "🚫 Janela de resposta da Meta encerrada. A mensagem não foi enviada. Aguarde o cliente mandar uma nova mensagem para reabrir a janela de 24 horas."
         : `Falha ao publicar no canal (${res.status}). Tente novamente. ${detail}`,
       messageType: "outgoing",
@@ -577,7 +585,7 @@ export async function handleOutgoing(db: Db, p: Json) {
         chatwoot_message_id: cwMsgId,
         channel_id: channel.id,
         status: res.status,
-        terminal: windowBlocked,
+        terminal: windowBlocked || threadBlocked,
         detail,
       },
     });
