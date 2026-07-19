@@ -217,8 +217,10 @@ const version = {
     "funnel-completion-reconciliation",
     "funnel-48h-business-cadence",
     "funnel-business-clock-pause",
+    "customer-recovery-macros-v1",
+    "customer-recovery-label-tracking",
   ],
-  build: "2026-07-18-funnel-48h-cadence",
+  build: "2026-07-19-customer-recovery-macros",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -482,6 +484,10 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-enviar-video": "video",
   "cmd-enviar-plantio": "plantio",
   "cmd-enviar-nutricao": "nutricao",
+  "cmd-recuperar-1": "recuperacao-1",
+  "cmd-recuperar-2": "recuperacao-2",
+  "cmd-recuperar-3": "recuperacao-3",
+  "cmd-recuperar-4": "recuperacao-4",
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
 

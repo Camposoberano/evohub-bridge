@@ -25,7 +25,14 @@ import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
-import { getHybridRoute, hybridSendText, hybridSendMedia, isHybridRecipient } from "../shared/hybrid.ts";
+import {
+  getHybridRoute,
+  hybridSendMedia,
+  hybridSendMenu,
+  hybridSendText,
+  isHybridRecipient,
+} from "../shared/hybrid.ts";
+import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 
 type Json = Record<string, unknown>;
 
@@ -33,33 +40,56 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) return json({ error: "unauthorized" }, 401);
+  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   const body = await req.json().catch(() => ({})) as Json;
   const cwConvId = Number(body.chatwoot_conversation_id);
-  if (!cwConvId) return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  if (!cwConvId) {
+    return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
+  }
 
   // compat: content direto = texto
   const type = (body.type as string) ?? "text";
-  const payload = (body.payload as Json) ?? (body.content ? { content: body.content } : {});
+  const payload = (body.payload as Json) ??
+    (body.content ? { content: body.content } : {});
 
   const db = admin();
-  const { data: conv } = await db.from("conversations").select("*, contacts(*), channels(*)")
+  const { data: conv } = await db.from("conversations").select(
+    "*, contacts(*), channels(*)",
+  )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-  if (!conv) return json({ error: "conversa não encontrada p/ " + cwConvId }, 404);
+  if (!conv) {
+    return json({ error: "conversa não encontrada p/ " + cwConvId }, 404);
+  }
   const channel = conv.channels as Json;
   const to = (conv.contacts as Json)?.external_contact_id as string | undefined;
-  if (!channel || !to) return json({ error: "canal ou destinatário ausente" }, 404);
+  if (!channel || !to) {
+    return json({ error: "canal ou destinatário ausente" }, 404);
+  }
 
   const isWhatsapp = channel.type === "whatsapp";
-  if (isWhatsapp && !channel.phone_number_id) return json({ error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)" }, 422);
+  if (isWhatsapp && !channel.phone_number_id) {
+    return json({
+      error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)",
+    }, 422);
+  }
 
   const hybridCandidate = isWhatsapp
-    ? await getHybridRoute(channel.id as string, channel.phone_number_id as string, channel.phone_number as string)
+    ? await getHybridRoute(
+      channel.id as string,
+      channel.phone_number_id as string,
+      channel.phone_number as string,
+    )
     : null;
-  const hybrid = hybridCandidate && isHybridRecipient(to) ? hybridCandidate : null;
+  const hybrid = hybridCandidate && isHybridRecipient(to)
+    ? hybridCandidate
+    : null;
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const channelToken = secret?.channel_token as string | undefined;
   if (!channelToken && !hybrid) return json({ error: "canal sem token" }, 404);
   const acct = await accountForChannel(channel.id as string);
@@ -72,14 +102,23 @@ export async function handle(req: Request): Promise<Response> {
     if (!win.aberta) {
       const dia = new Date().toISOString().slice(0, 10);
       if (await claimDelivery(db, `wnote-${cwConvId}-${dia}`, "window-note")) {
-        const nota = `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — envio automático (funil/campanha) bloqueado.*\n\n` +
+        const nota =
+          `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — envio automático (funil/campanha) bloqueado.*\n\n` +
           `As próximas peças NÃO serão entregues até o cliente responder. ` +
           `Opções: template aprovado (/template <nome>) ou aguardar resposta do cliente.`;
-        try { await createConversationMessage(cwConvId, { content: nota, messageType: "outgoing", private: true }, acct); }
-        catch (e) { console.warn("nota privada janela falhou:", String(e).slice(0, 120)); }
+        try {
+          await createConversationMessage(cwConvId, {
+            content: nota,
+            messageType: "outgoing",
+            private: true,
+          }, acct);
+        } catch (e) {
+          console.warn("nota privada janela falhou:", String(e).slice(0, 120));
+        }
       }
       db.from("events").insert({
-        source: "funil", event_type: "send_blocked_window",
+        source: "funil",
+        event_type: "send_blocked_window",
         payload: { conv: cwConvId, type, janela: win.tipo },
       }).then(() => {}, () => {});
       return json({ ok: false, blocked: "janela-fechada", janela: win.tipo });
@@ -89,7 +128,9 @@ export async function handle(req: Request): Promise<Response> {
   // Anti-dup: n8n cron pode chamar send-outbound 2x pra mesma scheduled_message se o envio
   // demora mais que o intervalo do cron (60s). Claim atômico por conteúdo+conversa (2min TTL).
   const contentHash = JSON.stringify(payload).slice(0, 200);
-  const claimKey = `send-out-${cwConvId}-${type}-${contentHash.length}-${contentHash.slice(0, 60)}`;
+  const claimKey = `send-out-${cwConvId}-${type}-${contentHash.length}-${
+    contentHash.slice(0, 60)
+  }`;
   if (!await claimDelivery(db, claimKey, "send-outbound")) {
     console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
     return json({ ok: true, deduplicated: true });
@@ -99,7 +140,9 @@ export async function handle(req: Request): Promise<Response> {
   // Cron de 1min não separa peças com gap < 60s -> o pacing tem que ser feito aqui dentro,
   // numa chamada só, em vez de depender do agendamento de cada peça.
   if (type === "text_sequence") {
-    const texts = (payload.texts as string[] | undefined)?.filter((t) => t?.trim()) ?? [];
+    const texts = (payload.texts as string[] | undefined)?.filter((t) =>
+      t?.trim()
+    ) ?? [];
     const delayMs = (payload.delay_ms as number | undefined) ?? 3500;
     if (texts.length === 0) return json({ error: "texts obrigatório" }, 400);
 
@@ -111,30 +154,67 @@ export async function handle(req: Request): Promise<Response> {
       if (hr) {
         res = hr;
       } else {
-        const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
+        const path = isWhatsapp
+          ? `${channel.phone_number_id}/messages`
+          : "me/messages";
         const metaPayload = isWhatsapp
-          ? { messaging_product: "whatsapp", to, type: "text", text: { body: content } }
-          : { recipient: { id: to }, message: { text: content }, messaging_type: "RESPONSE" };
+          ? {
+            messaging_product: "whatsapp",
+            to,
+            type: "text",
+            text: { body: content },
+          }
+          : {
+            recipient: { id: to },
+            message: { text: content },
+            messaging_type: "RESPONSE",
+          };
         res = await sendMeta(channelToken!, path, metaPayload);
       }
       const d = res.data as Json;
-      const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
+      const metaId =
+        (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
+          ((d?.message_id as string) ?? null);
 
       let cwMsgId: number | undefined;
-      try { cwMsgId = (await createConversationMessage(cwConvId, { content, messageType: "outgoing" }, acct))?.id; }
-      catch (e) { console.warn("send-outbound: registro Chatwoot falhou (entrega ok):", String(e).slice(0, 150)); }
+      try {
+        cwMsgId = (await createConversationMessage(cwConvId, {
+          content,
+          messageType: "outgoing",
+        }, acct))?.id;
+      } catch (e) {
+        console.warn(
+          "send-outbound: registro Chatwoot falhou (entrega ok):",
+          String(e).slice(0, 150),
+        );
+      }
 
       await db.from("messages").insert({
-        conversation_id: conv.id, channel_id: channel.id, direction: "out", msg_type: "text",
-        content, meta_message_id: metaId, chatwoot_message_id: cwMsgId ?? null, status: res.ok ? "sent" : "failed",
+        conversation_id: conv.id,
+        channel_id: channel.id,
+        direction: "out",
+        msg_type: "text",
+        content,
+        meta_message_id: metaId,
+        chatwoot_message_id: cwMsgId ?? null,
+        status: res.ok ? "sent" : "failed",
       });
       results.push({ ok: res.ok, meta_message_id: metaId });
       if (!res.ok) {
-        console.error("send-outbound (text_sequence) falhou:", JSON.stringify(d).slice(0, 250));
+        console.error(
+          "send-outbound (text_sequence) falhou:",
+          JSON.stringify(d).slice(0, 250),
+        );
         // rejeição fica consultável (Meta recusa em silêncio; Chatwoot mostra "sent" mesmo assim).
         db.from("events").insert({
-          source: "funil", event_type: "send_failed",
-          payload: { conv: cwConvId, type: "text_sequence", status: res.status, error: (d as Json)?.error ?? d },
+          source: "funil",
+          event_type: "send_failed",
+          payload: {
+            conv: cwConvId,
+            type: "text_sequence",
+            status: res.status,
+            error: (d as Json)?.error ?? d,
+          },
         }).then(() => {}, () => {});
       }
       if (i < texts.length - 1) await sleep(delayMs);
@@ -169,31 +249,65 @@ export async function handle(req: Request): Promise<Response> {
         const ob = await fetch(oggUrl);
         if (ob.ok) {
           const bytes = new Uint8Array(await ob.arrayBuffer());
-          const up = await uploadMetaMedia(channelToken!, channel.phone_number_id as string, bytes, "audio/ogg", "voz.ogg");
+          const up = await uploadMetaMedia(
+            channelToken!,
+            channel.phone_number_id as string,
+            bytes,
+            "audio/ogg",
+            "voz.ogg",
+          );
           if (up.ok && up.id) audioObj = { id: up.id };
-          else console.warn("send-outbound: uploadMetaMedia falhou, usa link:", up.status, JSON.stringify(up.data).slice(0, 150));
+          else {
+            console.warn(
+              "send-outbound: uploadMetaMedia falhou, usa link:",
+              up.status,
+              JSON.stringify(up.data).slice(0, 150),
+            );
+          }
         }
-      } catch (e) { console.warn("send-outbound: media_id erro, usa link:", String(e).slice(0, 120)); }
+      } catch (e) {
+        console.warn(
+          "send-outbound: media_id erro, usa link:",
+          String(e).slice(0, 120),
+        );
+      }
     }
     metaBody = { type: "audio", audio: audioObj }; // áudio não aceita caption
     registroTexto = "[áudio]";
   } else if (type === "interactive") {
     const text = (payload.text as string) ?? "";
     const buttons = (payload.buttons as { id: string; title: string }[]) ?? [];
-    if (!text || buttons.length === 0) return json({ error: "text e buttons obrigatórios" }, 400);
+    if (!text || buttons.length === 0) {
+      return json({ error: "text e buttons obrigatórios" }, 400);
+    }
     const interactive: Json = {
       type: "button",
       body: { text },
-      action: { buttons: buttons.slice(0, 3).map((b) => ({ type: "reply", reply: { id: b.id, title: b.title } })) },
+      action: {
+        buttons: buttons.slice(0, 3).map((b) => ({
+          type: "reply",
+          reply: { id: b.id, title: b.title },
+        })),
+      },
     };
-    if (payload.header_image) interactive.header = { type: "image", image: { link: payload.header_image } };
+    if (payload.header_image) {
+      interactive.header = {
+        type: "image",
+        image: { link: payload.header_image },
+      };
+    }
     metaBody = { type: "interactive", interactive };
     registroTexto = text + " [" + buttons.map((b) => b.title).join(" / ") + "]";
   } else if (type === "list") {
     const text = (payload.text as string) ?? "";
     const buttonLabel = (payload.button_label as string) ?? "Ver opções";
-    const sections = (payload.sections as { title?: string; rows: { id: string; title: string; description?: string }[] }[]) ?? [];
-    if (!text || sections.length === 0) return json({ error: "text e sections obrigatórios" }, 400);
+    const sections = (payload.sections as {
+      title?: string;
+      rows: { id: string; title: string; description?: string }[];
+    }[]) ?? [];
+    if (!text || sections.length === 0) {
+      return json({ error: "text e sections obrigatórios" }, 400);
+    }
     metaBody = {
       type: "interactive",
       interactive: {
@@ -217,33 +331,88 @@ export async function handle(req: Request): Promise<Response> {
     } else if (type === "audio") {
       const src = payload.media_url as string;
       const oggUrl = await toVoiceOgg(src);
-      res = (await hybridSendMedia(hybrid, to, oggUrl ?? src, "audio", { isVoice: true })) ?? undefined;
+      res = (await hybridSendMedia(hybrid, to, oggUrl ?? src, "audio", {
+        isVoice: true,
+      })) ?? undefined;
     } else if (type === "image" || type === "video") {
       const link = payload.media_url as string;
-      res = (await hybridSendMedia(hybrid, to, link, type, { caption: payload.caption as string | undefined })) ?? undefined;
+      res = (await hybridSendMedia(hybrid, to, link, type, {
+        caption: payload.caption as string | undefined,
+      })) ?? undefined;
+    } else if (type === "interactive") {
+      const buttons = (payload.buttons as { id: string; title: string }[]) ??
+        [];
+      res = (await hybridSendMenu(
+        hybrid,
+        to,
+        payload.text as string,
+        buttons,
+        payload.header_image as string | undefined,
+      )) ?? undefined;
+      if (!res) {
+        res = (await hybridSendText(
+          hybrid,
+          to,
+          buildHybridMenuFallback(payload.text as string, buttons),
+        )) ?? undefined;
+      }
     }
     if (res) console.log("send-outbound hybrid:", type, "uazapi OK");
     else console.log("send-outbound hybrid:", type, "fallback oficial");
   }
 
+  // Se a rota híbrida falhou, a Meta só pode ser usada como fallback enquanto a
+  // janela oficial estiver aberta. Fora dela, devolve bloqueio para liberar o
+  // claim da macro e permitir uma nova tentativa depois.
+  if (!res && isWhatsapp && hybrid) {
+    const win = await windowState(db, conv as Json, channel as Json);
+    if (!win.aberta) {
+      await db.from("events").insert({
+        source: "hybrid",
+        event_type: "fallback_blocked_window",
+        channel_id: channel.id,
+        payload: { conv: cwConvId, type, janela: win.tipo },
+      });
+      return json({
+        ok: false,
+        blocked: "rota-hibrida-indisponivel-e-janela-fechada",
+        janela: win.tipo,
+      });
+    }
+  }
+
   if (!res) {
-    const path = isWhatsapp ? `${channel.phone_number_id}/messages` : "me/messages";
+    const path = isWhatsapp
+      ? `${channel.phone_number_id}/messages`
+      : "me/messages";
     const metaPayload = isWhatsapp
       ? { messaging_product: "whatsapp", to, ...metaBody }
-      : { recipient: { id: to }, message: { text: registroTexto }, messaging_type: "RESPONSE" };
+      : {
+        recipient: { id: to },
+        message: { text: registroTexto },
+        messaging_type: "RESPONSE",
+      };
     res = await sendMeta(channelToken!, path, metaPayload);
   }
 
   const d = res.data as Json;
-  const metaId = (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ?? ((d?.message_id as string) ?? null);
+  const metaId =
+    (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
+      ((d?.message_id as string) ?? null);
 
   // registra no Chatwoot pro atendente ver (não re-dispara webhook).
   let cwMsgId: number | undefined;
   try {
-    const cwMsg = await createConversationMessage(cwConvId, { content: registroTexto, messageType: "outgoing" }, acct);
+    const cwMsg = await createConversationMessage(cwConvId, {
+      content: registroTexto,
+      messageType: "outgoing",
+    }, acct);
     cwMsgId = cwMsg?.id;
   } catch (e) {
-    console.warn("send-outbound: registro Chatwoot falhou (entrega ok):", String(e).slice(0, 150));
+    console.warn(
+      "send-outbound: registro Chatwoot falhou (entrega ok):",
+      String(e).slice(0, 150),
+    );
   }
 
   await db.from("messages").insert({
@@ -263,11 +432,22 @@ export async function handle(req: Request): Promise<Response> {
     // rejeição fica consultável em events (Meta recusa em silêncio -- ex: janela 24h fechada;
     // Chatwoot mostra "sent" mesmo assim). select * from events where source='funil'.
     db.from("events").insert({
-      source: "funil", event_type: "send_failed",
-      payload: { conv: cwConvId, type, status: res.status, error: (d as Json)?.error ?? d },
+      source: "funil",
+      event_type: "send_failed",
+      payload: {
+        conv: cwConvId,
+        type,
+        status: res.status,
+        error: (d as Json)?.error ?? d,
+      },
     }).then(() => {}, () => {});
   }
-  return json({ ok: res.ok, meta_message_id: metaId, status: res.status, error: res.ok ? undefined : (d as Json)?.error });
+  return json({
+    ok: res.ok,
+    meta_message_id: metaId,
+    status: res.status,
+    error: res.ok ? undefined : (d as Json)?.error,
+  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -275,5 +455,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

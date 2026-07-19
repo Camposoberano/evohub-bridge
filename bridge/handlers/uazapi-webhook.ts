@@ -17,6 +17,7 @@ import {
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
+import { normalizeHybridMenuClick } from "../shared/hybrid-menu.ts";
 import {
   handleMenuClick,
   handleNutricaoClick,
@@ -254,7 +255,9 @@ async function handleUazapiIntent(
     const { data: conversation } = await db.from("conversations").select("id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-    if (conversation?.id) await autoPauseFunil(conversation.id as string, intent.name);
+    if (conversation?.id) {
+      await autoPauseFunil(conversation.id as string, intent.name);
+    }
   }
 
   await handleMenuClick(db, channel, from, intent.menu, acct);
@@ -446,13 +449,14 @@ async function parseUazapiMessage(
     getString(context, "direction"),
   ) ?? (fromMe ? "outgoing" : "incoming");
   const messageContent = getJson(message, "content");
-  const menuClickId = firstString(
+  const rawMenuClickId = firstString(
     getString(message, "buttonOrListid"),
     getString(messageContent, "buttonOrListid"),
     getString(messageContent, "selectedRowID"),
     getString(getJson(messageContent, "singleSelectReply"), "selectedRowID"),
     getString(getJson(messageContent, "buttonReply"), "selectedButtonId"),
   );
+  const menuClickId = normalizeHybridMenuClick(rawMenuClickId);
   const msgType = firstString(
     getString(message, "mediaType"),
     getString(message, "messageType"),

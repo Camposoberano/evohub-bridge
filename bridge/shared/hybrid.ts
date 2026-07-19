@@ -13,6 +13,10 @@ import {
 import { optionalEnv } from "./env.ts";
 import { admin } from "./supabase.ts";
 import { configuredChannel, readHybridConfig } from "./hybrid-config.ts";
+import {
+  buildHybridMenuPayload,
+  type HybridMenuButton,
+} from "./hybrid-menu.ts";
 
 type Json = Record<string, unknown>;
 type UazInstance = {
@@ -149,7 +153,12 @@ export async function getHybridRoute(
     (stored ? true : instanceMatchesAllowlist(policy.instanceAllowlist, i))
   );
   if (!match) return null;
-  return { provider: "uazapi", instance: match.name, token: match.token, channelId };
+  return {
+    provider: "uazapi",
+    instance: match.name,
+    token: match.token,
+    channelId,
+  };
 }
 
 export type SendResult = {
@@ -226,7 +235,13 @@ export async function hybridSendMedia(
         r.status,
         JSON.stringify(r.data).slice(0, 300),
       );
-      await recordRouteEvent(route, "fallback_requested", mediaType, to, r.status);
+      await recordRouteEvent(
+        route,
+        "fallback_requested",
+        mediaType,
+        to,
+        r.status,
+      );
       return null;
     }
     await recordRouteEvent(route, "send_success", mediaType, to, r.status);
@@ -234,6 +249,45 @@ export async function hybridSendMedia(
   } catch (e) {
     console.warn("hybrid media erro, fallback:", String(e).slice(0, 100));
     await recordRouteEvent(route, "fallback_requested", mediaType, to, 0);
+    return null;
+  }
+}
+
+// Envia botões nativos pela rota híbrida. A uazapi devolve o título selecionado
+// em algumas versões; o webhook normaliza esse título para o id comercial.
+export async function hybridSendMenu(
+  route: HybridRoute,
+  to: string,
+  text: string,
+  buttons: HybridMenuButton[],
+  imageUrl?: string,
+): Promise<SendResult | null> {
+  try {
+    const r = await uazInstPost(
+      "/send/menu",
+      route.token,
+      buildHybridMenuPayload(to, text, buttons, imageUrl),
+    );
+    if (!r.ok) {
+      console.warn(
+        "hybrid menu falhou, fallback oficial:",
+        r.status,
+        JSON.stringify(r.data).slice(0, 300),
+      );
+      await recordRouteEvent(
+        route,
+        "fallback_requested",
+        "interactive",
+        to,
+        r.status,
+      );
+      return null;
+    }
+    await recordRouteEvent(route, "send_success", "interactive", to, r.status);
+    return { ok: true, status: r.status, data: r.data, via: "uazapi" };
+  } catch (e) {
+    console.warn("hybrid menu erro, fallback:", String(e).slice(0, 100));
+    await recordRouteEvent(route, "fallback_requested", "interactive", to, 0);
     return null;
   }
 }

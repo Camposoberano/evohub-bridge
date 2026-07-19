@@ -10,7 +10,9 @@ import {
   createIncomingMessage,
   type CwAcct,
   ensureContact,
+  getConversationLabels,
   resolveInboxIdentifier,
+  setConversationLabels,
 } from "./chatwoot.ts";
 
 type Json = Record<string, unknown>;
@@ -142,7 +144,12 @@ export async function ingestInbound(
     contact = upserted as Json;
   } else {
     const { error: updateError } = await db.from("contacts")
-      .update({ customer_id: customerId, name: msg.name || contact.name, phone, last_seen_at: new Date().toISOString() })
+      .update({
+        customer_id: customerId,
+        name: msg.name || contact.name,
+        phone,
+        last_seen_at: new Date().toISOString(),
+      })
       .eq("id", contact.id);
     if (updateError) throw updateError;
   }
@@ -273,6 +280,42 @@ export async function ingestInbound(
         () => {},
         () => {},
       );
+  }
+
+  if (!msg.outgoing && conv.chatwoot_conversation_id) {
+    try {
+      const labels = await getConversationLabels(
+        conv.chatwoot_conversation_id as number,
+        acct,
+      );
+      if (labels.includes("recuperacao-aguardando")) {
+        await setConversationLabels(
+          conv.chatwoot_conversation_id as number,
+          [
+            ...new Set([
+              ...labels.filter((label) => label !== "recuperacao-aguardando"),
+              "recuperacao-respondeu",
+            ]),
+          ],
+          acct,
+        );
+        await db.from("events").insert({
+          source: "recovery",
+          event_type: "recovery_replied",
+          channel_id: channel.id,
+          payload: {
+            conversation_id: conv.id,
+            chatwoot_conversation_id: conv.chatwoot_conversation_id,
+            message_id: insertedMessage.id,
+          },
+        });
+      }
+    } catch (error) {
+      console.warn(
+        "recovery reply label falhou:",
+        String(error).slice(0, 160),
+      );
+    }
   }
 
   return { inserted: true, message_id: insertedMessage.id as string };
