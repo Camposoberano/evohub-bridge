@@ -3,7 +3,8 @@
 ## Objetivo
 
 Retomar conversas que esfriaram sem repetir o funil principal nem pressionar o
-cliente. A primeira versão é manual e opera inicialmente no canal híbrido 5895.
+cliente. As macros operam em conversas privadas do WhatsApp, Instagram e
+Facebook. Comentários públicos não recebem funil.
 
 ## Cadência recomendada
 
@@ -19,10 +20,11 @@ cadência e assumir a conversa. Não disparar as quatro variações no mesmo dia
 
 ## Macros do Chatwoot
 
-- `Recuperar 1 - Imagem`: adiciona `cmd-recuperar-1`.
-- `Recuperar 2 - Video`: adiciona `cmd-recuperar-2`.
-- `Recuperar 3 - Audio`: adiciona `cmd-recuperar-3`.
-- `Recuperar 4 - Decisao`: adiciona `cmd-recuperar-4`.
+- `Recuperar 1 - Imagem | WhatsApp | Instagram`: adiciona `cmd-recuperar-1`.
+- `Recuperar 2 - Video | WhatsApp | Instagram`: adiciona `cmd-recuperar-2`.
+- `Recuperar 3 - Audio | WhatsApp | Instagram`: adiciona `cmd-recuperar-3`.
+- `Recuperar 4 - Decisao | WhatsApp | Instagram`: adiciona `cmd-recuperar-4`.
+- `Enviar Videos | WhatsApp | Instagram`: adiciona `cmd-enviar-video`.
 
 O bridge remove a etiqueta de comando depois de processá-la. Cada variação só
 pode ser enviada uma vez por conversa. Uma tentativa que falhar é liberada para
@@ -39,10 +41,14 @@ Uma resposta recebida troca automaticamente `recuperacao-aguardando` por
 
 ## Entrega híbrida
 
-Texto e mídia saem pela UazAPI quando existe rota híbrida válida. Botões usam
+No WhatsApp, texto e mídia saem pela UazAPI quando existe rota híbrida válida. Botões usam
 `POST /send/menu`. Se o formato interativo for recusado, o bridge tenta uma
 versão textual numerada. Se a rota híbrida inteira falhar e a janela oficial
 estiver fechada, a entrega é bloqueada e registrada, sem criar falso sucesso.
+
+No Instagram e Facebook, mídia é enviada pela Graph API e os botões são
+convertidos em respostas rápidas. A nota privada de confirmação identifica o
+canal usado na entrega.
 
 ## Regra comercial
 

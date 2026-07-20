@@ -256,10 +256,17 @@ export async function handle(req: Request): Promise<Response> {
       if (!dispatch.sent) throw new Error("sequência não confirmou envio");
       await nota(
         cwConvId,
-        `🚀 *Sequência "${action}" disparada manualmente.*`,
+        `🚀 *Sequência "${action}" disparada manualmente via ${
+          deliveryChannelLabel(resolved.channel)
+        }.*`,
         acct,
       );
-      return json({ ok: true, action, dispatched: menuId });
+      return json({
+        ok: true,
+        action,
+        dispatched: menuId,
+        channel: deliveryChannelLabel(resolved.channel),
+      });
     } catch (e) {
       const detail = String(e).slice(0, 240);
       if (isMetaThreadControlError(detail)) {
@@ -292,17 +299,23 @@ async function dispatchRecovery(
   variation: number,
   acct: CwAcct,
 ): Promise<Response> {
+  const resolved = await resolveChannelAndContact(db, conv);
+  if (!resolved) {
+    return json({ error: "canal ou contato não encontrado" }, 404);
+  }
+  const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
   if (!await claimDelivery(db, claimKey, "recovery")) {
     await nota(
       cwConvId,
-      `ℹ️ *Recuperação ${variation} não repetida* — esta variação já foi enviada para o contato.`,
+      `ℹ️ *Recuperação ${variation} não repetida* — esta variação já foi enviada para o contato via ${channel}.`,
       acct,
     );
     return json({
       ok: true,
       action: `recuperacao-${variation}`,
       skipped: "already-sent",
+      channel,
     });
   }
 
@@ -353,17 +366,19 @@ async function dispatchRecovery(
         conversation_id: conv.id,
         chatwoot_conversation_id: cwConvId,
         variation,
+        channel,
         pieces: pieces.map((piece) => piece.type),
       },
     });
     await nota(
       cwConvId,
-      `✅ *Recuperação ${variation} enviada* — aguardando resposta do cliente.`,
+      `✅ *Recuperação ${variation} enviada via ${channel}* — aguardando resposta do cliente.`,
       acct,
     );
     return json({
       ok: true,
       action: `recuperacao-${variation}`,
+      channel,
       pieces: pieces.map((piece) => piece.type),
     });
   } catch (error) {
@@ -416,6 +431,12 @@ async function resolveChannelAndContact(
     channel: channel as Json,
     from: contact.external_contact_id as string,
   };
+}
+
+function deliveryChannelLabel(channel: Json): string {
+  if (channel.type === "instagram") return "Instagram";
+  if (channel.type === "facebook") return "Facebook";
+  return "WhatsApp";
 }
 
 async function nota(cwConvId: number, text: string, acct: CwAcct) {

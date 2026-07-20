@@ -793,6 +793,10 @@ const VIDEO_CAPTIONS: Record<string, string> = {
 const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
 
 export async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await handleSocialVideoSequence(db, channel, from);
+    return;
+  }
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -881,6 +885,56 @@ export async function handleVideoSequence(db: Db, channel: Json, from: string, a
   }, "✅ 5 pontos importantes! [💰 Ver preço / 🧑‍🌾 Falar com Cícero]", "interactive");
 
   await registra("🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.", true);
+}
+
+async function handleSocialVideoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+): Promise<void> {
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  await sendSocialPieces(db, channel, from, [{
+    type: "text",
+    payload: {
+      content:
+        "📹 Preparei 5 vídeos curtos para você conhecer o Mega Sorgo Santa Elisa!\n\nCada um mostra um ponto importante para sua decisão. Vou mandar um por um 👇",
+    },
+  }]);
+  await pause(3000);
+
+  const slots = ["video_1", "video_2", "video_3", "video_4", "video_5"];
+  const { data: videos } = await db.from("funnel_media")
+    .select("slot,url,caption")
+    .eq("funnel", "mega-sorgo").in("slot", slots).eq("active", true);
+  const videoMap = new Map((videos ?? []).map((video: Json) => [
+    video.slot as string,
+    video,
+  ]));
+
+  for (const [index, slot] of slots.entries()) {
+    const media = videoMap.get(slot) as Json | undefined;
+    const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
+    await sendSocialPieces(db, channel, from, [media?.url
+      ? {
+        type: "video",
+        payload: { media_url: media.url, caption },
+      }
+      : { type: "text", payload: { content: caption } }]);
+    if (index < slots.length - 1) await pause(VIDEO_PAUSES_MS[index]);
+  }
+
+  await pause(4000);
+  await sendSocialPieces(db, channel, from, [{
+    type: "interactive",
+    payload: {
+      text:
+        "✅ Esses são os 5 pontos que todo produtor precisa saber antes de plantar!\n\nQuer saber o preço e as condições especiais da promoção?",
+      buttons: [
+        { id: "menu_preco", title: "Ver preço" },
+        { id: "menu_humano", title: "Falar com Cícero" },
+      ],
+    },
+  }]);
 }
 
 // ── Sequência COMO PLANTAR (PDF + lista de resumos) ─────────────────────────
