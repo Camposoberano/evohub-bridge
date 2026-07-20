@@ -791,6 +791,9 @@ const VIDEO_CAPTIONS: Record<string, string> = {
 // Pausa entre vídeos (ms): tempo de cada vídeo + margem pra carregar.
 // v1: 3:00 | v2: 2:30 | v3: 1:50 | v4: 2:50 | v5: fim
 const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
+// No social, esperas longas deixam a sequência vulnerável a deploy/restart do
+// bridge. Mantemos cadência curta e concluímos os cinco envios em menos de 1 min.
+const SOCIAL_VIDEO_PAUSES_MS = [10_000, 10_000, 10_000, 10_000];
 
 export async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
   if (channel.type === "facebook" || channel.type === "instagram") {
@@ -914,13 +917,31 @@ async function handleSocialVideoSequence(
   for (const [index, slot] of slots.entries()) {
     const media = videoMap.get(slot) as Json | undefined;
     const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
-    await sendSocialPieces(db, channel, from, [media?.url
-      ? {
-        type: "video",
-        payload: { media_url: media.url, caption },
+    if (media?.url) {
+      try {
+        await sendSocialPieces(db, channel, from, [{
+          type: "video",
+          payload: { media_url: media.url, caption },
+        }]);
+      } catch (error) {
+        console.warn(
+          `vídeo social ${slot} falhou; enviando texto e continuando:`,
+          String(error).slice(0, 180),
+        );
+        await sendSocialPieces(db, channel, from, [{
+          type: "text",
+          payload: { content: caption },
+        }]);
       }
-      : { type: "text", payload: { content: caption } }]);
-    if (index < slots.length - 1) await pause(VIDEO_PAUSES_MS[index]);
+    } else {
+      await sendSocialPieces(db, channel, from, [{
+        type: "text",
+        payload: { content: caption },
+      }]);
+    }
+    if (index < slots.length - 1) {
+      await pause(SOCIAL_VIDEO_PAUSES_MS[index]);
+    }
   }
 
   await pause(4000);
