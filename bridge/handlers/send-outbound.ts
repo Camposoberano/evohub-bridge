@@ -388,7 +388,11 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (!res && !isWhatsapp) {
-    const socialMessages = renderSocialFunnelMessages(type, payload);
+    const socialMessages = renderSocialFunnelMessages(
+      type,
+      payload,
+      channel.type as "facebook" | "instagram",
+    );
     if (socialMessages.length === 0) {
       return json({ error: `conteúdo ${type} inválido para canal social` }, 400);
     }

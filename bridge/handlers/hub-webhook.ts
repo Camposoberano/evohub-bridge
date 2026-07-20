@@ -1565,11 +1565,14 @@ async function handleMessenger(db: Db, p: Json) {
     for (const m of ((entry.messaging ?? []) as Json[])) {
       const sender = (m.sender as Json)?.id as string | undefined;
       const message = m.message as Json | undefined;
-      if (!sender || !message) continue; // ignora delivery/read/postback sem texto
-      if (message.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
-      if (hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
-      const text = (message.text as string) ?? "[anexo]"; // TODO Fase 3: mídia/attachments
-      const quickReplyId = ((message.quick_reply as Json | undefined)?.payload as string | undefined) ?? "";
+      const postback = m.postback as Json | undefined;
+      if (!sender || (!message && !postback)) continue; // ignora delivery/read
+      if (message?.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
+      if (message && hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
+      const actionId = ((message?.quick_reply as Json | undefined)?.payload as string | undefined) ??
+        (postback?.payload as string | undefined) ?? "";
+      const text = (message?.text as string | undefined) ??
+        (postback?.title as string | undefined) ?? actionId ?? "[anexo]";
 
       // o webhook não manda o nome do remetente -- a Graph API devolve via GET /{id}?fields=name
       // mesmo quando o evento não traz (comum no Instagram). Sem isso, Chatwoot cria nome
@@ -1579,16 +1582,18 @@ async function handleMessenger(db: Db, p: Json) {
       await ingestInbound(db, channel as Json, {
         from: sender,
         name,
-        metaMessageId: (message.mid as string) ?? "",
+        metaMessageId: (message?.mid as string | undefined) ??
+          (postback?.mid as string | undefined) ??
+          `postback-${sender}-${String(entry.time ?? Date.now())}-${actionId}`,
         msgType: "text",
         content: text,
         acct,
       });
 
-      if (quickReplyId === "menu_preco") {
-        await handleMenuClick(db, channel as Json, sender, quickReplyId, acct);
-      } else if (/^(?:preco_|tam_|pag_)/.test(quickReplyId)) {
-        await handleSocialPrecoClick(db, channel as Json, sender, quickReplyId);
+      if (actionId === "menu_preco") {
+        await handleMenuClick(db, channel as Json, sender, actionId, acct);
+      } else if (/^(?:preco_|tam_|pag_)/.test(actionId)) {
+        await handleSocialPrecoClick(db, channel as Json, sender, actionId);
       }
     }
   }

@@ -40,6 +40,21 @@ Deno.test("funil social converte botões em respostas rápidas", () => {
   );
 });
 
+Deno.test("Facebook usa botões persistentes com postback", () => {
+  const messages = renderSocialFunnelMessages("interactive", {
+    text: "Qual área?",
+    buttons: [
+      { id: "tam_2kg", title: "Meio hectare" },
+      { id: "tam_4kg", title: "1 hectare" },
+    ],
+  }, "facebook");
+  const attachment = messages[0].message.attachment as Record<string, unknown>;
+  const payload = attachment.payload as Record<string, unknown>;
+  const buttons = payload.buttons as Record<string, unknown>[];
+  assert(payload.template_type === "button", "deve usar o template de botão");
+  assert(buttons[1].payload === "tam_4kg", "postback deve preservar a ação");
+});
+
 Deno.test("funil social converte lista em até treze respostas rápidas", () => {
   const rows = Array.from({ length: 15 }, (_, index) => ({
     id: `tema_${index}`,

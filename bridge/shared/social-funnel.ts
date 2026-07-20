@@ -18,6 +18,7 @@ function quickReplies(choices: Choice[]): Json[] {
 export function renderSocialFunnelMessages(
   type: string,
   payload: Json,
+  platform?: "facebook" | "instagram",
 ): SocialMessage[] {
   if (type === "text") {
     const content = String(payload.content ?? "").trim();
@@ -59,6 +60,26 @@ export function renderSocialFunnelMessages(
           },
         },
       });
+    }
+    if (platform === "facebook") {
+      result.push({
+        kind: "text",
+        message: {
+          attachment: {
+            type: "template",
+            payload: {
+              template_type: "button",
+              text,
+              buttons: buttons.slice(0, 3).map((button) => ({
+                type: "postback",
+                title: button.title.slice(0, 20),
+                payload: button.id,
+              })),
+            },
+          },
+        },
+      });
+      return result;
     }
     result.push({
       kind: "text",
