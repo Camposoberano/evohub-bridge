@@ -1,4 +1,7 @@
-import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
+import {
+  inferSocialPriceReply,
+  renderSocialFunnelMessages,
+} from "../shared/social-funnel.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 
 function assert(condition: boolean, message: string) {
@@ -78,4 +81,25 @@ Deno.test("as quatro recuperações possuem formato válido para Instagram", () 
     );
     assert(rendered.length > 0, `recuperação ${variation} deve ser entregável`);
   }
+});
+
+Deno.test("clique de preço sincronizado pelo Instagram recupera o payload", () => {
+  const prompt =
+    "Qual área o senhor pretende plantar? [Meio hectare / 1 hectare / 2 hectares ou mais]";
+  assert(
+    inferSocialPriceReply("1 hectare", prompt) === "tam_4kg",
+    "deve recuperar o pacote de 4 kg",
+  );
+  assert(
+    inferSocialPriceReply("2 hectares ou mais", prompt) ===
+      "preco_area_maior",
+    "deve abrir a segunda escolha de área",
+  );
+});
+
+Deno.test("texto comum não vira clique sem menu compatível", () => {
+  assert(
+    inferSocialPriceReply("1 hectare", "Bom dia, como posso ajudar?") === null,
+    "resposta comum não pode disparar preço",
+  );
 });

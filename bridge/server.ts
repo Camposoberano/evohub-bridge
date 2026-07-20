@@ -225,8 +225,10 @@ const version = {
     "meta-thread-control-terminal-block",
     "social-outgoing-single-claim",
     "social-recovery-and-video-macros",
+    "instagram-price-reply-payload-fallback",
+    "hybrid-price-button-title-fallback",
   ],
-  build: "2026-07-20-social-recovery-and-video-macros",
+  build: "2026-07-20-price-button-fallback",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

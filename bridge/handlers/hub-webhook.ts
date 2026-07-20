@@ -550,7 +550,7 @@ async function sendSocialPieces(
   }
 }
 
-async function handleSocialPrecoClick(
+export async function handleSocialPrecoClick(
   db: Db,
   channel: Json,
   from: string,

@@ -82,3 +82,44 @@ export function renderSocialFunnelMessages(
 
   return [];
 }
+
+function normalizeReply(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+export function inferSocialPriceReply(
+  reply: string,
+  previousInteractive: string,
+): string | null {
+  const answer = normalizeReply(reply);
+  const prompt = normalizeReply(previousInteractive);
+
+  if (prompt.includes("qual destas areas")) {
+    if (answer === "2 hectares") return "tam_10kg";
+    if (answer === "4 hectares ou mais") return "tam_20kg";
+    return null;
+  }
+
+  if (prompt.includes("qual area") || prompt.includes("tamanho da area")) {
+    if (answer === "meio hectare") return "tam_2kg";
+    if (answer === "1 hectare") return "tam_4kg";
+    if (answer === "2 hectares ou mais") return "preco_area_maior";
+    return null;
+  }
+
+  if (prompt.includes("posso garantir")) {
+    if (answer === "quero garantir") return "preco_comprar";
+    if (answer === "pagamento") return "preco_pagamento";
+    if (answer === "outra area") return "preco_tamanho";
+    return null;
+  }
+
+  if (prompt.includes("como o senhor prefere pagar")) {
+    if (answer === "pix") return "pag_pix";
+    if (answer === "cartao") return "pag_cartao";
+    if (answer === "boleto") return "pag_boleto";
+  }
+
+  return null;
+}

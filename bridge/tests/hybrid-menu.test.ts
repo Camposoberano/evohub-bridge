@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildHybridMenuFallback,
   buildHybridMenuPayload,
+  normalizeHybridButtonReply,
   normalizeHybridMenuClick,
 } from "../shared/hybrid-menu.ts";
 
@@ -34,6 +35,20 @@ Deno.test("cliques híbridos das recuperações voltam para o menu correto", () 
   assertEquals(normalizeHybridMenuClick("Ver nutrição 🧪"), "menu_nutricao");
   assertEquals(normalizeHybridMenuClick("Tirar uma dúvida"), "menu_humano");
   assertEquals(normalizeHybridMenuClick("menu_preco"), "menu_preco");
+});
+
+Deno.test("normaliza respostas exatas dos botões de preço", () => {
+  assertEquals(normalizeHybridButtonReply("1 hectare"), "tam_4kg");
+  assertEquals(
+    normalizeHybridButtonReply("2 hectares ou mais"),
+    "preco_area_maior",
+  );
+  assertEquals(
+    normalizeHybridButtonReply("🛒 Quero garantir"),
+    "preco_comprar",
+  );
+  assertEquals(normalizeHybridButtonReply("Cartão"), "pag_cartao");
+  assertEquals(normalizeHybridButtonReply("Tenho 1 hectare"), undefined);
 });
 
 Deno.test("menu híbrido tem fallback textual acionável", () => {

@@ -49,3 +49,26 @@ export function normalizeHybridMenuClick(
   ];
   return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ?? value;
 }
+
+export function normalizeHybridButtonReply(
+  value: string | undefined,
+): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
+    .toLowerCase();
+  const replies: Record<string, string> = {
+    "meio hectare": "tam_2kg",
+    "1 hectare": "tam_4kg",
+    "2 hectares ou mais": "preco_area_maior",
+    "2 hectares": "tam_10kg",
+    "4 hectares ou mais": "tam_20kg",
+    "quero garantir": "preco_comprar",
+    "pagamento": "preco_pagamento",
+    "outra area": "preco_tamanho",
+    "pix": "pag_pix",
+    "cartao": "pag_cartao",
+    "boleto": "pag_boleto",
+  };
+  return replies[normalized];
+}

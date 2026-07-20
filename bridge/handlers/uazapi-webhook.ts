@@ -17,7 +17,10 @@ import {
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
-import { normalizeHybridMenuClick } from "../shared/hybrid-menu.ts";
+import {
+  normalizeHybridButtonReply,
+  normalizeHybridMenuClick,
+} from "../shared/hybrid-menu.ts";
 import {
   handleMenuClick,
   handleNutricaoClick,
@@ -456,7 +459,6 @@ async function parseUazapiMessage(
     getString(getJson(messageContent, "singleSelectReply"), "selectedRowID"),
     getString(getJson(messageContent, "buttonReply"), "selectedButtonId"),
   );
-  const menuClickId = normalizeHybridMenuClick(rawMenuClickId);
   const msgType = firstString(
     getString(message, "mediaType"),
     getString(message, "messageType"),
@@ -477,6 +479,10 @@ async function parseUazapiMessage(
     getString(message, "body"),
     getString(context, "body"),
   ) ?? "";
+  // Algumas versões da UazAPI devolvem apenas o título visível do botão no
+  // conteúdo. Só títulos exatos de respostas são aceitos neste fallback.
+  const menuClickId = normalizeHybridMenuClick(rawMenuClickId) ??
+    normalizeHybridButtonReply(content);
 
   let attachments = await downloadUazapiAttachment(
     instanceToken,

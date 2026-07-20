@@ -12,6 +12,8 @@ import {
 } from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { inferSocialPriceReply } from "../shared/social-funnel.ts";
+import { handleSocialPrecoClick } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -283,10 +285,72 @@ async function syncInbound(
 
       if (ingest.inserted) result.inserted++;
       else if (ingest.reason === "duplicate") result.duplicates++;
+
+      if (ingest.inserted && !isFromPage && content) {
+        const inferredReply = await inferStoredSocialPriceReply(
+          db,
+          channel.id as string,
+          contactId,
+          content,
+          message.created_time as string | undefined,
+        );
+        if (inferredReply) {
+          try {
+            await handleSocialPrecoClick(
+              db,
+              channel,
+              contactId,
+              inferredReply,
+            );
+          } catch (error) {
+            console.error(
+              "sync-facebook preço por botão falhou:",
+              String(error).slice(0, 240),
+            );
+          }
+        }
+      }
     }
   }
 
   return result;
+}
+
+async function inferStoredSocialPriceReply(
+  db: Db,
+  channelId: string,
+  contactExternalId: string,
+  reply: string,
+  createdAt?: string,
+): Promise<string | null> {
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channelId)
+    .eq("external_contact_id", contactExternalId)
+    .maybeSingle();
+  if (!contact?.id) return null;
+
+  const { data: conversation } = await db.from("conversations").select("id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (!conversation?.id) return null;
+
+  let query = db.from("messages").select("content,created_at")
+    .eq("conversation_id", conversation.id)
+    .eq("direction", "out").eq("msg_type", "interactive")
+    .order("created_at", { ascending: false }).limit(1);
+  if (createdAt) query = query.lte("created_at", createdAt);
+  const { data: prompts } = await query;
+  const prompt = prompts?.[0];
+  if (!prompt?.content) return null;
+
+  const promptAt = Date.parse(prompt.created_at as string);
+  const replyAt = Date.parse(createdAt ?? new Date().toISOString());
+  if (
+    !Number.isFinite(promptAt) || !Number.isFinite(replyAt) ||
+    replyAt - promptAt > 24 * 60 * 60 * 1000
+  ) return null;
+
+  return inferSocialPriceReply(reply, prompt.content as string);
 }
 
 async function syncOutgoing(
