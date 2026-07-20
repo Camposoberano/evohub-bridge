@@ -5,6 +5,14 @@ export type SocialMessage = {
   kind: "text" | "image" | "video" | "audio";
 };
 
+export function socialPriceActionClaimKey(
+  channelId: string,
+  messageId: string,
+  actionId: string,
+): string {
+  return `social-price-action:${channelId}:${messageId}:${actionId}`;
+}
+
 type Choice = { id: string; title: string };
 
 function quickReplies(choices: Choice[]): Json[] {

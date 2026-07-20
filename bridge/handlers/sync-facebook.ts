@@ -12,7 +12,10 @@ import {
 } from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { inferSocialPriceReply } from "../shared/social-funnel.ts";
+import {
+  inferSocialPriceReply,
+  socialPriceActionClaimKey,
+} from "../shared/social-funnel.ts";
 import { handleSocialPrecoClick } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
@@ -286,7 +289,10 @@ async function syncInbound(
       if (ingest.inserted) result.inserted++;
       else if (ingest.reason === "duplicate") result.duplicates++;
 
-      if (ingest.inserted && !isFromPage && content) {
+      const messageAt = Date.parse(message.created_time as string ?? "");
+      const isRecentDuplicate = ingest.reason === "duplicate" &&
+        Number.isFinite(messageAt) && Date.now() - messageAt < 5 * 60_000;
+      if ((ingest.inserted || isRecentDuplicate) && !isFromPage && content) {
         const inferredReply = await inferStoredSocialPriceReply(
           db,
           channel.id as string,
@@ -296,12 +302,24 @@ async function syncInbound(
         );
         if (inferredReply) {
           try {
-            await handleSocialPrecoClick(
+            const claimed = await claimDelivery(
               db,
-              channel,
-              contactId,
-              inferredReply,
+              socialPriceActionClaimKey(
+                channel.id as string,
+                metaMessageId ??
+                  `sync-${contactId}-${String(message.created_time ?? "")}`,
+                inferredReply,
+              ),
+              "social-price-action",
             );
+            if (claimed) {
+              await handleSocialPrecoClick(
+                db,
+                channel,
+                contactId,
+                inferredReply,
+              );
+            }
           } catch (error) {
             console.error(
               "sync-facebook preço por botão falhou:",

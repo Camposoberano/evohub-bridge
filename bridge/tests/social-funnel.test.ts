@@ -1,6 +1,7 @@
 import {
   inferSocialPriceReply,
   renderSocialFunnelMessages,
+  socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 
@@ -120,5 +121,13 @@ Deno.test("texto comum não vira clique sem menu compatível", () => {
   assert(
     inferSocialPriceReply("1 hectare", "Bom dia, como posso ajudar?") === null,
     "resposta comum não pode disparar preço",
+  );
+});
+
+Deno.test("webhook e sincronizador compartilham a trava do clique social", () => {
+  const key = socialPriceActionClaimKey("canal", "mensagem", "preco_tamanho");
+  assert(
+    key === "social-price-action:canal:mensagem:preco_tamanho",
+    "a chave deve identificar evento e ação",
   );
 });

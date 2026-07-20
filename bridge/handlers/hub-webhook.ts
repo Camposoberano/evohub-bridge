@@ -27,6 +27,7 @@ import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { metaErrorDetail } from "../shared/meta-errors.ts";
+import { socialPriceActionClaimKey } from "../shared/social-funnel.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -1579,21 +1580,33 @@ async function handleMessenger(db: Db, p: Json) {
       // aleatório tipo "fragrant-feather-524".
       const name = await fetchSenderName(db, channel.id as string, sender);
 
+      const inboundEventId = (message?.mid as string | undefined) ??
+        (postback?.mid as string | undefined) ??
+        `postback-${sender}-${String(entry.time ?? Date.now())}-${actionId}`;
       await ingestInbound(db, channel as Json, {
         from: sender,
         name,
-        metaMessageId: (message?.mid as string | undefined) ??
-          (postback?.mid as string | undefined) ??
-          `postback-${sender}-${String(entry.time ?? Date.now())}-${actionId}`,
+        metaMessageId: inboundEventId,
         msgType: "text",
         content: text,
         acct,
       });
 
-      if (actionId === "menu_preco") {
-        await handleMenuClick(db, channel as Json, sender, actionId, acct);
-      } else if (/^(?:preco_|tam_|pag_)/.test(actionId)) {
-        await handleSocialPrecoClick(db, channel as Json, sender, actionId);
+      if (/^(?:menu_preco|preco_|tam_|pag_)/.test(actionId)) {
+        const claimed = await claimDelivery(
+          db,
+          socialPriceActionClaimKey(
+            channel.id as string,
+            inboundEventId,
+            actionId,
+          ),
+          "social-price-action",
+        );
+        if (claimed && actionId === "menu_preco") {
+          await handleMenuClick(db, channel as Json, sender, actionId, acct);
+        } else if (claimed) {
+          await handleSocialPrecoClick(db, channel as Json, sender, actionId);
+        }
       }
     }
   }
