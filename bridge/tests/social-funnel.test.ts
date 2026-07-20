@@ -91,6 +91,10 @@ Deno.test("clique de preço sincronizado pelo Instagram recupera o payload", () 
     "deve recuperar o pacote de 4 kg",
   );
   assert(
+    inferSocialPriceReply("@Meta AI 1 hectare", prompt) === "tam_4kg",
+    "deve ignorar o prefixo automático do Facebook",
+  );
+  assert(
     inferSocialPriceReply("2 hectares ou mais", prompt) ===
       "preco_area_maior",
     "deve abrir a segunda escolha de área",

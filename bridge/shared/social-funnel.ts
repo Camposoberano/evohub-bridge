@@ -94,31 +94,32 @@ export function inferSocialPriceReply(
 ): string | null {
   const answer = normalizeReply(reply);
   const prompt = normalizeReply(previousInteractive);
+  const selectedAnswer = answer.replace(/^meta ai\s+/, "");
 
   if (prompt.includes("qual destas areas")) {
-    if (answer === "2 hectares") return "tam_10kg";
-    if (answer === "4 hectares ou mais") return "tam_20kg";
+    if (selectedAnswer === "2 hectares") return "tam_10kg";
+    if (selectedAnswer === "4 hectares ou mais") return "tam_20kg";
     return null;
   }
 
   if (prompt.includes("qual area") || prompt.includes("tamanho da area")) {
-    if (answer === "meio hectare") return "tam_2kg";
-    if (answer === "1 hectare") return "tam_4kg";
-    if (answer === "2 hectares ou mais") return "preco_area_maior";
+    if (selectedAnswer === "meio hectare") return "tam_2kg";
+    if (selectedAnswer === "1 hectare") return "tam_4kg";
+    if (selectedAnswer === "2 hectares ou mais") return "preco_area_maior";
     return null;
   }
 
   if (prompt.includes("posso garantir")) {
-    if (answer === "quero garantir") return "preco_comprar";
-    if (answer === "pagamento") return "preco_pagamento";
-    if (answer === "outra area") return "preco_tamanho";
+    if (selectedAnswer === "quero garantir") return "preco_comprar";
+    if (selectedAnswer === "pagamento") return "preco_pagamento";
+    if (selectedAnswer === "outra area") return "preco_tamanho";
     return null;
   }
 
   if (prompt.includes("como o senhor prefere pagar")) {
-    if (answer === "pix") return "pag_pix";
-    if (answer === "cartao") return "pag_cartao";
-    if (answer === "boleto") return "pag_boleto";
+    if (selectedAnswer === "pix") return "pag_pix";
+    if (selectedAnswer === "cartao") return "pag_cartao";
+    if (selectedAnswer === "boleto") return "pag_boleto";
   }
 
   return null;

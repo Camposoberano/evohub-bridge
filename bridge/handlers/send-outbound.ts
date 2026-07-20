@@ -34,6 +34,7 @@ import {
 } from "../shared/hybrid.ts";
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
+import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 
 type Json = Record<string, unknown>;
 
@@ -135,10 +136,7 @@ export async function handle(req: Request): Promise<Response> {
 
   // Anti-dup: n8n cron pode chamar send-outbound 2x pra mesma scheduled_message se o envio
   // demora mais que o intervalo do cron (60s). Claim atômico por conteúdo+conversa (2min TTL).
-  const contentHash = JSON.stringify(payload).slice(0, 200);
-  const claimKey = `send-out-${cwConvId}-${type}-${contentHash.length}-${
-    contentHash.slice(0, 60)
-  }`;
+  const claimKey = outboundClaimKey(cwConvId, type, payload);
   if (!await claimDelivery(db, claimKey, "send-outbound")) {
     console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
     return json({ ok: true, deduplicated: true });
