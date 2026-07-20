@@ -1,11 +1,15 @@
 // sync-facebook — fallback por pull para Messenger/Instagram quando o webhook de
 // mensagens da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
-import { admin } from "../shared/supabase.ts";
+import { admin, claimDelivery } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { metaDeliveryStatus } from "../shared/meta-errors.ts";
 import { getMeta, sendMeta } from "../shared/hub.ts";
-import { ingestInbound, type InboundAttachment, repairInboundMedia } from "../shared/inbound.ts";
+import {
+  type InboundAttachment,
+  ingestInbound,
+  repairInboundMedia,
+} from "../shared/inbound.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 
@@ -14,7 +18,9 @@ type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 export async function handle(req: Request): Promise<Response> {
-  if (!["GET", "POST"].includes(req.method)) return json({ error: "method not allowed" }, 405);
+  if (!["GET", "POST"].includes(req.method)) {
+    return json({ error: "method not allowed" }, 405);
+  }
 
   const url = new URL(req.url);
   if (!isAuthorized(req, url)) return json({ error: "unauthorized" }, 401);
@@ -27,14 +33,18 @@ export async function handle(req: Request): Promise<Response> {
 
   const db = admin();
   let query = db.from("channels")
-    .select("id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier")
+    .select(
+      "id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier",
+    )
     .in("type", ["facebook", "instagram"])
     .eq("status", "active");
   if (channelId) query = query.eq("id", channelId);
 
   const { data: rawChannels, error: channelError } = await query;
   if (channelError) return json({ error: channelError.message }, 500);
-  const channels = (rawChannels ?? []).filter((c: Json) => (c.type === "instagram" ? c.ig_id : c.page_id));
+  const channels = (rawChannels ?? []).filter((
+    c: Json,
+  ) => (c.type === "instagram" ? c.ig_id : c.page_id));
 
   const totals = {
     channels: channels?.length ?? 0,
@@ -62,9 +72,15 @@ export async function handle(req: Request): Promise<Response> {
       // tolerar clock skew). since_minutes só vira o piso quando o canal não tem msg nenhuma
       // ainda. Sem isso, um gap (deploy, instabilidade) maior que a janela perdia msg pra sempre.
       const lastMs = await lastMessageMs(db, channel.id as string);
-      const channelCutoffMs = lastMs ? Math.min(lastMs - 120_000, cutoffMs) : cutoffMs;
+      const channelCutoffMs = lastMs
+        ? Math.min(lastMs - 120_000, cutoffMs)
+        : cutoffMs;
 
-      const inbound = await syncInbound(db, channel as Json, { cutoffMs: channelCutoffMs, conversationLimit, messageLimit }, acct);
+      const inbound = await syncInbound(db, channel as Json, {
+        cutoffMs: channelCutoffMs,
+        conversationLimit,
+        messageLimit,
+      }, acct);
       totals.conversations_scanned += inbound.conversations_scanned;
       totals.inbound_found += inbound.inbound_found;
       totals.inserted += inbound.inserted;
@@ -75,32 +91,50 @@ export async function handle(req: Request): Promise<Response> {
       totals.media_repaired += inbound.media_repaired;
       totals.media_failed += inbound.media_failed;
 
-      const outgoing = await syncOutgoing(db, channel as Json, { cutoffMs: channelCutoffMs, messageLimit }, acct);
+      const outgoing = await syncOutgoing(db, channel as Json, {
+        cutoffMs: channelCutoffMs,
+        messageLimit,
+      }, acct);
       totals.outgoing_found += outgoing.outgoing_found;
       totals.outgoing_sent += outgoing.outgoing_sent;
       totals.outgoing_duplicates += outgoing.outgoing_duplicates;
       totals.outgoing_failed += outgoing.outgoing_failed;
       totals.stale_conversations += outgoing.stale_conversations;
-      await db.from("channels").update({ last_error: null }).eq("id", channel.id);
+      await db.from("channels").update({ last_error: null }).eq(
+        "id",
+        channel.id,
+      );
     } catch (e) {
       const message = errorMessage(e);
       totals.errors.push(`${channel.name ?? channel.id}: ${message}`);
-      await db.from("channels").update({ last_error: message }).eq("id", channel.id);
+      await db.from("channels").update({ last_error: message }).eq(
+        "id",
+        channel.id,
+      );
     }
   }
 
   await db.from("events").insert({
     source: "sync-facebook",
     event_type: "sync_completed",
-    payload: { ...totals, since_minutes: sinceMinutes, conversation_limit: conversationLimit, message_limit: messageLimit },
+    payload: {
+      ...totals,
+      since_minutes: sinceMinutes,
+      conversation_limit: conversationLimit,
+      message_limit: messageLimit,
+    },
   });
 
   return json(totals);
 }
 
-async function lastMessageMs(db: Db, channelId: string): Promise<number | null> {
+async function lastMessageMs(
+  db: Db,
+  channelId: string,
+): Promise<number | null> {
   const { data } = await db.from("messages").select("sent_at")
-    .eq("channel_id", channelId).order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    .eq("channel_id", channelId).order("sent_at", { ascending: false }).limit(1)
+    .maybeSingle();
   const sentAt = data?.sent_at as string | undefined;
   if (!sentAt) return null;
   const ms = Date.parse(sentAt);
@@ -114,8 +148,12 @@ async function syncInbound(
   acct: Awaited<ReturnType<typeof accountForChannel>>,
 ) {
   const isInstagram = channel.type === "instagram";
-  const nodeId = (isInstagram ? channel.ig_id : channel.page_id) as string | undefined;
-  const inboxIdentifier = channel.chatwoot_inbox_identifier as string | undefined;
+  const nodeId = (isInstagram ? channel.ig_id : channel.page_id) as
+    | string
+    | undefined;
+  const inboxIdentifier = channel.chatwoot_inbox_identifier as
+    | string
+    | undefined;
   if (!nodeId) throw new Error("canal sem page_id/ig_id");
   if (!inboxIdentifier) throw new Error("canal sem inbox Chatwoot");
 
@@ -129,8 +167,15 @@ async function syncInbound(
   const platformSuffix = isInstagram ? "&platform=instagram" : "";
   const conversationsPath =
     `${nodeId}/conversations?fields=id,updated_time,message_count,participants&limit=${opts.conversationLimit}${platformSuffix}`;
-  const convRes = await getMeta(secret.channel_token as string, conversationsPath);
-  if (!convRes.ok) throw new Error(`Meta conversations ${convRes.status}: ${JSON.stringify(convRes.data)}`);
+  const convRes = await getMeta(
+    secret.channel_token as string,
+    conversationsPath,
+  );
+  if (!convRes.ok) {
+    throw new Error(
+      `Meta conversations ${convRes.status}: ${JSON.stringify(convRes.data)}`,
+    );
+  }
 
   const conversations = ((convRes.data as Json).data ?? []) as Json[];
   const result = {
@@ -153,9 +198,14 @@ async function syncInbound(
     const messagesPath =
       `${conversation.id}/messages?fields=id,from,to,message,created_time,attachments&limit=${opts.messageLimit}`;
     const msgRes = await getMeta(secret.channel_token as string, messagesPath);
-    if (!msgRes.ok) throw new Error(`Meta messages ${msgRes.status}: ${JSON.stringify(msgRes.data)}`);
+    if (!msgRes.ok) {
+      throw new Error(
+        `Meta messages ${msgRes.status}: ${JSON.stringify(msgRes.data)}`,
+      );
+    }
 
-    const messages = (((msgRes.data as Json).data ?? []) as Json[]).slice().reverse();
+    const messages = (((msgRes.data as Json).data ?? []) as Json[]).slice()
+      .reverse();
     for (const message of messages) {
       const createdMs = Date.parse(message.created_time as string);
       if (!Number.isNaN(createdMs) && createdMs < opts.cutoffMs) continue;
@@ -169,7 +219,9 @@ async function syncInbound(
       let contactId = senderId;
       let contactName = from.name as string | undefined;
       if (isFromPage) {
-        const to = (((message.to as Json)?.data as Json[]) ?? [])[0] as Json | undefined;
+        const to = (((message.to as Json)?.data as Json[]) ?? [])[0] as
+          | Json
+          | undefined;
         contactId = (to?.id as string | undefined) ?? "";
         contactName = to?.name as string | undefined;
         if (!contactId) continue; // sem destinatário identificável
@@ -178,7 +230,9 @@ async function syncInbound(
       result.inbound_found++;
       const metaMessageId = message.id as string | undefined;
       if (metaMessageId) {
-        const { data: existingMessages, error: existingError } = await db.from("messages")
+        const { data: existingMessages, error: existingError } = await db.from(
+          "messages",
+        )
           .select("id,content,media_url")
           .eq("meta_message_id", metaMessageId)
           .limit(1);
@@ -187,14 +241,22 @@ async function syncInbound(
         if (existingMessage?.id) {
           const metaAttachments = extractAttachments(message);
           if (!existingMessage.media_url && metaAttachments.length > 0) {
-            const attachments = await downloadAttachments(metaAttachments, result);
+            const attachments = await downloadAttachments(
+              metaAttachments,
+              result,
+            );
             const msgType = inboundMsgType(message, attachments);
-            const content = (message.message as string | undefined)?.trim() || fallbackContent(msgType);
-            const repair = await repairInboundMedia(db, existingMessage.id as string, {
-              msgType,
-              content,
-              attachments,
-            });
+            const content = (message.message as string | undefined)?.trim() ||
+              fallbackContent(msgType);
+            const repair = await repairInboundMedia(
+              db,
+              existingMessage.id as string,
+              {
+                msgType,
+                content,
+                attachments,
+              },
+            );
             if (repair.repaired) result.media_repaired++;
           }
           result.duplicates++;
@@ -205,7 +267,8 @@ async function syncInbound(
       const metaAttachments = extractAttachments(message);
       const attachments = await downloadAttachments(metaAttachments, result);
       const msgType = inboundMsgType(message, attachments);
-      const content = (message.message as string | undefined)?.trim() || fallbackContent(msgType);
+      const content = (message.message as string | undefined)?.trim() ||
+        fallbackContent(msgType);
       const ingest = await ingestInbound(db, channel, {
         from: contactId,
         name: contactName,
@@ -239,7 +302,9 @@ async function syncOutgoing(
   if (secretError) throw secretError;
   if (!secret?.channel_token) throw new Error("canal sem token");
 
-  const { data: conversations, error: convError } = await db.from("conversations")
+  const { data: conversations, error: convError } = await db.from(
+    "conversations",
+  )
     .select("*, contacts(*)")
     .eq("channel_id", channel.id)
     .neq("status", "resolved")
@@ -248,24 +313,34 @@ async function syncOutgoing(
   if (convError) throw convError;
 
   const result = {
-    outgoing_found: 0, outgoing_sent: 0, outgoing_duplicates: 0,
-    outgoing_failed: 0, stale_conversations: 0,
+    outgoing_found: 0,
+    outgoing_sent: 0,
+    outgoing_duplicates: 0,
+    outgoing_failed: 0,
+    stale_conversations: 0,
   };
 
   for (const conversation of conversations ?? []) {
-    const cwConversationId = conversation.chatwoot_conversation_id as number | undefined;
+    const cwConversationId = conversation.chatwoot_conversation_id as
+      | number
+      | undefined;
     const contact = conversation.contacts as Json | undefined;
     const to = contact?.external_contact_id as string | undefined;
     if (!cwConversationId || !to) continue;
 
     let messages: Json[];
     try {
-      messages = (await listConversationMessages(cwConversationId, acct)).slice(-opts.messageLimit);
+      messages = (await listConversationMessages(cwConversationId, acct)).slice(
+        -opts.messageLimit,
+      );
     } catch (error) {
       // Conversas apagadas durante limpeza não podem interromper o canal inteiro.
       if (errorMessage(error).includes(" 404:")) {
         result.stale_conversations++;
-        await db.from("conversations").update({ status: "resolved" }).eq("id", conversation.id);
+        await db.from("conversations").update({ status: "resolved" }).eq(
+          "id",
+          conversation.id,
+        );
         continue;
       }
       throw error;
@@ -281,7 +356,9 @@ async function syncOutgoing(
 
       result.outgoing_found++;
 
-      const { data: existingMessages, error: existingError } = await db.from("messages")
+      const { data: existingMessages, error: existingError } = await db.from(
+        "messages",
+      )
         .select("id,status")
         .eq("direction", "out")
         .eq("chatwoot_message_id", cwMessageId)
@@ -295,7 +372,24 @@ async function syncOutgoing(
         continue;
       }
 
-      const sent = await sendMessenger(secret.channel_token as string, to, content);
+      // O webhook do Chatwoot e este fallback podem observar a mesma mensagem ao
+      // mesmo tempo. Ambos precisam disputar o mesmo claim antes de chamar a Meta;
+      // consultar `messages` sozinho não evita a corrida entre processos/containers.
+      const claimed = await claimDelivery(
+        db,
+        `cw-out-${cwMessageId}`,
+        "sync-facebook",
+      );
+      if (!claimed) {
+        result.outgoing_duplicates++;
+        continue;
+      }
+
+      const sent = await sendMessenger(
+        secret.channel_token as string,
+        to,
+        content,
+      );
       const payload = {
         conversation_id: conversation.id,
         channel_id: channel.id,
@@ -309,10 +403,13 @@ async function syncOutgoing(
       };
 
       if (existing?.id) {
-        const { error: updateError } = await db.from("messages").update(payload).eq("id", existing.id);
+        const { error: updateError } = await db.from("messages").update(payload)
+          .eq("id", existing.id);
         if (updateError) throw updateError;
       } else {
-        const { error: insertError } = await db.from("messages").insert(payload);
+        const { error: insertError } = await db.from("messages").insert(
+          payload,
+        );
         if (insertError) throw insertError;
       }
 
@@ -360,7 +457,9 @@ async function downloadAttachments(
   return attachments;
 }
 
-async function downloadAttachment(metaAttachment: Json): Promise<InboundAttachment | null> {
+async function downloadAttachment(
+  metaAttachment: Json,
+): Promise<InboundAttachment | null> {
   const sourceUrl = attachmentUrl(metaAttachment);
   if (!sourceUrl) return null;
 
@@ -399,7 +498,10 @@ function extractAttachments(message: Json): Json[] {
   return Array.isArray(data) ? data as Json[] : [];
 }
 
-function inboundMsgType(message: Json, attachments: InboundAttachment[]): string {
+function inboundMsgType(
+  message: Json,
+  attachments: InboundAttachment[],
+): string {
   const text = (message.message as string | undefined)?.trim();
   if (text && attachments.length === 0) return "text";
 
@@ -415,7 +517,10 @@ function msgTypeFromMime(mime: string): string {
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("audio/")) return "audio";
   if (mime.startsWith("video/")) return "video";
-  if (mime.includes("pdf") || mime.includes("document") || mime.includes("sheet") || mime.includes("presentation")) {
+  if (
+    mime.includes("pdf") || mime.includes("document") ||
+    mime.includes("sheet") || mime.includes("presentation")
+  ) {
     return "document";
   }
   return "unknown";
@@ -441,8 +546,11 @@ function attachmentUrl(metaAttachment: Json): string | null {
 }
 
 function attachmentFilename(metaAttachment: Json, contentType: string): string {
-  const base = stringValue(metaAttachment.name) ?? stringValue(metaAttachment.id) ?? "attachment";
-  const clean = base.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) || "attachment";
+  const base = stringValue(metaAttachment.name) ??
+    stringValue(metaAttachment.id) ?? "attachment";
+  const clean =
+    base.replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 120) ||
+    "attachment";
   if (/\.[A-Za-z0-9]{2,5}$/.test(clean)) return clean;
   return `${clean}${extensionForMime(contentType)}`;
 }
@@ -486,7 +594,11 @@ function errorMessage(error: unknown): string {
   }
 }
 
-async function sendMessenger(channelToken: string, to: string, content: string) {
+async function sendMessenger(
+  channelToken: string,
+  to: string,
+  content: string,
+) {
   const res = await sendMeta(channelToken, "me/messages", {
     recipient: { id: to },
     message: { text: content },
@@ -509,12 +621,21 @@ function isAuthorized(req: Request, url: URL): boolean {
   return timingSafeEqual(token, expected);
 }
 
-function intParam(url: URL, key: string, fallback: number, min: number, max: number): number {
+function intParam(
+  url: URL,
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
   const raw = Number(url.searchParams.get(key) ?? fallback);
   if (!Number.isFinite(raw)) return fallback;
   return Math.min(max, Math.max(min, Math.trunc(raw)));
 }
 
 function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

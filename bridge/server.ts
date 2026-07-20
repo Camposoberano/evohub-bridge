@@ -223,8 +223,9 @@ const version = {
     "social-funnel-private-messages",
     "social-price-quick-replies",
     "meta-thread-control-terminal-block",
+    "social-outgoing-single-claim",
   ],
-  build: "2026-07-19-meta-thread-control-guard",
+  build: "2026-07-20-social-outgoing-single-claim",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
