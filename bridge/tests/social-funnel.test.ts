@@ -108,6 +108,35 @@ Deno.test("funil social converte lista em até treze respostas rápidas", () => 
   );
 });
 
+Deno.test("Facebook divide listas longas em botões persistentes", () => {
+  const rows = Array.from({ length: 10 }, (_, index) => ({
+    id: `tema_${index + 1}`,
+    title: `Tema ${index + 1}`,
+  }));
+  const messages = renderSocialFunnelMessages("list", {
+    text: "Escolha um tema",
+    sections: [{ rows }],
+  }, "facebook");
+  assert(messages.length === 4, "dez opções devem virar quatro blocos");
+  for (const message of messages) {
+    const attachment = message.message.attachment as Record<string, unknown>;
+    const payload = attachment.payload as Record<string, unknown>;
+    const buttons = payload.buttons as Record<string, unknown>[];
+    assert(payload.template_type === "button", "deve usar botão persistente");
+    assert(buttons.length <= 3, "cada bloco deve respeitar o limite da Meta");
+  }
+  const lastAttachment = messages[3].message.attachment as Record<
+    string,
+    unknown
+  >;
+  const lastPayload = lastAttachment.payload as Record<string, unknown>;
+  const lastButtons = lastPayload.buttons as Record<string, unknown>[];
+  assert(
+    lastButtons[0].payload === "tema_10",
+    "a última opção deve ser preservada",
+  );
+});
+
 Deno.test("funil social preserva vídeo e legenda", () => {
   const messages = renderSocialFunnelMessages("video", {
     media_url: "https://example.com/depoimento.mp4",

@@ -329,7 +329,9 @@ export async function handle(req: Request): Promise<Response> {
       },
     };
     const allRows = sections.flatMap((s) => s.rows);
-    registroTexto = text + " [" + allRows.map((r) => r.title).join(" / ") + "]";
+    registroTexto = isWhatsapp
+      ? text + " [" + allRows.map((r) => r.title).join(" / ") + "]"
+      : `${text}\n[${allRows.length} opções enviadas como botões]`;
   } else {
     return json({ error: "tipo desconhecido: " + type }, 400);
   }

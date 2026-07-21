@@ -128,6 +128,31 @@ export function renderSocialFunnelMessages(
     }[];
     const rows = sections.flatMap((section) => section.rows ?? []);
     if (!text || rows.length === 0) return [];
+    if (platform === "facebook") {
+      const groups: Choice[][] = [];
+      for (let index = 0; index < rows.length; index += 3) {
+        groups.push(rows.slice(index, index + 3));
+      }
+      return groups.map((group, index) => ({
+        kind: "text",
+        message: {
+          attachment: {
+            type: "template",
+            payload: {
+              template_type: "button",
+              text: index === 0
+                ? text
+                : `Mais opções (${index + 1}/${groups.length})`,
+              buttons: group.map((row) => ({
+                type: "postback",
+                title: row.title.slice(0, 20),
+                payload: row.id,
+              })),
+            },
+          },
+        },
+      }));
+    }
     return [{
       kind: "text",
       message: { text, quick_replies: quickReplies(rows) },
