@@ -16,7 +16,12 @@ import {
   inferSocialPriceReplyFromPrompts,
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
-import { handleSocialPrecoClick } from "./hub-webhook.ts";
+import { inferSocialMenuAction } from "../shared/social-sales.ts";
+import {
+  handleMenuClick,
+  handleSocialPrecoClick,
+  handleSocialSalesIntent,
+} from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -293,6 +298,7 @@ async function syncInbound(
       const isRecentDuplicate = ingest.reason === "duplicate" &&
         Number.isFinite(messageAt) && Date.now() - messageAt < 5 * 60_000;
       if ((ingest.inserted || isRecentDuplicate) && !isFromPage && content) {
+        const menuAction = inferSocialMenuAction(content);
         const inferredReply = await inferStoredSocialPriceReply(
           db,
           channel.id as string,
@@ -300,7 +306,46 @@ async function syncInbound(
           content,
           message.created_time as string | undefined,
         );
-        if (inferredReply) {
+        if (menuAction) {
+          try {
+            const eventId = metaMessageId ??
+              `sync-${contactId}-${String(message.created_time ?? "")}`;
+            if (menuAction === "menu_humano") {
+              await handleSocialSalesIntent(
+                db,
+                channel,
+                contactId,
+                content,
+                eventId,
+                "contact",
+              );
+            } else {
+              const claimed = await claimDelivery(
+                db,
+                socialPriceActionClaimKey(
+                  channel.id as string,
+                  eventId,
+                  menuAction,
+                ),
+                "social-menu-action",
+              );
+              if (claimed) {
+                await handleMenuClick(
+                  db,
+                  channel,
+                  contactId,
+                  menuAction,
+                  acct,
+                );
+              }
+            }
+          } catch (error) {
+            console.error(
+              "sync-facebook menu comercial falhou:",
+              String(error).slice(0, 240),
+            );
+          }
+        } else if (inferredReply) {
           try {
             const claimed = await claimDelivery(
               db,
@@ -325,6 +370,22 @@ async function syncInbound(
           } catch (error) {
             console.error(
               "sync-facebook preço por botão falhou:",
+              String(error).slice(0, 240),
+            );
+          }
+        } else {
+          try {
+            await handleSocialSalesIntent(
+              db,
+              channel,
+              contactId,
+              content,
+              metaMessageId ??
+                `sync-${contactId}-${String(message.created_time ?? "")}`,
+            );
+          } catch (error) {
+            console.error(
+              "sync-facebook intenção comercial falhou:",
               String(error).slice(0, 240),
             );
           }

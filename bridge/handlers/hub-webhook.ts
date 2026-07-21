@@ -12,7 +12,12 @@ import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
 import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
+import {
+  createConversationMessage,
+  getConversationLabels,
+  setConversationLabels,
+  type CwAcct,
+} from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
 import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
@@ -28,6 +33,15 @@ import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { metaErrorDetail } from "../shared/meta-errors.ts";
 import { socialPriceActionClaimKey } from "../shared/social-funnel.ts";
+import {
+  inferSocialSalesIntent,
+  salesContactImageFallback,
+  salesWhatsAppUrl,
+  SOCIAL_INFO_TEXT,
+  socialContactText,
+  socialSalesClaimKey,
+  type SocialSalesIntent,
+} from "../shared/social-sales.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -618,6 +632,13 @@ export async function handleSocialPrecoClick(
       type: "text",
       payload: { content: paymentText[id] },
     }], actionScope);
+    if (id === "preco_comprar") {
+      await markSocialLead(db, channel, from, [
+        "lead-quente",
+        "qualificado",
+        "fechamento-pendente",
+      ], "Cliente clicou em Quero garantir. Prioridade máxima para concluir o pedido.");
+    }
     return;
   }
 
@@ -650,6 +671,126 @@ export async function handleSocialPrecoClick(
     },
   );
   await sendSocialPieces(db, channel, from, pieces, actionScope);
+}
+
+async function resolveSocialConversation(db: Db, channel: Json, from: string) {
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  return conv as Json | null;
+}
+
+async function markSocialLead(
+  db: Db,
+  channel: Json,
+  from: string,
+  addedLabels: string[],
+  note: string,
+): Promise<void> {
+  const conv = await resolveSocialConversation(db, channel, from);
+  const cwConvId = Number(conv?.chatwoot_conversation_id);
+  if (!cwConvId) return;
+  const acct = await accountForChannel(channel.id as string);
+  try {
+    const labels = await getConversationLabels(cwConvId, acct);
+    await setConversationLabels(
+      cwConvId,
+      [...new Set([...labels, ...addedLabels])],
+      acct,
+    );
+    await createConversationMessage(cwConvId, {
+      content: `${
+        addedLabels.includes("lead-quente") ? "🔥 *LEAD QUENTE*" : "📥 *NOVO LEAD*"
+      } — ${note}`,
+      messageType: "outgoing",
+      private: true,
+    }, acct);
+  } catch (error) {
+    console.warn("qualificação social falhou:", String(error).slice(0, 180));
+  }
+  await db.from("events").insert({
+    source: "social-sales",
+    event_type: "lead_qualified",
+    channel_id: channel.id,
+    payload: {
+      conversation_id: conv?.id ?? null,
+      chatwoot_conversation_id: cwConvId,
+      external_contact_id: from,
+      labels: addedLabels,
+      note,
+    },
+  });
+}
+
+export async function handleSocialSalesIntent(
+  db: Db,
+  channel: Json,
+  from: string,
+  text: string,
+  messageId: string,
+  forcedIntent?: SocialSalesIntent,
+): Promise<boolean> {
+  const intent = forcedIntent ?? inferSocialSalesIntent(text);
+  if (!intent) return false;
+  const claimed = await claimDelivery(
+    db,
+    socialSalesClaimKey(channel.id as string, messageId, intent),
+    "social-sales",
+  );
+  if (!claimed) return true;
+
+  try {
+    if (intent === "contact") {
+      const whatsappUrl = salesWhatsAppUrl();
+      const { data: media } = await db.from("funnel_media").select("url")
+        .eq("funnel", "mega-sorgo").eq("active", true)
+        .like("url", "%/campo.png").limit(1).maybeSingle();
+      await sendSocialPieces(db, channel, from, [{
+        type: "interactive",
+        payload: {
+          card_title: "Fale com a Campo Soberano",
+          header_image: media?.url ?? salesContactImageFallback(),
+          text: socialContactText(whatsappUrl),
+          buttons: [{
+            id: "contact_whatsapp",
+            title: "Chamar no WhatsApp",
+            url: whatsappUrl,
+          }],
+        },
+      }], `social-contact:${messageId}`);
+      await markSocialLead(db, channel, from, [
+        "lead-quente",
+        "pediu-contato",
+      ], "Cliente pediu contato com o Cícero. Responder o quanto antes.");
+    } else {
+      await sendSocialPieces(db, channel, from, [{
+        type: "interactive",
+        payload: {
+          text: SOCIAL_INFO_TEXT,
+          buttons: [
+            { id: "menu_preco", title: "Ver preço" },
+            { id: "menu_depoimento", title: "Ver vídeos" },
+            { id: "menu_humano", title: "Falar com Cícero" },
+          ],
+        },
+      }], `social-info:${messageId}`);
+      await markSocialLead(db, channel, from, [
+        "lead-novo",
+        "pediu-informacao",
+      ], "Cliente pediu informações e recebeu o menu comercial inicial.");
+    }
+    return true;
+  } catch (error) {
+    await releaseDelivery(
+      db,
+      socialSalesClaimKey(channel.id as string, messageId, intent),
+    );
+    throw error;
+  }
 }
 
 // clique nos botões da sequência de preço.
@@ -1606,7 +1747,7 @@ async function handleMessenger(db: Db, p: Json) {
         acct,
       });
 
-      if (/^(?:menu_preco|preco_|tam_|pag_)/.test(actionId)) {
+      if (/^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_)/.test(actionId)) {
         const claimed = await claimDelivery(
           db,
           socialPriceActionClaimKey(
@@ -1616,7 +1757,7 @@ async function handleMessenger(db: Db, p: Json) {
           ),
           "social-price-action",
         );
-        if (claimed && actionId === "menu_preco") {
+        if (claimed && actionId.startsWith("menu_")) {
           await handleMenuClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed) {
           await handleSocialPrecoClick(
@@ -1627,6 +1768,23 @@ async function handleMessenger(db: Db, p: Json) {
             inboundEventId,
           );
         }
+      } else if (actionId === "menu_humano") {
+        await handleSocialSalesIntent(
+          db,
+          channel as Json,
+          sender,
+          text,
+          inboundEventId,
+          "contact",
+        );
+      } else if (!actionId) {
+        await handleSocialSalesIntent(
+          db,
+          channel as Json,
+          sender,
+          text,
+          inboundEventId,
+        );
       }
     }
   }

@@ -236,8 +236,10 @@ const version = {
     "social-click-scoped-dedup",
     "social-other-area-reply-recognition",
     "social-reply-recent-prompt-search",
+    "social-sales-contact-card",
+    "social-sales-lead-qualification",
   ],
-  build: "2026-07-21-social-recent-prompt-search",
+  build: "2026-07-21-social-sales-contact-card",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

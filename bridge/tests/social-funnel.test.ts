@@ -57,6 +57,41 @@ Deno.test("Facebook usa botões persistentes com postback", () => {
   assert(buttons[1].payload === "tam_4kg", "postback deve preservar a ação");
 });
 
+Deno.test("cartão comercial usa imagem e botão externo no Facebook e Instagram", () => {
+  for (const platform of ["facebook", "instagram"] as const) {
+    const messages = renderSocialFunnelMessages("interactive", {
+      card_title: "Fale com a Campo Soberano",
+      header_image: "https://example.com/campo.png",
+      text: "Fale agora com o Cícero.",
+      buttons: [{
+        id: "contact_whatsapp",
+        title: "Chamar no WhatsApp",
+        url: "https://wa.me/5519999999999",
+      }],
+    }, platform);
+    assert(
+      messages[0].message.text === "Fale agora com o Cícero.",
+      "deve preservar o texto completo",
+    );
+    const attachment = messages[1].message.attachment as Record<
+      string,
+      unknown
+    >;
+    const payload = attachment.payload as Record<string, unknown>;
+    const elements = payload.elements as Record<string, unknown>[];
+    const buttons = elements[0].buttons as Record<string, unknown>[];
+    assert(
+      payload.template_type === "generic",
+      `${platform} deve usar cartão genérico`,
+    );
+    assert(
+      elements[0].image_url === "https://example.com/campo.png",
+      "deve preservar a imagem",
+    );
+    assert(buttons[0].type === "web_url", "deve usar botão de link externo");
+  }
+});
+
 Deno.test("funil social converte lista em até treze respostas rápidas", () => {
   const rows = Array.from({ length: 15 }, (_, index) => ({
     id: `tema_${index}`,

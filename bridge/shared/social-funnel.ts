@@ -13,7 +13,7 @@ export function socialPriceActionClaimKey(
   return `social-price-action:${channelId}:${messageId}:${actionId}`;
 }
 
-type Choice = { id: string; title: string };
+type Choice = { id: string; title: string; url?: string };
 
 function quickReplies(choices: Choice[]): Json[] {
   return choices.slice(0, 13).map((choice) => ({
@@ -58,6 +58,31 @@ export function renderSocialFunnelMessages(
     if (!text || buttons.length === 0) return [];
     const result: SocialMessage[] = [];
     const headerImage = String(payload.header_image ?? "").trim();
+    const urlButton = buttons.find((button) => String(button.url ?? "").trim());
+    if (urlButton) {
+      const element: Json = {
+        title: String(payload.card_title ?? "Campo Soberano").slice(0, 80),
+        subtitle: text.slice(0, 80),
+        buttons: [{
+          type: "web_url",
+          url: urlButton.url,
+          title: urlButton.title.slice(0, 20),
+        }],
+      };
+      if (headerImage) element.image_url = headerImage;
+      return [
+        { kind: "text", message: { text } },
+        {
+          kind: "text",
+          message: {
+            attachment: {
+              type: "template",
+              payload: { template_type: "generic", elements: [element] },
+            },
+          },
+        },
+      ];
+    }
     if (headerImage) {
       result.push({
         kind: "image",
