@@ -156,3 +156,14 @@ export function inferSocialPriceReply(
 
   return null;
 }
+
+export function inferSocialPriceReplyFromPrompts(
+  reply: string,
+  previousInteractives: string[],
+): string | null {
+  for (const prompt of previousInteractives) {
+    const inferred = inferSocialPriceReply(reply, prompt);
+    if (inferred) return inferred;
+  }
+  return null;
+}

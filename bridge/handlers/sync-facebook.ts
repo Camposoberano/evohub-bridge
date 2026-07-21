@@ -13,7 +13,7 @@ import {
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
-  inferSocialPriceReply,
+  inferSocialPriceReplyFromPrompts,
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
 import { handleSocialPrecoClick } from "./hub-webhook.ts";
@@ -357,20 +357,19 @@ async function inferStoredSocialPriceReply(
   let query = db.from("messages").select("content,created_at")
     .eq("conversation_id", conversation.id)
     .eq("direction", "out").eq("msg_type", "interactive")
-    .order("created_at", { ascending: false }).limit(1);
+    .order("created_at", { ascending: false }).limit(10);
   if (createdAt) query = query.lte("created_at", createdAt);
   const { data: prompts } = await query;
-  const prompt = prompts?.[0];
-  if (!prompt?.content) return null;
-
-  const promptAt = Date.parse(prompt.created_at as string);
   const replyAt = Date.parse(createdAt ?? new Date().toISOString());
-  if (
-    !Number.isFinite(promptAt) || !Number.isFinite(replyAt) ||
-    replyAt - promptAt > 24 * 60 * 60 * 1000
-  ) return null;
+  if (!Number.isFinite(replyAt)) return null;
 
-  return inferSocialPriceReply(reply, prompt.content as string);
+  const validPrompts = (prompts ?? []).filter((prompt: Json) => {
+    const promptAt = Date.parse(prompt.created_at as string);
+    return prompt.content && Number.isFinite(promptAt) &&
+      replyAt - promptAt <= 24 * 60 * 60 * 1000;
+  }).map((prompt: Json) => prompt.content as string);
+
+  return inferSocialPriceReplyFromPrompts(reply, validPrompts);
 }
 
 async function syncOutgoing(

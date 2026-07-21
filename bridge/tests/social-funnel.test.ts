@@ -1,5 +1,6 @@
 import {
   inferSocialPriceReply,
+  inferSocialPriceReplyFromPrompts,
   renderSocialFunnelMessages,
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
@@ -132,6 +133,18 @@ Deno.test("seletor de outra área reconhece todas as opções", () => {
     inferSocialPriceReply("2 hectares ou mais", prompt) ===
       "preco_area_maior",
     "deve abrir as áreas maiores",
+  );
+});
+
+Deno.test("botão antigo continua válido depois de abrir pagamento", () => {
+  const prompts = [
+    "Como o senhor prefere pagar? [PIX / Cartão / Boleto]",
+    "Posso garantir o seu? [Quero garantir / Pagamento / Outra área]",
+  ];
+  assert(
+    inferSocialPriceReplyFromPrompts("Quero garantir", prompts) ===
+      "preco_comprar",
+    "deve encontrar o card compatível além do último menu",
   );
 });
 
