@@ -73,7 +73,10 @@ anteriores sem uma regressao comprovada.
 - Texto, imagem, video, audio, interativo e lista possuem adaptacao social.
 - No Facebook, listas viram blocos de botoes persistentes.
 - No Instagram, listas viram respostas rapidas.
-- Audio social e enviado como anexo reproduzivel pela Meta, nao como bolha PTT.
+- Audio social no Facebook e enviado como anexo reproduzivel pela Meta, nao como bolha PTT.
+- No Instagram, a API rejeitou OGG e MP3 como anexo. O bridge converte para MP3 e,
+  quando a Meta ainda rejeita o anexo, envia um link publico reproduzivel sem perder
+  a etapa do funil. O fallback fica auditado como `instagram_audio_link_fallback`.
 - Audio nao recebe legenda; textos relacionados permanecem em mensagens separadas.
 - A protecao de duplicidade continua compartilhada entre webhook e sync.
 
@@ -101,6 +104,40 @@ anteriores sem uma regressao comprovada.
 - A primeira lista textual do Facebook nao exibiu botoes e foi rejeitada.
 - A correcao por botoes persistentes foi aplicada.
 - Usuario confirmou: `agora chegou os botao`.
+
+## Homologacao tecnica final em producao
+
+- Build ativo: `2026-07-21-instagram-audio-fallback`.
+- Commit ativo: `2c0ee85`.
+- Facebook, conversa de teste `#594`:
+  - botoes persistentes de plantio entregues;
+  - cliques `A semente`, `Como comecar`, `Plantio em linha` e `Plantio a lanco`
+    reconhecidos e respondidos;
+  - nutricao entregou PDF e quatro blocos de botoes;
+  - audio direto entregue pela Meta.
+- Instagram, conversa de teste `#284`:
+  - nutricao entregou PDF e quick replies;
+  - audio OGG original foi rejeitado pela Meta com subcodigo `2534080`;
+  - MP3 convertido tambem nao foi aceito como anexo nesse canal;
+  - fallback por link foi entregue, gravado com `status=sent` e `meta_message_id`;
+  - nenhuma etapa ficou silenciosamente perdida.
+- Suite local depois da correcao: 67 testes aprovados e zero falhas.
+
+## Infraestrutura de deploy
+
+- Producao atual esta no Coolify da Oracle:
+  - painel: `https://painelgeral.camposoberano.com.br`;
+  - aplicacao: `evohub-bridge`;
+  - UUID: `m8qf6ru2x75gukzozpsrssrm`;
+  - dominio: `https://cofre.camposoberano.com.br`.
+- O Coolify antigo em `coolify.institutobelem.com` possui uma copia com o mesmo
+  repositorio, mas nao atende o dominio de producao atual.
+- O `COOLIFY_DEPLOY_HOOK` local foi corrigido para a aplicacao da Oracle.
+- A API do Coolify exige `Authorization: Bearer <token>`; a URL do hook sozinha
+  retorna `Unauthenticated`.
+- O build do Coolify ainda recebe segredos como `ARG`, gerando alertas
+  `SecretsUsedInArgOrEnv`. Isso nao bloqueou a homologacao, mas deve ser tratado
+  como endurecimento de seguranca antes de uma auditoria externa.
 
 ## Validacao automatizada
 
@@ -130,8 +167,10 @@ Executar nesta ordem:
 3. Instagram - repetir plantio e nutricao.
    - Esperado: quick replies; aceitar espera de ate 30 segundos no sync.
 
-4. Rodar um funil completo de teste em cada canal social.
+4. Rodar um funil completo de teste em cada canal social depois de qualquer mudanca
+   de conteudo.
    - Confirmar ordem de texto, imagem, dois audios, video e menu final.
+   - No Instagram, aceitar audio por link enquanto a Meta rejeitar anexo de audio.
    - Confirmar que nao houve duplicacao.
 
 5. Fazer a auditoria de etiquetas de origem.
