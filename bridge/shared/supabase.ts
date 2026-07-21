@@ -26,12 +26,33 @@ export async function claimDelivery(
   source: string,
 ): Promise<boolean> {
   if (!deliveryId) return true; // sem id, não dá pra deduplicar — processa
-  const { error } = await db.from("deliveries").insert({ delivery_id: deliveryId, source });
+  const { error } = await db.from("deliveries").insert({
+    delivery_id: deliveryId,
+    source,
+  });
   if (error) {
     if ((error as { code?: string }).code === "23505") return false; // unique_violation
     throw error;
   }
   return true;
+}
+
+export async function claimDeliveryWithTtl(
+  db: DbClient,
+  deliveryId: string,
+  source: string,
+  ttlMs: number,
+  now = new Date(),
+): Promise<boolean> {
+  if (await claimDelivery(db, deliveryId, source)) return true;
+
+  const cutoff = new Date(now.getTime() - ttlMs).toISOString();
+  const { error: deleteError } = await db.from("deliveries").delete()
+    .eq("delivery_id", deliveryId)
+    .lt("received_at", cutoff);
+  if (deleteError) throw deleteError;
+
+  return await claimDelivery(db, deliveryId, source);
 }
 
 export async function releaseDelivery(

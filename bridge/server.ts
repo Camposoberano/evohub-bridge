@@ -232,8 +232,9 @@ const version = {
     "facebook-meta-ai-button-prefix",
     "facebook-persistent-postback-buttons",
     "social-price-postback-sync-handoff",
+    "outbound-dedup-real-2min-ttl",
   ],
-  build: "2026-07-20-facebook-complete-price-buttons",
+  build: "2026-07-21-outbound-dedup-ttl",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

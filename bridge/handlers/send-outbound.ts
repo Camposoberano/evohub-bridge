@@ -17,7 +17,11 @@
 //                     FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import {
+  admin,
+  claimDelivery,
+  claimDeliveryWithTtl,
+} from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import { windowState } from "../shared/window.ts";
@@ -75,7 +79,8 @@ export async function handle(req: Request): Promise<Response> {
   const isSocialComment = to.startsWith("cmt-fb-") || to.startsWith("cmt-ig-");
   if (!isWhatsapp && isSocialComment) {
     return json({
-      error: "funil disponível apenas em conversa privada do Facebook/Instagram",
+      error:
+        "funil disponível apenas em conversa privada do Facebook/Instagram",
       blocked: "comentario-publico",
     }, 422);
   }
@@ -137,7 +142,7 @@ export async function handle(req: Request): Promise<Response> {
   // Anti-dup: n8n cron pode chamar send-outbound 2x pra mesma scheduled_message se o envio
   // demora mais que o intervalo do cron (60s). Claim atômico por conteúdo+conversa (2min TTL).
   const claimKey = outboundClaimKey(cwConvId, type, payload);
-  if (!await claimDelivery(db, claimKey, "send-outbound")) {
+  if (!await claimDeliveryWithTtl(db, claimKey, "send-outbound", 2 * 60_000)) {
     console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
     return json({ ok: true, deduplicated: true });
   }
@@ -394,7 +399,10 @@ export async function handle(req: Request): Promise<Response> {
       channel.type as "facebook" | "instagram",
     );
     if (socialMessages.length === 0) {
-      return json({ error: `conteúdo ${type} inválido para canal social` }, 400);
+      return json(
+        { error: `conteúdo ${type} inválido para canal social` },
+        400,
+      );
     }
     for (const item of socialMessages) {
       const itemResult = await sendMeta(channelToken!, "me/messages", {
