@@ -43,6 +43,10 @@ import { handle as hybridOps } from "./handlers/hybrid-ops.ts";
 import { handle as funnelOps } from "./handlers/funnel-ops.ts";
 import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
 import { handle as funnelQueuePump } from "./handlers/funil-queue-pump.ts";
+import {
+  handle as operationalHealth,
+  runOperationalAudit,
+} from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 import { admin } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
@@ -93,6 +97,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/funnel-ops": funnelOps,
   "/repair-official-5895": repairOfficial5895,
   "/funil-queue-pump": funnelQueuePump,
+  "/operational-health": operationalHealth,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
@@ -241,8 +246,13 @@ const version = {
     "social-planting-nutrition-flows",
     "facebook-list-persistent-buttons",
     "instagram-audio-mp3-fallback",
+    "audio-transcription-provider-fallback",
+    "lead-source-attribution",
+    "lead-profile-autocapture",
+    "channel-owner-tracking",
+    "operational-monitor-7d",
   ],
-  build: "2026-07-21-instagram-audio-fallback",
+  build: "2026-07-21-lead-operations-monitor",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -742,6 +752,27 @@ function startFunnelRecoveryLoop() {
   );
 }
 
+function startOperationalMonitorLoop() {
+  const run = async () => {
+    try {
+      const result = await runOperationalAudit(admin());
+      console.log(
+        "operational-monitor:",
+        JSON.stringify({
+          ok: result.ok,
+          issues: result.issues,
+          checked_at: result.checked_at,
+        }),
+      );
+    } catch (error) {
+      console.error("operational-monitor erro:", error);
+    }
+  };
+  setTimeout(run, 90_000);
+  setInterval(run, 15 * 60_000);
+  console.log("operational-monitor loop ON (15min)");
+}
+
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
 } else {
@@ -758,5 +789,6 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startMacroCommandLoop();
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
+  startOperationalMonitorLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);

@@ -158,6 +158,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       sentAt: msg.sentAt,
       outgoing: msg.direction === "outgoing",
       acct,
+      referral: msg.referral,
     });
 
     if (msg.direction === "incoming") {
@@ -505,6 +506,7 @@ async function parseUazapiMessage(
     );
   }
 
+  const referral = adReferralPayload(message, context);
   return {
     from,
     name,
@@ -517,7 +519,8 @@ async function parseUazapiMessage(
     msgType,
     content,
     attachments,
-    fromAd: hasAdReferral(message, context),
+    fromAd: Boolean(referral) || hasAdReferral(message, context),
+    referral,
     menuClickId,
   };
 }
@@ -697,6 +700,28 @@ function hasAdReferral(message: Json, context: Json): boolean {
     getString(getJson(context, "referral"), "source_type"),
   )?.toLowerCase();
   return sourceType === "ad" || sourceType === "ads";
+}
+
+function adReferralPayload(message: Json, context: Json): Json | undefined {
+  const nestedMessage = getJson(message, "message");
+  const content = getJson(message, "content");
+  const direct = getJson(message, "referral") ?? getJson(context, "referral") ??
+    getJson(content, "referral") ?? getJson(nestedMessage, "referral");
+  if (direct) return direct;
+  const external =
+    getJson(getJson(message, "contextInfo"), "externalAdReply") ??
+      getJson(getJson(context, "contextInfo"), "externalAdReply") ??
+      getJson(getJson(content, "contextInfo"), "externalAdReply") ??
+      getJson(getJson(nestedMessage, "contextInfo"), "externalAdReply");
+  if (external) return { externalAdReply: external, source_type: "ad" };
+  const sourceType = firstString(
+    getString(message, "source_type"),
+    getString(context, "source_type"),
+  );
+  return sourceType?.toLowerCase() === "ad" ||
+      sourceType?.toLowerCase() === "ads"
+    ? { source_type: sourceType }
+    : undefined;
 }
 
 function firstString(...values: Array<unknown>): string | undefined {

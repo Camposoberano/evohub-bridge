@@ -11,7 +11,8 @@ export function fold(s: string): string {
 
 // "preço", "valor", "quanto custa/sai/fica/tá/é/vale", "custa", "orçamento", "tabela de preço".
 // "tabela" sozinha NÃO conta (colide com "tabela nutricional" do menu).
-const PRECO_RE = /(\bprecos?\b|\bvalor(es)?\b|\borcamento\b|quanto\s+(custa|sai|fica|ta|vale|e)\b|\bcusta\b|tabela\s+de\s+preco)/;
+const PRECO_RE =
+  /(\bprecos?\b|\bvalor(es)?\b|\borcamento\b|quanto\s+(custa|sai|fica|ta|vale|e)\b|\bcusta\b|tabela\s+de\s+preco)/;
 
 export function isPrecoIntent(text: string): boolean {
   const t = fold(text ?? "");
@@ -30,7 +31,8 @@ export function isVideoIntent(text: string): boolean {
 }
 
 // "como plantar", "como planta", "plantio", "manejo", "instrução de plantio".
-const PLANTIO_RE = /(\bcomo\s+planta[r]?\b|\bplantio\b|\bmanejo\b|\binstruc[ao]+\s+de\s+plantio\b|\baduba[cçr]\w*\b|\badubo\b|\bfertiliza[cçr]\w*\b)/;
+const PLANTIO_RE =
+  /(\bcomo\s+planta[r]?\b|\bplantio\b|\bmanejo\b|\binstruc[ao]+\s+de\s+plantio\b|\baduba[cçr]\w*\b|\badubo\b|\bfertiliza[cçr]\w*\b)/;
 
 export function isPlantioIntent(text: string): boolean {
   const t = fold(text ?? "");
@@ -40,7 +42,8 @@ export function isPlantioIntent(text: string): boolean {
 }
 
 // "nutricional", "nutrição", "bromatológica", "análise bromatológica", "composição nutricional", "tabela nutricional".
-const NUTRICAO_RE = /(\bnutri[cç][aã]o\b|\bnutricional\b|\bbromatol[oó]gica\b|\bcomposi[cç][aã]o\s+nutricional\b|\btabela\s+nutricional\b)/;
+const NUTRICAO_RE =
+  /(\bnutri[cç][aã]o\b|\bnutricional\b|\bbromatol[oó]gica\b|\bcomposi[cç][aã]o\s+nutricional\b|\btabela\s+nutricional\b)/;
 
 export function isNutricaoIntent(text: string): boolean {
   const t = fold(text ?? "");
@@ -51,7 +54,8 @@ export function isNutricaoIntent(text: string): boolean {
 
 // "bom dia", "boa tarde", "boa noite", "olá", "oi", "eai", "e aí", "vida boa", "opa", "hey".
 // Saudações genéricas que não casam com nenhum outro intent.
-const SAUDACAO_RE = /^(\s)*(bom\s+dia|boa\s+(tarde|noite)|ola|oi|eai|e\s+ai|vida\s+boa|opa|hey|hi|hello|pode\s+sim|tudo\s+bem|boa)(\s|[!?,.])*$/;
+const SAUDACAO_RE =
+  /^(\s)*(bom\s+dia|boa\s+(tarde|noite)|ola|oi|eai|e\s+ai|vida\s+boa|opa|hey|hi|hello|pode\s+sim|tudo\s+bem|boa)(\s|[!?,.])*$/;
 
 export function isSaudacaoIntent(text: string): boolean {
   const t = fold(text ?? "");
@@ -66,10 +70,18 @@ export function isSaudacaoIntent(text: string): boolean {
 // Transcreve áudio curto via provedor configurado. null se sem chave, áudio grande demais
 // ou erro (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
-export async function transcribeAudio(bytes: Uint8Array, contentType: string): Promise<string | null> {
+export async function transcribeAudio(
+  bytes: Uint8Array,
+  contentType: string,
+): Promise<string | null> {
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_AUDIO_BYTES) return null;
-  const provider = (optionalEnv("AUDIO_TRANSCRIBE_PROVIDER") ?? "openai").toLowerCase();
-  if (provider === "gemini") return await transcribeWithGemini(bytes, contentType);
+  const provider = (optionalEnv("AUDIO_TRANSCRIBE_PROVIDER") ?? "openai")
+    .toLowerCase();
+  if (provider === "gemini") {
+    const gemini = await transcribeWithGemini(bytes, contentType);
+    if (gemini) return gemini;
+    return await transcribeWithOpenAI(bytes, contentType);
+  }
   return await transcribeWithOpenAI(bytes, contentType);
 }
 
@@ -79,14 +91,17 @@ async function transcribeWithGemini(
 ): Promise<string | null> {
   const key = optionalEnv("GEMINI_API_KEY") ?? optionalEnv("GOOGLE_API_KEY");
   if (!key) return null;
-  const model = optionalEnv("GEMINI_TRANSCRIBE_MODEL") ?? "gemini-3.5-flash";
+  const primary = optionalEnv("GEMINI_TRANSCRIBE_MODEL") ?? "gemini-2.5-flash";
+  const fallback = optionalEnv("AUDIO_TRANSCRIBE_FALLBACK_MODEL") ??
+    "gemini-2.5-flash";
+  const models = [...new Set([primary, fallback].filter(Boolean))];
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const body = JSON.stringify({
       contents: [{
         parts: [
           {
-            text: "Transcreva literalmente este áudio em português do Brasil. Responda somente com a transcrição, sem comentários, aspas ou formatação.",
+            text:
+              "Transcreva literalmente este áudio em português do Brasil. Responda somente com a transcrição, sem comentários, aspas ou formatação.",
           },
           {
             inline_data: {
@@ -99,31 +114,47 @@ async function transcribeWithGemini(
       generationConfig: { temperature: 0 },
     });
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body,
-      });
-      if (!res.ok) {
-        const detail = (await res.text()).slice(0, 180);
-        const retryable = res.status === 429 || res.status >= 500;
-        console.warn(
-          "gemini transcrição falhou:",
-          res.status,
-          `tentativa ${attempt}/3`,
-          detail,
-        );
-        if (!retryable || attempt === 3) return null;
-        await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
-        continue;
+    for (const model of models) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${
+        encodeURIComponent(model)
+      }:generateContent?key=${encodeURIComponent(key)}`;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        if (!res.ok) {
+          const detail = (await res.text()).slice(0, 180);
+          const retryable = res.status === 429 || res.status >= 500;
+          console.warn(
+            "gemini transcrição falhou:",
+            res.status,
+            `tentativa ${attempt}/3`,
+            detail,
+          );
+          if (!retryable || attempt === 3) break;
+          await new Promise((resolve) => setTimeout(resolve, attempt * 1500));
+          continue;
+        }
+        const json = await res.json().catch(() => ({})) as Record<
+          string,
+          unknown
+        >;
+        const candidates = json.candidates as
+          | Array<Record<string, unknown>>
+          | undefined;
+        const content = candidates?.[0]?.content as
+          | Record<string, unknown>
+          | undefined;
+        const parts = content?.parts as
+          | Array<Record<string, unknown>>
+          | undefined;
+        return parts?.map((part) =>
+          typeof part.text === "string" ? part.text : ""
+        )
+          .join(" ").trim() || null;
       }
-      const json = await res.json().catch(() => ({})) as Record<string, unknown>;
-      const candidates = json.candidates as Array<Record<string, unknown>> | undefined;
-      const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
-      const parts = content?.parts as Array<Record<string, unknown>> | undefined;
-      return parts?.map((part) => typeof part.text === "string" ? part.text : "")
-        .join(" ").trim() || null;
     }
     return null;
   } catch (e) {
@@ -139,17 +170,39 @@ async function transcribeWithOpenAI(
   const key = optionalEnv("OPENAI_API_KEY");
   if (!key) return null;
   try {
-    const ext = contentType.includes("ogg") ? "ogg" : contentType.includes("mp4") ? "m4a" : contentType.includes("mpeg") ? "mp3" : "ogg";
+    const ext = contentType.includes("ogg")
+      ? "ogg"
+      : contentType.includes("mp4")
+      ? "m4a"
+      : contentType.includes("mpeg")
+      ? "mp3"
+      : "ogg";
     const form = new FormData();
     form.set("model", "whisper-1");
     form.set("language", "pt");
-    form.append("file", new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: contentType }), `audio.${ext}`);
+    form.append(
+      "file",
+      new Blob([
+        bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer,
+      ], { type: contentType }),
+      `audio.${ext}`,
+    );
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}` },
       body: form,
     });
-    if (!res.ok) { console.warn("whisper falhou:", res.status, (await res.text()).slice(0, 150)); return null; }
+    if (!res.ok) {
+      console.warn(
+        "whisper falhou:",
+        res.status,
+        (await res.text()).slice(0, 150),
+      );
+      return null;
+    }
     const j = await res.json().catch(() => ({}));
     return (j.text as string | undefined)?.trim() || null;
   } catch (e) {
@@ -166,7 +219,9 @@ function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   const chunkSize = 0x8000;
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+    binary += String.fromCharCode(
+      ...bytes.subarray(offset, offset + chunkSize),
+    );
   }
   return btoa(binary);
 }

@@ -8,20 +8,30 @@ import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { getChannelDetail, getMeta, sendMeta } from "../shared/hub.ts";
-import { ingestInbound, type InboundAttachment } from "../shared/inbound.ts";
+import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
   createConversationMessage,
+  type CwAcct,
   getConversationLabels,
   setConversationLabels,
-  type CwAcct,
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "./funil-control.ts";
-import { isPrecoIntent, isVideoIntent, isPlantioIntent, isNutricaoIntent, transcribeAudio } from "../shared/intent.ts";
-import { getHybridRoute, hybridSendText, hybridSendMedia } from "../shared/hybrid.ts";
+import {
+  isNutricaoIntent,
+  isPlantioIntent,
+  isPrecoIntent,
+  isVideoIntent,
+  transcribeAudio,
+} from "../shared/intent.ts";
+import {
+  getHybridRoute,
+  hybridSendMedia,
+  hybridSendText,
+} from "../shared/hybrid.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import {
   claimDailyIntent,
@@ -46,17 +56,27 @@ import {
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
-const WA_MEDIA_TYPES = new Set(["image", "audio", "video", "document", "sticker"]);
+const WA_MEDIA_TYPES = new Set([
+  "image",
+  "audio",
+  "video",
+  "document",
+  "sticker",
+]);
 const GRAPH_VERSION = optionalEnv("META_GRAPH_VERSION") ?? "v21.0";
 
 export async function handle(req: Request): Promise<Response> {
-  if (req.method !== "POST") return new Response("method not allowed", { status: 405 });
+  if (req.method !== "POST") {
+    return new Response("method not allowed", { status: 405 });
+  }
 
   const raw = await req.text();
   const sig = req.headers.get("X-Hub-Signature-256");
   const deliveryId = req.headers.get("X-Hub-Delivery-Id");
 
-  if (!(await verifyHubSignature(env("EVOLUTION_HUB_WEBHOOK_SECRET"), raw, sig))) {
+  if (
+    !(await verifyHubSignature(env("EVOLUTION_HUB_WEBHOOK_SECRET"), raw, sig))
+  ) {
     return new Response("invalid signature", { status: 401 });
   }
 
@@ -75,14 +95,19 @@ export async function handle(req: Request): Promise<Response> {
 
   await db.from("events").insert({
     source: "hub",
-    event_type: (payload.event_type as string) ?? (payload.event as string) ?? (payload.object as string) ?? "unknown",
+    event_type: (payload.event_type as string) ?? (payload.event as string) ??
+      (payload.object as string) ?? "unknown",
     payload,
     occurred_at: (payload.occurred_at as string) ?? null,
   });
 
   try {
     const eventType = payload.event_type as string | undefined;
-    if (eventType && ["channel_connected", "channel_disconnected", "channel_auto_imported"].includes(eventType)) {
+    if (
+      eventType &&
+      ["channel_connected", "channel_disconnected", "channel_auto_imported"]
+        .includes(eventType)
+    ) {
       await handleLifecycle(db, payload);
     } else if (payload.object === "whatsapp_business_account") {
       await handleWhatsApp(db, payload);
@@ -118,7 +143,9 @@ async function handleLifecycle(db: Db, p: Json) {
 
   const patch: Json = { hub_channel_id: hubChannelId ?? null };
 
-  if (eventType === "channel_connected" || eventType === "channel_auto_imported") {
+  if (
+    eventType === "channel_connected" || eventType === "channel_auto_imported"
+  ) {
     patch.status = "active";
     patch.connected_at = new Date().toISOString();
 
@@ -127,23 +154,32 @@ async function handleLifecycle(db: Db, p: Json) {
     const detail = await getChannelDetail(hubChannelId);
     if (detail) {
       const fb = (detail.facebook_connection ?? {}) as Json;
-      const wa = (detail.whatsapp_connection ?? detail.meta_connection ?? {}) as Json;
+      const wa =
+        (detail.whatsapp_connection ?? detail.meta_connection ?? {}) as Json;
       const ig = (detail.instagram_connection ?? {}) as Json;
-      if (fb.page_id) { patch.page_id = fb.page_id; patch.display_name = fb.page_name ?? null; }
+      if (fb.page_id) {
+        patch.page_id = fb.page_id;
+        patch.display_name = fb.page_name ?? null;
+      }
       if (wa.phone_number_id) {
         patch.phone_number_id = wa.phone_number_id;
         patch.waba_id = wa.waba_id ?? null;
         patch.phone_number = wa.phone_number ?? null;
-        patch.display_name = (patch.display_name as string | undefined) ?? wa.display_name ?? null;
+        patch.display_name = (patch.display_name as string | undefined) ??
+          wa.display_name ?? null;
       }
       const igId = ig.instagram_user_id ?? ig.ig_id ?? ig.instagram_id ?? ig.id;
       if (igId) {
         patch.ig_id = igId;
-        patch.display_name = (patch.display_name as string | undefined) ?? ig.username ?? null;
+        patch.display_name = (patch.display_name as string | undefined) ??
+          ig.username ?? null;
       }
       // channel_token vem no detalhe — guarda/atualiza (idempotente).
       if (detail.token) {
-        await db.from("channel_secrets").upsert({ channel_id: externalId, channel_token: detail.token as string });
+        await db.from("channel_secrets").upsert({
+          channel_id: externalId,
+          channel_token: detail.token as string,
+        });
       }
     }
   } else if (eventType === "channel_disconnected") {
@@ -159,18 +195,28 @@ async function handleWhatsApp(db: Db, p: Json) {
   for (const entry of entries) {
     for (const change of ((entry.changes ?? []) as Json[])) {
       const value = (change.value ?? {}) as Json;
-      const phoneNumberId = (value.metadata as Json)?.phone_number_id as string | undefined;
+      const phoneNumberId = (value.metadata as Json)?.phone_number_id as
+        | string
+        | undefined;
       if (!phoneNumberId) continue;
 
-      const { data: channel } = await db.from("channels").select("*").eq("phone_number_id", phoneNumberId).maybeSingle();
+      const { data: channel } = await db.from("channels").select("*").eq(
+        "phone_number_id",
+        phoneNumberId,
+      ).maybeSingle();
       if (!channel?.chatwoot_inbox_identifier) {
-        console.warn("canal sem inbox_identifier p/ phone_number_id", phoneNumberId);
+        console.warn(
+          "canal sem inbox_identifier p/ phone_number_id",
+          phoneNumberId,
+        );
         continue;
       }
 
       // Status de saída (sent/delivered/read/failed) — atualiza messages e marca número morto.
       const statuses = (value.statuses ?? []) as Json[];
-      if (statuses.length > 0) await handleWhatsAppStatuses(db, channel as Json, statuses);
+      if (statuses.length > 0) {
+        await handleWhatsAppStatuses(db, channel as Json, statuses);
+      }
 
       // Mídia WhatsApp baixa direto na Graph API com o token Meta (Usuário do Sistema da
       // WABA). O Hub está em modo "shared" e não expõe download de binário; o channel_token
@@ -180,7 +226,9 @@ async function handleWhatsApp(db: Db, p: Json) {
       // Canal nativo: a entrada/echo já chega na caixa nativa do Chatwoot pelo repasse do EVO Hub.
       // Aqui o bridge NÃO posta no Chatwoot (evita duplicata) — só persiste no banco (analytics)
       // e roda o motor de campanha.
-      const native = await isNativeChannel(channel.phone_number_id as string | undefined);
+      const native = await isNativeChannel(
+        channel.phone_number_id as string | undefined,
+      );
       const acct = await accountForChannel(channel.id as string); // conta Chatwoot do canal (multi-cliente)
 
       // Echoes: mensagem enviada PELO APARELHO (modo coexistência app+API).
@@ -190,9 +238,21 @@ async function handleWhatsApp(db: Db, p: Json) {
       for (const e of echoes) {
         const to = e.to as string;
         if (!to) continue;
-        const { content, attachments } = await extractWaContent(e, e.type as string, metaToken, channel.id as string);
+        const { content, attachments } = await extractWaContent(
+          e,
+          e.type as string,
+          metaToken,
+          channel.id as string,
+        );
         await ingestInbound(db, channel as Json, {
-          from: to, metaMessageId: e.id as string, msgType: e.type as string, content, attachments, outgoing: true, skipChatwoot: native, acct,
+          from: to,
+          metaMessageId: e.id as string,
+          msgType: e.type as string,
+          content,
+          attachments,
+          outgoing: true,
+          skipChatwoot: native,
+          acct,
         });
       }
 
@@ -202,7 +262,9 @@ async function handleWhatsApp(db: Db, p: Json) {
 
       for (const m of messages) {
         const from = m.from as string;
-        const profileName = (contactsMeta.find((c) => (c.wa_id as string) === from)?.profile as Json)?.name as string | undefined;
+        const profileName = (contactsMeta.find((c) =>
+          (c.wa_id as string) === from
+        )?.profile as Json)?.name as string | undefined;
 
         const type = m.type as string;
         const menuClick = type === "interactive" ? interactiveReplyId(m) : null;
@@ -226,27 +288,71 @@ async function handleWhatsApp(db: Db, p: Json) {
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
         // hora, em qualquer fase, sem esperar o roteiro chegar lá.
         if (menuClick?.id.startsWith("menu_")) {
-          try { await handleMenuClick(db, channel as Json, from, menuClick.id, acct); }
-          catch (e) { console.error("handleMenuClick erro:", e); }
+          try {
+            await handleMenuClick(
+              db,
+              channel as Json,
+              from,
+              menuClick.id,
+              acct,
+            );
+          } catch (e) {
+            console.error("handleMenuClick erro:", e);
+          }
         }
         // botões da sequência de preço (🛒 comprar / 📦 escolher tamanho / tam_*).
-        if (menuClick && (menuClick.id.startsWith("preco_") || menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_"))) {
-          try { await handlePrecoClick(db, channel as Json, from, menuClick.id, acct); }
-          catch (e) { console.error("handlePrecoClick erro:", e); }
+        if (
+          menuClick &&
+          (menuClick.id.startsWith("preco_") ||
+            menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_"))
+        ) {
+          try {
+            await handlePrecoClick(
+              db,
+              channel as Json,
+              from,
+              menuClick.id,
+              acct,
+            );
+          } catch (e) {
+            console.error("handlePrecoClick erro:", e);
+          }
         }
         // botões da sequência de plantio (plantio_1..plantio_10).
         if (menuClick?.id.startsWith("plantio_")) {
-          try { await handlePlantioClick(db, channel as Json, from, menuClick.id, acct); }
-          catch (e) { console.error("handlePlantioClick erro:", e); }
+          try {
+            await handlePlantioClick(
+              db,
+              channel as Json,
+              from,
+              menuClick.id,
+              acct,
+            );
+          } catch (e) {
+            console.error("handlePlantioClick erro:", e);
+          }
         }
         // botões da sequência nutricional (nutricao_1..nutricao_10).
         if (menuClick?.id.startsWith("nutricao_")) {
-          try { await handleNutricaoClick(db, channel as Json, from, menuClick.id, acct); }
-          catch (e) { console.error("handleNutricaoClick erro:", e); }
+          try {
+            await handleNutricaoClick(
+              db,
+              channel as Json,
+              from,
+              menuClick.id,
+              acct,
+            );
+          } catch (e) {
+            console.error("handleNutricaoClick erro:", e);
+          }
         }
 
         // gated campaign: cliente respondeu → janela aberta → dispara a sequência.
-        try { await resumeCampaign(db, channel as Json, from); } catch (e) { console.error("resumeCampaign erro:", e); }
+        try {
+          await resumeCampaign(db, channel as Json, from);
+        } catch (e) {
+          console.error("resumeCampaign erro:", e);
+        }
 
         // entrada automática no funil (leads de anúncio) -- só age se FUNIL_AUTO_ENROLL_CHANNEL
         // estiver setado e este for o canal alvo (+ FUNIL_KEYWORD, se configurada).
@@ -258,7 +364,9 @@ async function handleWhatsApp(db: Db, p: Json) {
             content ?? "",
             Boolean(m.referral),
           );
-        } catch (e) { console.error("autoEnrollFunil erro:", e); }
+        } catch (e) {
+          console.error("autoEnrollFunil erro:", e);
+        }
 
         // Intenção de PREÇO — três portas, mesma resposta do botão 💰 Preço:
         //   botão   -> menu_preco (tratado acima)
@@ -270,72 +378,157 @@ async function handleWhatsApp(db: Db, p: Json) {
             let intentText = content ?? "";
             let transcricao: string | null = null;
             if (type === "audio" && attachments?.length) {
-              transcricao = await transcribeAudio(attachments[0].bytes, attachments[0].contentType);
+              transcricao = await transcribeAudio(
+                attachments[0].bytes,
+                attachments[0].contentType,
+              );
               if (transcricao) intentText = transcricao;
             }
-            const detectedIntent = isPrecoIntent(intentText) ? "preço"
-              : isVideoIntent(intentText) ? "vídeo"
-              : isPlantioIntent(intentText) ? "plantio"
-              : isNutricaoIntent(intentText) ? "nutrição"
+            const detectedIntent = isPrecoIntent(intentText)
+              ? "preço"
+              : isVideoIntent(intentText)
+              ? "vídeo"
+              : isPlantioIntent(intentText)
+              ? "plantio"
+              : isNutricaoIntent(intentText)
+              ? "nutrição"
               : null;
             if (detectedIntent) {
-              const { data: _ct } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+              const { data: _ct } = await db.from("contacts").select("id").eq(
+                "channel_id",
+                channel.id,
+              ).eq("external_contact_id", from).maybeSingle();
               if (_ct) {
-                const { data: _cv } = await db.from("conversations").select("id").eq("contact_id", _ct.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle();
+                const { data: _cv } = await db.from("conversations").select(
+                  "id",
+                ).eq("contact_id", _ct.id).neq("status", "resolved").order(
+                  "opened_at",
+                  { ascending: false },
+                ).limit(1).maybeSingle();
                 if (_cv) await autoPauseFunil(_cv.id as string, detectedIntent);
               }
             }
             if (isPrecoIntent(intentText)) {
-              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
-              if (await claimDelivery(db, `intent-preco-${channel.id}-${from}-${intentKey}`, "intent")) {
-                await handleMenuClick(db, channel as Json, from, "menu_preco", acct);
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-preco-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
+                await handleMenuClick(
+                  db,
+                  channel as Json,
+                  from,
+                  "menu_preco",
+                  acct,
+                );
                 // nota privada com o gatilho (transcrição do áudio ou frase) — contexto pro atendente.
                 if (transcricao) {
-                  const { data: ct } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+                  const { data: ct } = await db.from("contacts").select("id")
+                    .eq("channel_id", channel.id).eq(
+                      "external_contact_id",
+                      from,
+                    ).maybeSingle();
                   const { data: cv } = ct
-                    ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
+                    ? await db.from("conversations").select(
+                      "chatwoot_conversation_id",
+                    ).eq("contact_id", ct.id).neq("status", "resolved").order(
+                      "opened_at",
+                      { ascending: false },
+                    ).limit(1).maybeSingle()
                     : { data: null };
                   if (cv?.chatwoot_conversation_id) {
                     try {
-                      await createConversationMessage(cv.chatwoot_conversation_id as number, {
-                        content: `🎙️ *Áudio transcrito (disparou tabela de preço automática):*\n\n"${transcricao.slice(0, 400)}"`,
-                        messageType: "outgoing", private: true,
-                      }, acct);
+                      await createConversationMessage(
+                        cv.chatwoot_conversation_id as number,
+                        {
+                          content:
+                            `🎙️ *Áudio transcrito (disparou tabela de preço automática):*\n\n"${
+                              transcricao.slice(0, 400)
+                            }"`,
+                          messageType: "outgoing",
+                          private: true,
+                        },
+                        acct,
+                      );
                     } catch { /* nota é bônus */ }
                   }
                 }
               }
             } else if (isVideoIntent(intentText)) {
-              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
-              if (await claimDelivery(db, `intent-video-${channel.id}-${from}-${intentKey}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-video-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
                 await handleVideoSequence(db, channel as Json, from, acct);
                 if (transcricao) {
-                  const { data: ct2 } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+                  const { data: ct2 } = await db.from("contacts").select("id")
+                    .eq("channel_id", channel.id).eq(
+                      "external_contact_id",
+                      from,
+                    ).maybeSingle();
                   const { data: cv2 } = ct2
-                    ? await db.from("conversations").select("chatwoot_conversation_id").eq("contact_id", ct2.id).neq("status", "resolved").order("opened_at", { ascending: false }).limit(1).maybeSingle()
+                    ? await db.from("conversations").select(
+                      "chatwoot_conversation_id",
+                    ).eq("contact_id", ct2.id).neq("status", "resolved").order(
+                      "opened_at",
+                      { ascending: false },
+                    ).limit(1).maybeSingle()
                     : { data: null };
                   if (cv2?.chatwoot_conversation_id) {
                     try {
-                      await createConversationMessage(cv2.chatwoot_conversation_id as number, {
-                        content: `🎙️ *Áudio transcrito (disparou sequência de vídeos automática):*\n\n"${transcricao.slice(0, 400)}"`,
-                        messageType: "outgoing", private: true,
-                      }, acct);
+                      await createConversationMessage(
+                        cv2.chatwoot_conversation_id as number,
+                        {
+                          content:
+                            `🎙️ *Áudio transcrito (disparou sequência de vídeos automática):*\n\n"${
+                              transcricao.slice(0, 400)
+                            }"`,
+                          messageType: "outgoing",
+                          private: true,
+                        },
+                        acct,
+                      );
                     } catch { /* nota é bônus */ }
                   }
                 }
               }
             } else if (isPlantioIntent(intentText)) {
-              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
-              if (await claimDelivery(db, `intent-plantio-${channel.id}-${from}-${intentKey}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-plantio-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
                 await handlePlantioSequence(db, channel as Json, from, acct);
               }
             } else if (isNutricaoIntent(intentText)) {
-              const intentKey = (m.id as string) ?? (m.message_id as string) ?? new Date().toISOString();
-              if (await claimDelivery(db, `intent-nutricao-${channel.id}-${from}-${intentKey}`, "intent")) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-nutricao-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
             }
-          } catch (e) { console.error("intent erro:", e); }
+          } catch (e) {
+            console.error("intent erro:", e);
+          }
         }
       }
     }
@@ -346,19 +539,33 @@ async function handleWhatsApp(db: Db, p: Json) {
 function interactiveReplyId(m: Json): { id: string; title: string } | null {
   const interactive = m.interactive as Json | undefined;
   const br = interactive?.button_reply as Json | undefined;
-  if (br?.id) return { id: br.id as string, title: (br.title as string) ?? (br.id as string) };
+  if (br?.id) {
+    return {
+      id: br.id as string,
+      title: (br.title as string) ?? (br.id as string),
+    };
+  }
   const lr = interactive?.list_reply as Json | undefined;
-  if (lr?.id) return { id: lr.id as string, title: (lr.title as string) ?? (lr.id as string) };
+  if (lr?.id) {
+    return {
+      id: lr.id as string,
+      title: (lr.title as string) ?? (lr.id as string),
+    };
+  }
   return null;
 }
 
 // Conteúdo do menu de ação (funil Mega Sorgo) — preço é real (igual já usado manualmente pelo
 // Cícero); plantio/nutrição/depoimento são placeholder até o material real chegar.
 const MENU_CONTENT: Record<string, string> = {
-  menu_preco: "🌱 *Tabela de preços — Mega Sorgo Santa Elisa®*\n\n📦 2 kg — R$ 179,90 (cobre 0,5 hectare)\n📦 4 kg — R$ 341,62 (cobre 1 hectare)\n📦 10 kg — de R$ 899,00 por R$ 764,15 (cobre 2 hectares)\n📦 20 kg — R$ 1.437,90 (cobre até 4 hectares)\n\n🚚 Frete grátis pra todo o Brasil!",
-  menu_plantio: "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
-  menu_nutricao: "🧪 Análise bromatológica do Mega Sorgo — dados do Laboratório Prado.",
-  menu_depoimento: "🎬 Em breve te mando os vídeos de quem já plantou e aprovou! Qualquer dúvida me chama aqui! — Cícero",
+  menu_preco:
+    "🌱 *Tabela de preços — Mega Sorgo Santa Elisa®*\n\n📦 2 kg — R$ 179,90 (cobre 0,5 hectare)\n📦 4 kg — R$ 341,62 (cobre 1 hectare)\n📦 10 kg — de R$ 899,00 por R$ 764,15 (cobre 2 hectares)\n📦 20 kg — R$ 1.437,90 (cobre até 4 hectares)\n\n🚚 Frete grátis pra todo o Brasil!",
+  menu_plantio:
+    "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
+  menu_nutricao:
+    "🧪 Análise bromatológica do Mega Sorgo — dados do Laboratório Prado.",
+  menu_depoimento:
+    "🎬 Em breve te mando os vídeos de quem já plantou e aprovou! Qualquer dúvida me chama aqui! — Cícero",
   menu_humano: "🧑‍🌾 Já te conectei com o Cícero, ele te chama em breve!",
 };
 
@@ -370,7 +577,9 @@ const PRECO_VALIDADE_DIAS = 5;
 function precoValidade(): string {
   const d = new Date(Date.now() + PRECO_VALIDADE_DIAS * 24 * 60 * 60 * 1000);
   const brt = new Date(d.getTime() - 3 * 3600 * 1000);
-  return `${String(brt.getUTCDate()).padStart(2, "0")}/${String(brt.getUTCMonth() + 1).padStart(2, "0")}/${brt.getUTCFullYear()}`;
+  return `${String(brt.getUTCDate()).padStart(2, "0")}/${
+    String(brt.getUTCMonth() + 1).padStart(2, "0")
+  }/${brt.getUTCFullYear()}`;
 }
 
 // Cartão de preço POR PACOTE (decisão 02/07: tabelona completa confunde e atrasa a venda —
@@ -378,8 +587,16 @@ function precoValidade(): string {
 // mensagem separada; fechamento com botões.
 // Card enxuto (decisão 02/07 v4): foco em "X kg atende Y hectares" + preço + desconto E
 // frete grátis SEMPRE juntos como promoção. Pagamento vai em mensagem DEDICADA (confiança).
-function precoCard(pacote: string, cobre: string, precoDe: string | null, precoPor: string, off: string | null): string {
-  const linhaPreco = precoDe ? `💰 De ${precoDe} por *${precoPor}*` : `💰 *${precoPor}*`;
+function precoCard(
+  pacote: string,
+  cobre: string,
+  precoDe: string | null,
+  precoPor: string,
+  off: string | null,
+): string {
+  const linhaPreco = precoDe
+    ? `💰 De ${precoDe} por *${precoPor}*`
+    : `💰 *${precoPor}*`;
   const promo = off
     ? `💸 *${off} de desconto + FRETE GRÁTIS* — tudo dentro da promoção!`
     : `💸 *FRETE GRÁTIS* dentro da promoção!`;
@@ -396,29 +613,56 @@ const PAGAMENTO_MSG = "💳 *Formas de pagamento — como o senhor preferir:*\n\
   "Também pelo site, com a Garantia Mercado Pago.\n" +
   "_Liberação do pedido em 2 dias após a confirmação do pagamento._";
 
-const FRETE_MSG = "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
+const FRETE_MSG =
+  "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
 
 // função (não constante!): a validade é hoje+5 e precisa ser calculada NO ENVIO, não no boot.
 function tamanhoCard(id: string): string | null {
   switch (id) {
-    case "tam_2kg": return precoCard("2 kg", "½ hectare (meio hectare)", null, "R$ 179,90", null);
-    case "tam_4kg": return precoCard("4 kg", "1 hectare", "R$ 359,60", "R$ 341,62", "5%");
-    case "tam_10kg": return precoCard("10 kg", "2 hectares", "R$ 899,00", "R$ 764,15", "15%");
-    case "tam_20kg": return precoCard("20 kg", "até 4 hectares", "R$ 1.798,00", "R$ 1.437,90", "20%");
-    default: return null;
+    case "tam_2kg":
+      return precoCard(
+        "2 kg",
+        "½ hectare (meio hectare)",
+        null,
+        "R$ 179,90",
+        null,
+      );
+    case "tam_4kg":
+      return precoCard("4 kg", "1 hectare", "R$ 359,60", "R$ 341,62", "5%");
+    case "tam_10kg":
+      return precoCard("10 kg", "2 hectares", "R$ 899,00", "R$ 764,15", "15%");
+    case "tam_20kg":
+      return precoCard(
+        "20 kg",
+        "até 4 hectares",
+        "R$ 1.798,00",
+        "R$ 1.437,90",
+        "20%",
+      );
+    default:
+      return null;
   }
 }
 
-async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+async function handlePrecoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+  acct?: CwAcct,
+): Promise<void> {
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialPrecoSequence(db, channel, from);
     return;
   }
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
   if (!token || !phone) {
-    throw new Error("canal sem channel_token ou phone_number_id para enviar preço");
+    throw new Error(
+      "canal sem channel_token ou phone_number_id para enviar preço",
+    );
   }
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -427,11 +671,15 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
   const pecas: { body: Json; registro: string; tipo: string }[] = [];
   // 1) banner promoção (funnel_media slot 'preco'; sem mídia -> pula)
   const { data: media } = await db.from("funnel_media").select("url,caption")
-    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1).maybeSingle();
+    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1)
+    .maybeSingle();
   if (media?.url) {
     pecas.push({
       tipo: "image",
-      body: { type: "image", image: { link: media.url, caption: "Vou te passar os valores! 👇" } },
+      body: {
+        type: "image",
+        image: { link: media.url, caption: "Vou te passar os valores! 👇" },
+      },
       registro: "[imagem promoção]",
     });
   }
@@ -442,46 +690,79 @@ async function handlePrecoSequence(db: Db, channel: Json, from: string, acct?: C
       type: "interactive",
       interactive: {
         type: "button",
-        body: { text: "📐 *Qual área o senhor pretende plantar?*\n\nToque abaixo e eu já mostro o pacote certo, o valor e o desconto." },
-        action: { buttons: [
-          { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
-          { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
-          { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
-        ] },
+        body: {
+          text:
+            "📐 *Qual área o senhor pretende plantar?*\n\nToque abaixo e eu já mostro o pacote certo, o valor e o desconto.",
+        },
+        action: {
+          buttons: [
+            { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
+            { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
+            {
+              type: "reply",
+              reply: { id: "preco_area_maior", title: "2 hectares ou mais" },
+            },
+          ],
+        },
       },
     },
     registro: "📐 Qual o tamanho da área? [½ ha / 1 ha / 2 ha / 4+ ha]",
   });
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
   for (const [i, p] of pecas.entries()) {
-    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...p.body });
-    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const r = await sendMeta(token, path, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...p.body,
+    });
+    const metaId = (r.data as Json)?.messages
+      ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : null;
     // chatwoot_message_id no insert é OBRIGATÓRIO: sem ele o pull-loop sync-chatwoot-out acha a
     // msg "órfã" no Chatwoot e reenvia como texto (duplicação vista no teste v3).
     let cwMsgId: number | null = null;
     if (r.ok && metaId && conv?.chatwoot_conversation_id) {
       try {
-        const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: p.registro, messageType: "outgoing" }, acct);
+        const cw = await createConversationMessage(
+          conv.chatwoot_conversation_id as number,
+          { content: p.registro, messageType: "outgoing" },
+          acct,
+        );
         cwMsgId = (cw?.id as number) ?? null;
       } catch { /* registro é bônus */ }
     }
     await db.from("messages").insert({
-      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out",
-      msg_type: p.tipo === "image" ? "image" : (p.tipo === "interactive" ? "interactive" : "text"),
-      content: p.registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      conversation_id: conv?.id ?? null,
+      channel_id: channel.id,
+      direction: "out",
+      msg_type: p.tipo === "image"
+        ? "image"
+        : (p.tipo === "interactive" ? "interactive" : "text"),
+      content: p.registro,
+      meta_message_id: metaId,
+      chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed",
+      sent_at: new Date().toISOString(),
     });
     // A imagem promocional é opcional, mas o CTA interativo é a entrega que confirma
     // o comando. Sem aceite + message_id da Meta, a macro deve permanecer pendente.
     if (p.tipo === "interactive" && (!r.ok || !metaId)) {
       const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(`Meta não confirmou CTA de preço (${r.status}): ${detail}`);
+      throw new Error(
+        `Meta não confirmou CTA de preço (${r.status}): ${detail}`,
+      );
     }
     if (i < pecas.length - 1) await pause(2500);
   }
@@ -536,7 +817,9 @@ async function sendSocialPieces(
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
   const cwConvId = Number(conv?.chatwoot_conversation_id);
-  if (!cwConvId) throw new Error("conversa privada não encontrada para enviar funil");
+  if (!cwConvId) {
+    throw new Error("conversa privada não encontrada para enviar funil");
+  }
 
   for (const piece of pieces) {
     const response = await sendOutbound(
@@ -574,7 +857,9 @@ export async function handleSocialPrecoClick(
   id: string,
   actionEventId?: string,
 ): Promise<void> {
-  const actionScope = actionEventId ? `social-price-action:${actionEventId}` : undefined;
+  const actionScope = actionEventId
+    ? `social-price-action:${actionEventId}`
+    : undefined;
   if (id === "preco_tamanho") {
     await sendSocialPieces(db, channel, from, [{
       type: "interactive",
@@ -633,11 +918,17 @@ export async function handleSocialPrecoClick(
       payload: { content: paymentText[id] },
     }], actionScope);
     if (id === "preco_comprar") {
-      await markSocialLead(db, channel, from, [
-        "lead-quente",
-        "qualificado",
-        "fechamento-pendente",
-      ], "Cliente clicou em Quero garantir. Prioridade máxima para concluir o pedido.");
+      await markSocialLead(
+        db,
+        channel,
+        from,
+        [
+          "lead-quente",
+          "qualificado",
+          "fechamento-pendente",
+        ],
+        "Cliente clicou em Quero garantir. Prioridade máxima para concluir o pedido.",
+      );
     }
     return;
   }
@@ -704,12 +995,20 @@ async function markSocialLead(
       : null;
     await setConversationLabels(
       cwConvId,
-      [...new Set([...labels, ...addedLabels, ...(sourceLabel ? [sourceLabel] : [])])],
+      [
+        ...new Set([
+          ...labels,
+          ...addedLabels,
+          ...(sourceLabel ? [sourceLabel] : []),
+        ]),
+      ],
       acct,
     );
     await createConversationMessage(cwConvId, {
       content: `${
-        addedLabels.includes("lead-quente") ? "🔥 *LEAD QUENTE*" : "📥 *NOVO LEAD*"
+        addedLabels.includes("lead-quente")
+          ? "🔥 *LEAD QUENTE*"
+          : "📥 *NOVO LEAD*"
       } — ${note}`,
       messageType: "outgoing",
       private: true,
@@ -803,111 +1102,213 @@ export async function handleSocialSalesIntent(
 }
 
 // clique nos botões da sequência de preço.
-export async function handlePrecoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+export async function handlePrecoClick(
+  db: Db,
+  channel: Json,
+  from: string,
+  id: string,
+  acct?: CwAcct,
+): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
   if (!token || !phone) return;
   const path = `${phone}/messages`;
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
   // registra no Chatwoot e DEVOLVE o id — o id precisa ir pro insert em messages
   // (chatwoot_message_id), senão o pull-loop sync-chatwoot-out acha a msg "órfã" no Chatwoot
   // e REENVIA como texto (causa da duplicação do card/frete vista no teste v3).
-  const registra = async (texto: string, priv = false): Promise<number | null> => {
+  const registra = async (
+    texto: string,
+    priv = false,
+  ): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing", private: priv },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
   const envia = async (body: Json, registro: string, tipo: string) => {
-    const r = await sendMeta(token, path, { messaging_product: "whatsapp", to: from, ...body });
-    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const r = await sendMeta(token, path, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...body,
+    });
+    const metaId = (r.data as Json)?.messages
+      ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : null;
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
-      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
-      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      conversation_id: conv?.id ?? null,
+      channel_id: channel.id,
+      direction: "out",
+      msg_type: tipo,
+      content: registro,
+      meta_message_id: metaId,
+      chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed",
+      sent_at: new Date().toISOString(),
     });
   };
 
   if (id === "preco_pagamento") {
-    await envia({
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "💳 *Como o senhor prefere pagar?*" },
-        action: { buttons: [
-          { type: "reply", reply: { id: "pag_pix", title: "PIX" } },
-          { type: "reply", reply: { id: "pag_cartao", title: "Cartão" } },
-          { type: "reply", reply: { id: "pag_boleto", title: "Boleto" } },
-        ] },
+    await envia(
+      {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: "💳 *Como o senhor prefere pagar?*" },
+          action: {
+            buttons: [
+              { type: "reply", reply: { id: "pag_pix", title: "PIX" } },
+              { type: "reply", reply: { id: "pag_cartao", title: "Cartão" } },
+              { type: "reply", reply: { id: "pag_boleto", title: "Boleto" } },
+            ],
+          },
+        },
       },
-    }, "Como prefere pagar? [PIX / Cartão / Boleto]", "interactive");
+      "Como prefere pagar? [PIX / Cartão / Boleto]",
+      "interactive",
+    );
     return;
   }
 
   if (id === "pag_pix") {
-    await envia({ type: "text", text: { body: "💰 *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia!\n\nO Cícero vai te enviar a chave PIX pra concluir o pedido." } },
-      "PIX direto com a empresa", "text");
-    await registra("🔥 *LEAD QUENTE — escolheu PIX.* Enviar chave e fechar!", true);
+    await envia(
+      {
+        type: "text",
+        text: {
+          body:
+            "💰 *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia!\n\nO Cícero vai te enviar a chave PIX pra concluir o pedido.",
+        },
+      },
+      "PIX direto com a empresa",
+      "text",
+    );
+    await registra(
+      "🔥 *LEAD QUENTE — escolheu PIX.* Enviar chave e fechar!",
+      true,
+    );
     return;
   }
 
   if (id === "pag_cartao") {
-    await envia({ type: "text", text: { body: "💳 *Cartão de crédito ou débito*\n\n*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n\nCompra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. Se não chegar, o Mercado Pago devolve seu dinheiro.\n\nO Cícero vai te enviar o link do site pra concluir!" } },
-      "Cartão de crédito/débito via Mercado Pago", "text");
-    await registra("🔥 *LEAD QUENTE — escolheu Cartão.* Enviar link Mercado Pago!", true);
+    await envia(
+      {
+        type: "text",
+        text: {
+          body:
+            "💳 *Cartão de crédito ou débito*\n\n*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n\nCompra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. Se não chegar, o Mercado Pago devolve seu dinheiro.\n\nO Cícero vai te enviar o link do site pra concluir!",
+        },
+      },
+      "Cartão de crédito/débito via Mercado Pago",
+      "text",
+    );
+    await registra(
+      "🔥 *LEAD QUENTE — escolheu Cartão.* Enviar link Mercado Pago!",
+      true,
+    );
     return;
   }
 
   if (id === "pag_boleto") {
-    await envia({ type: "text", text: { body: "📄 *Boleto bancário*\n\nTambém pelo site, com a *Garantia Mercado Pago* 🛡️.\n\n_Liberação do pedido em 2 dias após a confirmação do pagamento._\n\nO Cícero vai te enviar o link pra gerar o boleto!" } },
-      "Boleto via Mercado Pago", "text");
-    await registra("🔥 *LEAD QUENTE — escolheu Boleto.* Enviar link Mercado Pago!", true);
+    await envia(
+      {
+        type: "text",
+        text: {
+          body:
+            "📄 *Boleto bancário*\n\nTambém pelo site, com a *Garantia Mercado Pago* 🛡️.\n\n_Liberação do pedido em 2 dias após a confirmação do pagamento._\n\nO Cícero vai te enviar o link pra gerar o boleto!",
+        },
+      },
+      "Boleto via Mercado Pago",
+      "text",
+    );
+    await registra(
+      "🔥 *LEAD QUENTE — escolheu Boleto.* Enviar link Mercado Pago!",
+      true,
+    );
     return;
   }
 
   if (id === "preco_comprar") {
-    const texto = "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
+    const texto =
+      "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
     await envia({ type: "text", text: { body: texto } }, texto, "text");
-    await registra("🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!", true);
+    await registra(
+      "🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!",
+      true,
+    );
     return;
   }
 
   if (id === "preco_tamanho") {
-    await envia({
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "📐 *Qual área o senhor quer calcular?*" },
-        action: { buttons: [
-          { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
-          { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
-          { type: "reply", reply: { id: "preco_area_maior", title: "2 hectares ou mais" } },
-        ] },
+    await envia(
+      {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: "📐 *Qual área o senhor quer calcular?*" },
+          action: {
+            buttons: [
+              {
+                type: "reply",
+                reply: { id: "tam_2kg", title: "Meio hectare" },
+              },
+              { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
+              {
+                type: "reply",
+                reply: { id: "preco_area_maior", title: "2 hectares ou mais" },
+              },
+            ],
+          },
+        },
       },
-    }, "📐 Me diz o tamanho da área [½ ha / 1 ha / 2 ha / 4+ ha]", "interactive");
+      "📐 Me diz o tamanho da área [½ ha / 1 ha / 2 ha / 4+ ha]",
+      "interactive",
+    );
     return;
   }
 
   if (id === "preco_area_maior") {
-    await envia({
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "🌱 *Perfeito. Qual destas áreas fica mais próxima?*" },
-        action: { buttons: [
-          { type: "reply", reply: { id: "tam_10kg", title: "2 hectares" } },
-          { type: "reply", reply: { id: "tam_20kg", title: "4 hectares ou mais" } },
-        ] },
+    await envia(
+      {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: "🌱 *Perfeito. Qual destas áreas fica mais próxima?*" },
+          action: {
+            buttons: [
+              { type: "reply", reply: { id: "tam_10kg", title: "2 hectares" } },
+              {
+                type: "reply",
+                reply: { id: "tam_20kg", title: "4 hectares ou mais" },
+              },
+            ],
+          },
+        },
       },
-    }, "Qual área? [2 hectares / 4 hectares ou mais]", "interactive");
+      "Qual área? [2 hectares / 4 hectares ou mais]",
+      "interactive",
+    );
     return;
   }
 
@@ -917,12 +1318,23 @@ export async function handlePrecoClick(db: Db, channel: Json, from: string, id: 
     const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
     // imagem do pacote (funnel_media slot preco_2kg/preco_4kg/preco_10kg/preco_20kg)
     const imgSlot = `preco_${id.replace("tam_", "")}`;
-    const { data: imgMedia } = await db.from("funnel_media").select("url,caption")
-      .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true).limit(1).maybeSingle();
+    const { data: imgMedia } = await db.from("funnel_media").select(
+      "url,caption",
+    )
+      .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true).limit(
+        1,
+      ).maybeSingle();
     if (imgMedia?.url) {
       await envia(
-        { type: "image", image: { link: imgMedia.url, caption: (imgMedia.caption as string) || "" } },
-        `[imagem ${imgSlot}]`, "image",
+        {
+          type: "image",
+          image: {
+            link: imgMedia.url,
+            caption: (imgMedia.caption as string) || "",
+          },
+        },
+        `[imagem ${imgSlot}]`,
+        "image",
       );
       await pause(2500);
     }
@@ -930,28 +1342,48 @@ export async function handlePrecoClick(db: Db, channel: Json, from: string, id: 
     await pause(2500);
     await envia({ type: "text", text: { body: FRETE_MSG } }, FRETE_MSG, "text");
     await pause(2500);
-    await envia({
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: "Posso garantir o seu? 👇" },
-        action: { buttons: [
-          { type: "reply", reply: { id: "preco_comprar", title: "🛒 Quero garantir" } },
-          { type: "reply", reply: { id: "preco_pagamento", title: "💳 Pagamento" } },
-          { type: "reply", reply: { id: "preco_tamanho", title: "📦 Outra área" } },
-        ] },
+    await envia(
+      {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: "Posso garantir o seu? 👇" },
+          action: {
+            buttons: [
+              {
+                type: "reply",
+                reply: { id: "preco_comprar", title: "🛒 Quero garantir" },
+              },
+              {
+                type: "reply",
+                reply: { id: "preco_pagamento", title: "💳 Pagamento" },
+              },
+              {
+                type: "reply",
+                reply: { id: "preco_tamanho", title: "📦 Outra área" },
+              },
+            ],
+          },
+        },
       },
-    }, "Posso garantir o seu? [🛒 Quero garantir / 💳 Pagamento / 📦 Outra área]", "interactive");
+      "Posso garantir o seu? [🛒 Quero garantir / 💳 Pagamento / 📦 Outra área]",
+      "interactive",
+    );
   }
 }
 
 // ── Sequência de VÍDEOS (5 vídeos com pausa entre eles) ─────────────────────
 const VIDEO_CAPTIONS: Record<string, string> = {
-  video_1: "🌿 *VÍDEO 01 — O que é o Mega Sorgo Santa Elisa?*\n\n✅ Semente de *alto rendimento* que produz silagem e pastagem de qualidade o ano inteiro\n✅ Cresce rápido, rebrota forte e aguenta seca\n\n👉 _Assista e descubra por que milhares de produtores já plantam:_\nhttps://youtu.be/Q7IDP7PuYd4",
-  video_2: "🌾 *VÍDEO 02 — Como plantar o Mega Sorgo Santa Elisa*\n\n✅ Plantio *simples*, sem segredo — até quem nunca plantou consegue\n✅ Dicas de *espaçamento, época ideal e adubação*\n\n👉 _Veja o passo a passo completo:_\nhttps://youtu.be/mkzRsa8RaKw",
-  video_3: "📊 *VÍDEO 03 — Resultados reais no campo*\n\n✅ Produtores mostram *na prática* o que colheram\n✅ Comparativo com milho e outras forrageiras — os números impressionam\n\n👉 _Confira os resultados com os próprios olhos:_\nhttps://youtu.be/J6xJyYDukhw",
-  video_4: "🌽 *VÍDEO 04 — Silagem com qualidade e volume o ano inteiro*\n\n✅ *Até 3 cortes por safra* — alta produção de massa verde\n✅ Versatilidade: serve pra silagem, pastejo direto e fenação\n\n👉 _Veja como garantir volume na sua propriedade:_\nhttps://youtu.be/Z-HrHiMsUIE",
-  video_5: "🛡️ *VÍDEO 05 — Gaste menos e produza mais!*\n\n✅ *Resistência natural* a cigarrinha, lagarta e pulgão — menos veneno, menos custo\n✅ Redução real nos gastos com silagem e pastagem\n\n👉 _Descubra como economizar na sua produção:_\nhttps://youtu.be/rbfOQBoRX5Y",
+  video_1:
+    "🌿 *VÍDEO 01 — O que é o Mega Sorgo Santa Elisa?*\n\n✅ Semente de *alto rendimento* que produz silagem e pastagem de qualidade o ano inteiro\n✅ Cresce rápido, rebrota forte e aguenta seca\n\n👉 _Assista e descubra por que milhares de produtores já plantam:_\nhttps://youtu.be/Q7IDP7PuYd4",
+  video_2:
+    "🌾 *VÍDEO 02 — Como plantar o Mega Sorgo Santa Elisa*\n\n✅ Plantio *simples*, sem segredo — até quem nunca plantou consegue\n✅ Dicas de *espaçamento, época ideal e adubação*\n\n👉 _Veja o passo a passo completo:_\nhttps://youtu.be/mkzRsa8RaKw",
+  video_3:
+    "📊 *VÍDEO 03 — Resultados reais no campo*\n\n✅ Produtores mostram *na prática* o que colheram\n✅ Comparativo com milho e outras forrageiras — os números impressionam\n\n👉 _Confira os resultados com os próprios olhos:_\nhttps://youtu.be/J6xJyYDukhw",
+  video_4:
+    "🌽 *VÍDEO 04 — Silagem com qualidade e volume o ano inteiro*\n\n✅ *Até 3 cortes por safra* — alta produção de massa verde\n✅ Versatilidade: serve pra silagem, pastejo direto e fenação\n\n👉 _Veja como garantir volume na sua propriedade:_\nhttps://youtu.be/Z-HrHiMsUIE",
+  video_5:
+    "🛡️ *VÍDEO 05 — Gaste menos e produza mais!*\n\n✅ *Resistência natural* a cigarrinha, lagarta e pulgão — menos veneno, menos custo\n✅ Redução real nos gastos com silagem e pastagem\n\n👉 _Descubra como economizar na sua produção:_\nhttps://youtu.be/rbfOQBoRX5Y",
 };
 // Pausa entre vídeos (ms): tempo de cada vídeo + margem pra carregar.
 // v1: 3:00 | v2: 2:30 | v3: 1:50 | v4: 2:50 | v5: fim
@@ -960,73 +1392,135 @@ const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
 // bridge. Mantemos cadência curta e concluímos os cinco envios em menos de 1 min.
 const SOCIAL_VIDEO_PAUSES_MS = [10_000, 10_000, 10_000, 10_000];
 
-export async function handleVideoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+export async function handleVideoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+  acct?: CwAcct,
+): Promise<void> {
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialVideoSequence(db, channel, from);
     return;
   }
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
   if (!token || !phone) return;
   const msgPath = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
-  const registra = async (texto: string, priv = false): Promise<number | null> => {
+  const registra = async (
+    texto: string,
+    priv = false,
+  ): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing", private: priv },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
   const envia = async (body: Json, registro: string, tipo: string) => {
-    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
-    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const r = await sendMeta(token, msgPath, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...body,
+    });
+    const metaId = (r.data as Json)?.messages
+      ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : null;
     if (!r.ok || !metaId) {
       const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(`Meta não confirmou item de vídeo (${r.status}): ${detail}`);
+      throw new Error(
+        `Meta não confirmou item de vídeo (${r.status}): ${detail}`,
+      );
     }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
-      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
-      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      conversation_id: conv?.id ?? null,
+      channel_id: channel.id,
+      direction: "out",
+      msg_type: tipo,
+      content: registro,
+      meta_message_id: metaId,
+      chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed",
+      sent_at: new Date().toISOString(),
     });
   };
 
   // intro
   await envia(
-    { type: "text", text: { body: "📹 *Preparei 5 vídeos curtos pra você conhecer o Mega Sorgo Santa Elisa!*\n\nÉ rápido — cada um mostra um ponto importante pra sua decisão.\n\nVou mandar um por um, assista com calma 👇" } },
-    "📹 Preparei 5 vídeos curtos — vou mandar um por um", "text",
+    {
+      type: "text",
+      text: {
+        body:
+          "📹 *Preparei 5 vídeos curtos pra você conhecer o Mega Sorgo Santa Elisa!*\n\nÉ rápido — cada um mostra um ponto importante pra sua decisão.\n\nVou mandar um por um, assista com calma 👇",
+      },
+    },
+    "📹 Preparei 5 vídeos curtos — vou mandar um por um",
+    "text",
   );
   await pause(3000);
 
   // busca vídeos do funnel_media (slots video_1..video_5)
   const slots = ["video_1", "video_2", "video_3", "video_4", "video_5"];
-  const { data: videos } = await db.from("funnel_media").select("slot,url,caption")
+  const { data: videos } = await db.from("funnel_media").select(
+    "slot,url,caption",
+  )
     .eq("funnel", "mega-sorgo").in("slot", slots).eq("active", true);
 
-  const videoMap = new Map((videos ?? []).map((v: Json) => [v.slot as string, v]));
+  const videoMap = new Map(
+    (videos ?? []).map((v: Json) => [v.slot as string, v]),
+  );
 
   for (const [i, slot] of slots.entries()) {
     const media = videoMap.get(slot) as Json | undefined;
     const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
 
     if (media?.url) {
-      const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "video", video: { link: media.url, caption } });
+      const r = await sendMeta(token, msgPath, {
+        messaging_product: "whatsapp",
+        to: from,
+        type: "video",
+        video: { link: media.url, caption },
+      });
       if (r.ok) {
-        const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
-        const cwMsgId = await registra(`[vídeo ${i + 1}] ${caption.slice(0, 80)}...`);
+        const metaId = (r.data as Json)?.messages
+          ? (((r.data as Json).messages as Json[])[0]?.id as string)
+          : null;
+        const cwMsgId = await registra(
+          `[vídeo ${i + 1}] ${caption.slice(0, 80)}...`,
+        );
         await db.from("messages").insert({
-          conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "video",
-          content: `[vídeo ${i + 1}]`, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-          status: "sent", sent_at: new Date().toISOString(),
+          conversation_id: conv?.id ?? null,
+          channel_id: channel.id,
+          direction: "out",
+          msg_type: "video",
+          content: `[vídeo ${i + 1}]`,
+          meta_message_id: metaId,
+          chatwoot_message_id: cwMsgId,
+          status: "sent",
+          sent_at: new Date().toISOString(),
         });
       } else {
         // fallback: vídeo grande demais ou erro -> envia caption como texto
@@ -1040,19 +1534,37 @@ export async function handleVideoSequence(db: Db, channel: Json, from: string, a
 
   // CTA final
   await pause(4000);
-  await envia({
-    type: "interactive",
-    interactive: {
-      type: "button",
-      body: { text: "✅ *Esses são os 5 pontos que todo produtor precisa saber antes de plantar!*\n\nQuer saber o preço e as condições especiais da promoção?" },
-      action: { buttons: [
-        { type: "reply", reply: { id: "menu_preco", title: "💰 Ver preço" } },
-        { type: "reply", reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" } },
-      ] },
+  await envia(
+    {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: {
+          text:
+            "✅ *Esses são os 5 pontos que todo produtor precisa saber antes de plantar!*\n\nQuer saber o preço e as condições especiais da promoção?",
+        },
+        action: {
+          buttons: [
+            {
+              type: "reply",
+              reply: { id: "menu_preco", title: "💰 Ver preço" },
+            },
+            {
+              type: "reply",
+              reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
+            },
+          ],
+        },
+      },
     },
-  }, "✅ 5 pontos importantes! [💰 Ver preço / 🧑‍🌾 Falar com Cícero]", "interactive");
+    "✅ 5 pontos importantes! [💰 Ver preço / 🧑‍🌾 Falar com Cícero]",
+    "interactive",
+  );
 
-  await registra("🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.", true);
+  await registra(
+    "🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.",
+    true,
+  );
 }
 
 async function handleSocialVideoSequence(
@@ -1060,7 +1572,8 @@ async function handleSocialVideoSequence(
   channel: Json,
   from: string,
 ): Promise<void> {
-  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const pause = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
   await sendSocialPieces(db, channel, from, [{
     type: "text",
     payload: {
@@ -1125,30 +1638,26 @@ async function handleSocialVideoSequence(
 
 // ── Sequência COMO PLANTAR (PDF + lista de resumos) ─────────────────────────
 const PLANTIO_RESUMOS: Record<string, string> = {
-  plantio_inicio:
-    "🌱 *Como começar o plantio*\n\n" +
+  plantio_inicio: "🌱 *Como começar o plantio*\n\n" +
     "• Use *4 a 5 kg de sementes por hectare*\n" +
     "• Plante a *2 a 3 cm de profundidade*\n" +
     "• Época recomendada: *setembro a março*\n" +
     "• Em plantio a lanço, use cerca de *10% a mais de sementes*\n\n" +
     "Se me disser quantos hectares vai plantar, eu também calculo a quantidade de semente.",
-  plantio_solo:
-    "🧪 *Solo e adubação*\n\n" +
+  plantio_solo: "🧪 *Solo e adubação*\n\n" +
     "• Faça análise do solo antes da safra\n" +
     "• A calagem deve buscar saturação por bases de até *70%*\n" +
     "• Na semeadura: *20 a 40 kg/ha de nitrogênio*\n" +
     "• Fósforo e potássio: ajustar conforme a análise\n" +
     "• Cobertura: referência de *200 kg/ha da fórmula 20-00-20*, entre 25 e 35 dias\n\n" +
     "A recomendação final deve ser validada por um agrônomo com a análise da sua área.",
-  plantio_colheita:
-    "✂️ *Corte, silagem e produtividade*\n\n" +
+  plantio_colheita: "✂️ *Corte, silagem e produtividade*\n\n" +
     "• Primeiro corte: geralmente entre *90 e 110 dias*\n" +
     "• Corte com matéria seca entre *30% e 35%*\n" +
     "• Partículas de *1,25 a 1,75 cm*\n" +
     "• Produtividade esperada: de *45 a 90 toneladas/ha*, conforme solo e manejo\n" +
     "• Com adubação adequada, apresenta rebrote vigoroso.",
-  plantio_1:
-    "🌱 *Especificações da Semente*\n\n" +
+  plantio_1: "🌱 *Especificações da Semente*\n\n" +
     "• Recomendação: *5 kg por hectare*\n" +
     "• Altura: chega de *4 a 5 metros*\n" +
     "• Plantio: de *setembro a março* (safra e safrinha)\n" +
@@ -1156,46 +1665,40 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Aguenta bem a seca e não tomba fácil\n" +
     "• Faz *até 3 rebrotes* — irrigado, rebrota por 2 anos",
 
-  plantio_2:
-    "📏 *Espaçamento e Plantio em Linha*\n\n" +
+  plantio_2: "📏 *Espaçamento e Plantio em Linha*\n\n" +
     "• Use *4 a 5 kg/ha* (já conta 20-30% a mais pra compensar perdas)\n" +
     "• Profundidade: *2 a 3 cm* (mais raso em solo argiloso)\n" +
     "• Disco: *52 furos de 3,50 mm* (mecânica) ou *1,75 mm* (vácuo)\n" +
     "• Espaçamento maior facilita a máquina de corte na silagem\n" +
     "• População: *110.000 a 140.000* sementes por hectare",
 
-  plantio_3:
-    "🌾 *Plantio a Lanço*\n\n" +
+  plantio_3: "🌾 *Plantio a Lanço*\n\n" +
     "• Coloque *10% a mais* de semente que no plantio em linha\n" +
     "• Motivo: perde mais pra pássaros e roedores\n" +
     "• ⚠️ Cuidado com chuva forte — carrega a semente\n" +
     "• O adubo vai no fundo do sulco, *mínimo 3 cm* longe da semente",
 
-  plantio_4:
-    "🧪 *Calagem do Solo*\n\n" +
+  plantio_4: "🧪 *Calagem do Solo*\n\n" +
     "• Faça análise do solo (0-20 cm) *antes* da safra\n" +
     "• Objetivo: elevar a saturação por bases (V) a *70%*\n" +
     "• Solo com bastante matéria orgânica: basta elevar V a *50%*\n" +
     "• A calagem leva *alguns meses* pra fazer efeito — não deixe pra última hora",
 
-  plantio_5:
-    "💊 *Adubação de Base (NPK)*\n\n" +
+  plantio_5: "💊 *Adubação de Base (NPK)*\n\n" +
     "• Na semeadura: *20 a 40 kg/ha de Nitrogênio*\n" +
     "• Fósforo e Potássio: conforme análise do solo\n" +
     "• Solo fraco: mais adubo. Solo bom: menos adubo\n" +
     "• Potássio no sulco ou a lanço antes do plantio\n" +
     "• Meta: *35 a 70 toneladas/ha* de massa verde",
 
-  plantio_6:
-    "🔄 *Adubação de Cobertura*\n\n" +
+  plantio_6: "🔄 *Adubação de Cobertura*\n\n" +
     "• Fórmula *20-00-20*: aplicar *200 kg/ha*\n" +
     "• Quando: *25 a 35 dias* após o plantio, a lanço\n" +
     "• Silagem: pode fazer *até 2 coberturas*\n" +
     "• A mesma adubação serve pro *rebrote*\n" +
     "• Quanto mais adubo, mais produz — é proporcional",
 
-  plantio_7:
-    "🌿 *Controle de Daninhas (Mato)*\n\n" +
+  plantio_7: "🌿 *Controle de Daninhas (Mato)*\n\n" +
     "• Limpe a área *antes* do plantio\n" +
     "• ⚠️ Herbicida anterior: espere *35 dias* antes de plantar\n" +
     "• Herbicida liberado pro sorgo: *Atrazina* (3 a 4 litros)\n" +
@@ -1203,8 +1706,7 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• ❌ Não use em solo arenoso antes da planta nascer\n" +
     "• Sempre com *receituário agronômico*",
 
-  plantio_8:
-    "🐛 *Pragas e Tratamento de Sementes*\n\n" +
+  plantio_8: "🐛 *Pragas e Tratamento de Sementes*\n\n" +
     "• Trate a semente *antes* de plantar — protege nos primeiros 30 dias\n" +
     "• Principais pragas: *cigarrinha, lagarta, pulgão, percevejo*\n" +
     "• Inseticidas: Clotianidina, Thiamethoxam, Imidacloprid\n" +
@@ -1212,8 +1714,7 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Aos *45 dias*: vistorie toda a lavoura\n" +
     "• Faça pulverização preventiva — depois fica difícil entrar com máquina",
 
-  plantio_9:
-    "✂️ *Ponto de Corte e Silagem*\n\n" +
+  plantio_9: "✂️ *Ponto de Corte e Silagem*\n\n" +
     "• Corte quando a matéria seca estiver entre *30 e 35%*\n" +
     "• Primeiro corte: *90 a 110 dias* após o plantio\n" +
     "• Tamanho das partículas: *1,25 a 1,75 cm*\n" +
@@ -1221,8 +1722,7 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Boa compactação + vedação = silagem de qualidade\n" +
     "• Use *inoculante* pra uma boa fermentação",
 
-  plantio_10:
-    "📊 *Produtividade e Rebrote*\n\n" +
+  plantio_10: "📊 *Produtividade e Rebrote*\n\n" +
     "• Safra normal, solo bom: *70 a 90 toneladas/ha*\n" +
     "• Solo mais fraco: *45 a 60 toneladas/ha*\n" +
     "• A silagem de sorgo equivale a *72-92%* da de milho\n" +
@@ -1231,73 +1731,145 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Acompanhe da semente até a colheita — faz toda a diferença!",
 };
 
-async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+async function handlePlantioSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+  acct?: CwAcct,
+): Promise<void> {
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialPlantioSequence(db, channel, from);
     return;
   }
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) throw new Error("canal sem credenciais para enviar plantio");
+  if (!token || !phone) {
+    throw new Error("canal sem credenciais para enviar plantio");
+  }
   const msgPath = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
-  const registra = async (texto: string, priv = false): Promise<number | null> => {
+  const registra = async (
+    texto: string,
+    priv = false,
+  ): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing", private: priv }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing", private: priv },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
   const envia = async (body: Json, registro: string, tipo: string) => {
-    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
-    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const r = await sendMeta(token, msgPath, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...body,
+    });
+    const metaId = (r.data as Json)?.messages
+      ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : null;
     if (!r.ok || !metaId) {
       const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(`Meta não confirmou item de plantio (${r.status}): ${detail}`);
+      throw new Error(
+        `Meta não confirmou item de plantio (${r.status}): ${detail}`,
+      );
     }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
-      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
-      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      conversation_id: conv?.id ?? null,
+      channel_id: channel.id,
+      direction: "out",
+      msg_type: tipo,
+      content: registro,
+      meta_message_id: metaId,
+      chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed",
+      sent_at: new Date().toISOString(),
     });
   };
 
   // 1) PDF
   const { data: pdfMedia } = await db.from("funnel_media").select("url")
-    .eq("funnel", "mega-sorgo").eq("slot", "plantio_pdf").eq("active", true).limit(1).maybeSingle();
+    .eq("funnel", "mega-sorgo").eq("slot", "plantio_pdf").eq("active", true)
+    .limit(1).maybeSingle();
   if (pdfMedia?.url) {
     await envia(
-      { type: "document", document: { link: pdfMedia.url, caption: "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa", filename: "Instrucoes-Plantio-Mega-Sorgo.pdf" } },
-      "[PDF Instruções de Plantio]", "document",
+      {
+        type: "document",
+        document: {
+          link: pdfMedia.url,
+          caption:
+            "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa",
+          filename: "Instrucoes-Plantio-Mega-Sorgo.pdf",
+        },
+      },
+      "[PDF Instruções de Plantio]",
+      "document",
     );
     await pause(3000);
   }
 
   // 2) Três necessidades visíveis; a lista técnica completa fica como aprofundamento.
-  await envia({
-    type: "interactive",
-    interactive: {
-      type: "button",
-      body: { text: "🌱 *O que o senhor precisa resolver agora no plantio?*\n\nToque em uma opção e eu mando a orientação direto ao ponto." },
-      action: { buttons: [
-        { type: "reply", reply: { id: "plantio_inicio", title: "Como começar" } },
-        { type: "reply", reply: { id: "plantio_solo", title: "Solo e adubação" } },
-        { type: "reply", reply: { id: "plantio_colheita", title: "Corte e silagem" } },
-      ] },
+  await envia(
+    {
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: {
+          text:
+            "🌱 *O que o senhor precisa resolver agora no plantio?*\n\nToque em uma opção e eu mando a orientação direto ao ponto.",
+        },
+        action: {
+          buttons: [
+            {
+              type: "reply",
+              reply: { id: "plantio_inicio", title: "Como começar" },
+            },
+            {
+              type: "reply",
+              reply: { id: "plantio_solo", title: "Solo e adubação" },
+            },
+            {
+              type: "reply",
+              reply: { id: "plantio_colheita", title: "Corte e silagem" },
+            },
+          ],
+        },
+      },
     },
-  }, "O que precisa no plantio? [Como começar / Solo e adubação / Corte e silagem]", "interactive");
+    "O que precisa no plantio? [Como começar / Solo e adubação / Corte e silagem]",
+    "interactive",
+  );
 }
 
-export async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+export async function handlePlantioClick(
+  db: Db,
+  channel: Json,
+  from: string,
+  id: string,
+  acct?: CwAcct,
+): Promise<void> {
   const resumo = PLANTIO_RESUMOS[id];
   if (!resumo) return;
   if (channel.type === "facebook" || channel.type === "instagram") {
@@ -1308,69 +1880,161 @@ export async function handlePlantioClick(db: Db, channel: Json, from: string, id
     return;
   }
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) throw new Error("canal sem credenciais para responder plantio");
+  if (!token || !phone) {
+    throw new Error("canal sem credenciais para responder plantio");
+  }
   const msgPath = `${phone}/messages`;
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
   const registra = async (texto: string): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing" },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
   // envia resumo
-  const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
-  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  const r = await sendMeta(token, msgPath, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "text",
+    text: { body: resumo },
+  });
+  const metaId = (r.data as Json)?.messages
+    ? (((r.data as Json).messages as Json[])[0]?.id as string)
+    : null;
   if (!r.ok || !metaId) {
     const detail = JSON.stringify(r.data).slice(0, 300);
-    throw new Error(`Meta não confirmou resumo de plantio (${r.status}): ${detail}`);
+    throw new Error(
+      `Meta não confirmou resumo de plantio (${r.status}): ${detail}`,
+    );
   }
   const cwMsgId = await registra(resumo);
   await db.from("messages").insert({
-    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
-    content: resumo, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-    status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "text",
+    content: resumo,
+    meta_message_id: metaId,
+    chatwoot_message_id: cwMsgId,
+    status: r.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
   });
 
   // re-envia lista pra poder consultar outro tema
   const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
   await pause(2000);
-  const r2 = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "interactive", interactive: {
-    type: "list",
-    body: { text: "Quer ver outro tema? 👇" },
-    action: { button: "Ver mais temas", sections: [{ title: "Temas de plantio", rows: [
-      { id: "plantio_1", title: "🌱 A semente", description: "Características e especificações" },
-      { id: "plantio_2", title: "📏 Plantio em linha", description: "Espaçamento, disco e profundidade" },
-      { id: "plantio_3", title: "🌾 Plantio a lanço", description: "Quantidade e cuidados" },
-      { id: "plantio_4", title: "🧪 Calagem do solo", description: "Preparação e correção do solo" },
-      { id: "plantio_5", title: "💊 Adubação de base", description: "NPK na semeadura" },
-      { id: "plantio_6", title: "🔄 Adubação cobertura", description: "Cobertura e rebrote" },
-      { id: "plantio_7", title: "🌿 Controle de mato", description: "Herbicidas e daninhas" },
-      { id: "plantio_8", title: "🐛 Pragas", description: "Tratamento de sementes e pragas" },
-      { id: "plantio_9", title: "✂️ Corte e silagem", description: "Ponto de corte e partículas" },
-      { id: "plantio_10", title: "📊 Produtividade", description: "Rendimento e rebrote" },
-    ] } ] },
-  } });
-  const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  const r2 = await sendMeta(token, msgPath, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Quer ver outro tema? 👇" },
+      action: {
+        button: "Ver mais temas",
+        sections: [{
+          title: "Temas de plantio",
+          rows: [
+            {
+              id: "plantio_1",
+              title: "🌱 A semente",
+              description: "Características e especificações",
+            },
+            {
+              id: "plantio_2",
+              title: "📏 Plantio em linha",
+              description: "Espaçamento, disco e profundidade",
+            },
+            {
+              id: "plantio_3",
+              title: "🌾 Plantio a lanço",
+              description: "Quantidade e cuidados",
+            },
+            {
+              id: "plantio_4",
+              title: "🧪 Calagem do solo",
+              description: "Preparação e correção do solo",
+            },
+            {
+              id: "plantio_5",
+              title: "💊 Adubação de base",
+              description: "NPK na semeadura",
+            },
+            {
+              id: "plantio_6",
+              title: "🔄 Adubação cobertura",
+              description: "Cobertura e rebrote",
+            },
+            {
+              id: "plantio_7",
+              title: "🌿 Controle de mato",
+              description: "Herbicidas e daninhas",
+            },
+            {
+              id: "plantio_8",
+              title: "🐛 Pragas",
+              description: "Tratamento de sementes e pragas",
+            },
+            {
+              id: "plantio_9",
+              title: "✂️ Corte e silagem",
+              description: "Ponto de corte e partículas",
+            },
+            {
+              id: "plantio_10",
+              title: "📊 Produtividade",
+              description: "Rendimento e rebrote",
+            },
+          ],
+        }],
+      },
+    },
+  });
+  const metaId2 = (r2.data as Json)?.messages
+    ? (((r2.data as Json).messages as Json[])[0]?.id as string)
+    : null;
   if (!r2.ok || !metaId2) {
     const detail = JSON.stringify(r2.data).slice(0, 300);
-    throw new Error(`Meta não confirmou lista de plantio (${r2.status}): ${detail}`);
+    throw new Error(
+      `Meta não confirmou lista de plantio (${r2.status}): ${detail}`,
+    );
   }
   const cwMsgId2 = await registra("Quer ver outro tema? [lista 10 temas]");
   await db.from("messages").insert({
-    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
-    content: "Quer ver outro tema? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
-    status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "interactive",
+    content: "Quer ver outro tema? [lista]",
+    meta_message_id: metaId2,
+    chatwoot_message_id: cwMsgId2,
+    status: r2.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
   });
 }
 
@@ -1432,29 +2096,63 @@ async function handleSocialPlantioSequence(
 
 // ── Info Nutricional — dados do Laboratório Prado (amostra 2025-12-05) ──
 const NUTRICAO_ROWS = [
-  { id: "nutricao_1", title: "🔬 Visão geral", description: "Matéria seca, umidade e pH" },
-  { id: "nutricao_2", title: "💪 Proteína", description: "Proteína bruta e aminoácidos" },
-  { id: "nutricao_3", title: "⚡ Energia (NDT)", description: "Nutrientes digestíveis totais" },
+  {
+    id: "nutricao_1",
+    title: "🔬 Visão geral",
+    description: "Matéria seca, umidade e pH",
+  },
+  {
+    id: "nutricao_2",
+    title: "💪 Proteína",
+    description: "Proteína bruta e aminoácidos",
+  },
+  {
+    id: "nutricao_3",
+    title: "⚡ Energia (NDT)",
+    description: "Nutrientes digestíveis totais",
+  },
   { id: "nutricao_4", title: "🌾 Fibras", description: "FDN, FDA e lignina" },
-  { id: "nutricao_5", title: "🧪 Minerais", description: "Cálcio, fósforo, magnésio..." },
-  { id: "nutricao_6", title: "🧈 Gordura", description: "Extrato etéreo e ácidos graxos" },
-  { id: "nutricao_7", title: "🔄 Digestibilidade", description: "DFDN em 12h, 24h, 48h..." },
-  { id: "nutricao_8", title: "🧫 Fermentação", description: "Ácido lático, acético e pH" },
-  { id: "nutricao_9", title: "🥛 Produção estimada", description: "Leite e carne por tonelada" },
-  { id: "nutricao_10", title: "📊 Comparativo", description: "Mega Sorgo vs referência" },
+  {
+    id: "nutricao_5",
+    title: "🧪 Minerais",
+    description: "Cálcio, fósforo, magnésio...",
+  },
+  {
+    id: "nutricao_6",
+    title: "🧈 Gordura",
+    description: "Extrato etéreo e ácidos graxos",
+  },
+  {
+    id: "nutricao_7",
+    title: "🔄 Digestibilidade",
+    description: "DFDN em 12h, 24h, 48h...",
+  },
+  {
+    id: "nutricao_8",
+    title: "🧫 Fermentação",
+    description: "Ácido lático, acético e pH",
+  },
+  {
+    id: "nutricao_9",
+    title: "🥛 Produção estimada",
+    description: "Leite e carne por tonelada",
+  },
+  {
+    id: "nutricao_10",
+    title: "📊 Comparativo",
+    description: "Mega Sorgo vs referência",
+  },
 ];
 
 const NUTRICAO_RESUMOS: Record<string, string> = {
-  nutricao_1:
-    "🔬 *Visão Geral da Silagem*\n\n" +
+  nutricao_1: "🔬 *Visão Geral da Silagem*\n\n" +
     "• Matéria Seca: *32,91%* (ideal é entre 30-35%)\n" +
     "• Umidade: *67,09%*\n" +
     "• pH: *4,13* (ótimo! Silagem bem fermentada)\n\n" +
     "👉 Quanto mais perto de 33% de matéria seca, melhor a qualidade da silagem.\n" +
     "pH abaixo de 4,2 = fermentação excelente!",
 
-  nutricao_2:
-    "💪 *Proteína*\n\n" +
+  nutricao_2: "💪 *Proteína*\n\n" +
     "• Proteína Bruta (PB): *9,65%* da matéria seca\n" +
     "• Proteína Solúvel: *51,09%* da PB\n" +
     "• Aminoácidos Totais: *80,93%* da PB\n" +
@@ -1462,8 +2160,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Proteína bruta *acima de 9%* é excelente pra sorgo!\n" +
     "O gado aproveita bem — a proteína é de alta qualidade.",
 
-  nutricao_3:
-    "⚡ *Energia — NDT (Nutrientes Digestíveis Totais)*\n\n" +
+  nutricao_3: "⚡ *Energia — NDT (Nutrientes Digestíveis Totais)*\n\n" +
     "• NDT: *65,22%* (método OARDC)\n" +
     "• Energia Líquida Lactação: *1,48 Mcal/kg*\n" +
     "• Energia Líquida Ganho: *0,95 Mcal/kg*\n" +
@@ -1471,8 +2168,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 NDT acima de 65% = *alta energia*.\n" +
     "Mais energia na silagem = mais leite e mais engorda!",
 
-  nutricao_4:
-    "🌾 *Fibras*\n\n" +
+  nutricao_4: "🌾 *Fibras*\n\n" +
     "• FDN (Fibra em Detergente Neutro): *49,94%*\n" +
     "• FDA (Fibra em Detergente Ácido): *32,31%*\n" +
     "• Lignina: *3,40%* (7,06% do FDN)\n" +
@@ -1480,8 +2176,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 FDN abaixo de 50% = gado come mais e rumina melhor.\n" +
     "FDA baixo = mais digestível. Lignina baixa = fibra macia!",
 
-  nutricao_5:
-    "🧪 *Minerais*\n\n" +
+  nutricao_5: "🧪 *Minerais*\n\n" +
     "• Cinza (Matéria Mineral): *6,24%*\n" +
     "• Cálcio: *0,35%*\n" +
     "• Fósforo: *0,26%*\n" +
@@ -1491,8 +2186,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Minerais dentro da faixa ideal.\n" +
     "Cálcio e fósforo equilibrados = osso forte e boa produção.",
 
-  nutricao_6:
-    "🧈 *Gordura (Extrato Etéreo)*\n\n" +
+  nutricao_6: "🧈 *Gordura (Extrato Etéreo)*\n\n" +
     "• Extrato Etéreo (EE): *3,10%*\n" +
     "• Ácidos Graxos Totais: *1,93%*\n" +
     "• Linoleico (ômega 6): *43,01%* dos AG\n" +
@@ -1501,8 +2195,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Gordura boa = mais energia pro animal.\n" +
     "Perfil de ômega favorável pra saúde do rebanho!",
 
-  nutricao_7:
-    "🔄 *Digestibilidade da Fibra (DFDN)*\n\n" +
+  nutricao_7: "🔄 *Digestibilidade da Fibra (DFDN)*\n\n" +
     "• Em 12 horas: *25,63%*\n" +
     "• Em 24 horas: *53,22%*\n" +
     "• Em 30 horas: *56,31%*\n" +
@@ -1511,8 +2204,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Mais de *60% em 48h* = fibra altamente digestível.\n" +
     "O gado aproveita a maior parte do que come!",
 
-  nutricao_8:
-    "🧫 *Fermentação da Silagem*\n\n" +
+  nutricao_8: "🧫 *Fermentação da Silagem*\n\n" +
     "• pH: *4,13* ✅ (excelente!)\n" +
     "• Ácido Lático: *2,81%* (o principal — fermenta bem)\n" +
     "• Ácido Acético: *1,73%* (normal)\n" +
@@ -1521,8 +2213,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Silagem com fermentação *nota 10*.\n" +
     "Pouca amônia = proteína conservada, sem perda!",
 
-  nutricao_9:
-    "🥛 *Produção Estimada por Tonelada de MS*\n\n" +
+  nutricao_9: "🥛 *Produção Estimada por Tonelada de MS*\n\n" +
     "• Leite: *1.535 kg* por tonelada de matéria seca\n" +
     "• Carne: *98 kg* por tonelada de matéria seca\n" +
     "• Amido: *17,31%* (fonte de energia rápida)\n" +
@@ -1531,8 +2222,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "👉 Cada tonelada de MS produz mais de *1.500 litros de leite*!\n" +
     "Retorno real do investimento na silagem.",
 
-  nutricao_10:
-    "📊 *Comparativo — Mega Sorgo vs Referência*\n\n" +
+  nutricao_10: "📊 *Comparativo — Mega Sorgo vs Referência*\n\n" +
     "• PB: *9,65%* (ref: 5,80-9,00%) ✅ *Acima*\n" +
     "• NDT: *65,22%* ✅ *Alta energia*\n" +
     "• FDN: *49,94%* (ref: 31,6-49,2%) — *dentro do topo*\n" +
@@ -1544,69 +2234,130 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "Resultado comprovado em laboratório! 🏆",
 };
 
-async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+async function handleNutricaoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+  acct?: CwAcct,
+): Promise<void> {
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialNutricaoSequence(db, channel, from);
     return;
   }
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) throw new Error("canal sem credenciais para enviar nutrição");
+  if (!token || !phone) {
+    throw new Error("canal sem credenciais para enviar nutrição");
+  }
   const msgPath = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
   const registra = async (texto: string): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing" },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
   const envia = async (body: Json, registro: string, tipo: string) => {
-    const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, ...body });
-    const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+    const r = await sendMeta(token, msgPath, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...body,
+    });
+    const metaId = (r.data as Json)?.messages
+      ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : null;
     if (!r.ok || !metaId) {
       const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(`Meta não confirmou item de nutrição (${r.status}): ${detail}`);
+      throw new Error(
+        `Meta não confirmou item de nutrição (${r.status}): ${detail}`,
+      );
     }
     const cwMsgId = await registra(registro);
     await db.from("messages").insert({
-      conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: tipo,
-      content: registro, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+      conversation_id: conv?.id ?? null,
+      channel_id: channel.id,
+      direction: "out",
+      msg_type: tipo,
+      content: registro,
+      meta_message_id: metaId,
+      chatwoot_message_id: cwMsgId,
+      status: r.ok ? "sent" : "failed",
+      sent_at: new Date().toISOString(),
     });
   };
 
   // 1) PDF do laudo
   const { data: pdfMedia } = await db.from("funnel_media").select("url")
-    .eq("funnel", "mega-sorgo").eq("slot", "nutricao_pdf").eq("active", true).limit(1).maybeSingle();
+    .eq("funnel", "mega-sorgo").eq("slot", "nutricao_pdf").eq("active", true)
+    .limit(1).maybeSingle();
   if (pdfMedia?.url) {
     await envia(
-      { type: "document", document: { link: pdfMedia.url, caption: "🧪 *Análise Bromatológica Completa* — Mega Sorgo Santa Elisa\nLaboratório Prado (dez/2025)", filename: "Analise-Bromatologica-Mega-Sorgo.pdf" } },
-      "[PDF Análise Bromatológica]", "document",
+      {
+        type: "document",
+        document: {
+          link: pdfMedia.url,
+          caption:
+            "🧪 *Análise Bromatológica Completa* — Mega Sorgo Santa Elisa\nLaboratório Prado (dez/2025)",
+          filename: "Analise-Bromatologica-Mega-Sorgo.pdf",
+        },
+      },
+      "[PDF Análise Bromatológica]",
+      "document",
     );
     await pause(3000);
   }
 
   // 2) Lista interativa
-  await envia({
-    type: "interactive",
-    interactive: {
-      type: "list",
-      body: { text: "📋 *Quer entender os dados do laudo?*\n\nEscolha abaixo o que quer saber — te explico de um jeito fácil de entender!" },
-      action: { button: "Ver os temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
+  await envia(
+    {
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: {
+          text:
+            "📋 *Quer entender os dados do laudo?*\n\nEscolha abaixo o que quer saber — te explico de um jeito fácil de entender!",
+        },
+        action: {
+          button: "Ver os temas",
+          sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }],
+        },
+      },
     },
-  }, "🧪 Lista de info nutricional [10 temas]", "interactive");
+    "🧪 Lista de info nutricional [10 temas]",
+    "interactive",
+  );
 }
 
-export async function handleNutricaoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
+export async function handleNutricaoClick(
+  db: Db,
+  channel: Json,
+  from: string,
+  id: string,
+  acct?: CwAcct,
+): Promise<void> {
   const resumo = NUTRICAO_RESUMOS[id];
   if (!resumo) return;
   if (channel.type === "facebook" || channel.type === "instagram") {
@@ -1617,56 +2368,107 @@ export async function handleNutricaoClick(db: Db, channel: Json, from: string, i
     return;
   }
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) throw new Error("canal sem credenciais para responder nutrição");
+  if (!token || !phone) {
+    throw new Error("canal sem credenciais para responder nutrição");
+  }
   const msgPath = `${phone}/messages`;
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
   const registra = async (texto: string): Promise<number | null> => {
     if (!conv?.chatwoot_conversation_id) return null;
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content: texto, messageType: "outgoing" }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: texto, messageType: "outgoing" },
+        acct,
+      );
       return (cw?.id as number) ?? null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   };
 
-  const r = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "text", text: { body: resumo } });
-  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  const r = await sendMeta(token, msgPath, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "text",
+    text: { body: resumo },
+  });
+  const metaId = (r.data as Json)?.messages
+    ? (((r.data as Json).messages as Json[])[0]?.id as string)
+    : null;
   if (!r.ok || !metaId) {
     const detail = JSON.stringify(r.data).slice(0, 300);
-    throw new Error(`Meta não confirmou resumo de nutrição (${r.status}): ${detail}`);
+    throw new Error(
+      `Meta não confirmou resumo de nutrição (${r.status}): ${detail}`,
+    );
   }
   const cwMsgId = await registra(resumo);
   await db.from("messages").insert({
-    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "text",
-    content: resumo, meta_message_id: metaId, chatwoot_message_id: cwMsgId,
-    status: r.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "text",
+    content: resumo,
+    meta_message_id: metaId,
+    chatwoot_message_id: cwMsgId,
+    status: r.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
   });
 
   const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
   await pause(2000);
-  const r2 = await sendMeta(token, msgPath, { messaging_product: "whatsapp", to: from, type: "interactive", interactive: {
-    type: "list",
-    body: { text: "Quer ver outro dado nutricional? 👇" },
-    action: { button: "Ver mais temas", sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }] },
-  } });
-  const metaId2 = (r2.data as Json)?.messages ? (((r2.data as Json).messages as Json[])[0]?.id as string) : null;
+  const r2 = await sendMeta(token, msgPath, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "interactive",
+    interactive: {
+      type: "list",
+      body: { text: "Quer ver outro dado nutricional? 👇" },
+      action: {
+        button: "Ver mais temas",
+        sections: [{ title: "Info nutricional", rows: NUTRICAO_ROWS }],
+      },
+    },
+  });
+  const metaId2 = (r2.data as Json)?.messages
+    ? (((r2.data as Json).messages as Json[])[0]?.id as string)
+    : null;
   if (!r2.ok || !metaId2) {
     const detail = JSON.stringify(r2.data).slice(0, 300);
-    throw new Error(`Meta não confirmou lista de nutrição (${r2.status}): ${detail}`);
+    throw new Error(
+      `Meta não confirmou lista de nutrição (${r2.status}): ${detail}`,
+    );
   }
-  const cwMsgId2 = await registra("Quer ver outro dado nutricional? [lista 10 temas]");
+  const cwMsgId2 = await registra(
+    "Quer ver outro dado nutricional? [lista 10 temas]",
+  );
   await db.from("messages").insert({
-    conversation_id: conv?.id ?? null, channel_id: channel.id, direction: "out", msg_type: "interactive",
-    content: "Quer ver outro dado? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
-    status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "interactive",
+    content: "Quer ver outro dado? [lista]",
+    meta_message_id: metaId2,
+    chatwoot_message_id: cwMsgId2,
+    status: r2.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
   });
 }
 
@@ -1707,10 +2509,19 @@ async function handleSocialNutricaoSequence(
   await sendSocialPieces(db, channel, from, pieces);
 }
 
-async function handleSaudacao(db: Db, channel: Json, from: string, _acct?: CwAcct): Promise<void> {
+async function handleSaudacao(
+  db: Db,
+  channel: Json,
+  from: string,
+  _acct?: CwAcct,
+): Promise<void> {
   // saudação dispara o funil em QUALQUER canal (não depende de FUNIL_AUTO_ENROLL_CHANNEL).
   // A fase 1 peça 0 já abre com "Vida boa!" — não manda texto separado pra não duplicar.
-  try { await enrollIfNew(db, channel, from); } catch (e) { console.error("saudacao enroll erro:", e); }
+  try {
+    await enrollIfNew(db, channel, from);
+  } catch (e) {
+    console.error("saudacao enroll erro:", e);
+  }
 }
 
 export async function handleMenuClick(
@@ -1731,10 +2542,13 @@ export async function handleMenuClick(
     const daily = await claimDailyIntent(db, String(channel.id), from, intent);
     if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
     try {
-      if (menuId === "menu_preco") await handlePrecoSequence(db, channel, from, acct);
-      else if (menuId === "menu_depoimento") await handleVideoSequence(db, channel, from, acct);
-      else if (menuId === "menu_plantio") await handlePlantioSequence(db, channel, from, acct);
-      else await handleNutricaoSequence(db, channel, from, acct);
+      if (menuId === "menu_preco") {
+        await handlePrecoSequence(db, channel, from, acct);
+      } else if (menuId === "menu_depoimento") {
+        await handleVideoSequence(db, channel, from, acct);
+      } else if (menuId === "menu_plantio") {
+        await handlePlantioSequence(db, channel, from, acct);
+      } else await handleNutricaoSequence(db, channel, from, acct);
       return { sent: true };
     } catch (error) {
       await releaseDailyIntent(db, daily.key);
@@ -1744,17 +2558,32 @@ export async function handleMenuClick(
   const content = MENU_CONTENT[menuId];
   if (!content) return { sent: false };
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
   if (!token || !phone) return { sent: false };
 
-  const r = await sendMeta(token, `${phone}/messages`, { messaging_product: "whatsapp", to: from, type: "text", text: { body: content } });
-  const metaId = (r.data as Json)?.messages ? (((r.data as Json).messages as Json[])[0]?.id as string) : null;
+  const r = await sendMeta(token, `${phone}/messages`, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "text",
+    text: { body: content },
+  });
+  const metaId = (r.data as Json)?.messages
+    ? (((r.data as Json).messages as Json[])[0]?.id as string)
+    : null;
 
-  const { data: contact } = await db.from("contacts").select("id").eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq("contact_id", contact.id).neq("status", "resolved")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
 
@@ -1763,9 +2592,18 @@ export async function handleMenuClick(
   let cwMsgId: number | null = null;
   if (conv?.chatwoot_conversation_id) {
     try {
-      const cw = await createConversationMessage(conv.chatwoot_conversation_id as number, { content, messageType: "outgoing" }, acct);
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content, messageType: "outgoing" },
+        acct,
+      );
       cwMsgId = (cw?.id as number) ?? null;
-    } catch (e) { console.warn("handleMenuClick: registro Chatwoot falhou", String(e).slice(0, 150)); }
+    } catch (e) {
+      console.warn(
+        "handleMenuClick: registro Chatwoot falhou",
+        String(e).slice(0, 150),
+      );
+    }
   }
 
   await db.from("messages").insert({
@@ -1795,10 +2633,15 @@ async function handleWhatsAppStatuses(db: Db, channel: Json, statuses: Json[]) {
     const patch: Json = { status };
     // custo: categoria de cobrança da Meta (service/marketing/utility/authentication/
     // referral_conversion). Base pra ver o gasto real quando a cobrança mudar (ago-out/2026).
-    const pricingCategory = ((s.pricing as Json | undefined)?.category as string | undefined) ??
-      ((s.conversation as Json | undefined)?.origin as Json | undefined)?.type as string | undefined;
+    const pricingCategory =
+      ((s.pricing as Json | undefined)?.category as string | undefined) ??
+        ((s.conversation as Json | undefined)?.origin as Json | undefined)
+          ?.type as string | undefined;
     if (pricingCategory) patch.pricing_category = pricingCategory;
-    await db.from("messages").update(patch).eq("meta_message_id", wamid).eq("direction", "out");
+    await db.from("messages").update(patch).eq("meta_message_id", wamid).eq(
+      "direction",
+      "out",
+    );
 
     if (status === "failed") {
       const errors = (s.errors ?? []) as Json[];
@@ -1806,12 +2649,20 @@ async function handleWhatsAppStatuses(db: Db, channel: Json, statuses: Json[]) {
       const recipient = stringValue(s.recipient_id);
       if (recipient && code && DEAD_NUMBER_ERRORS.has(code)) {
         // marca contato como número morto (attributes.dead) p/ limpar das campanhas.
-        const { data: contact } = await db.from("contacts").select("id,attributes")
-          .eq("channel_id", channel.id).eq("external_contact_id", recipient).maybeSingle();
+        const { data: contact } = await db.from("contacts").select(
+          "id,attributes",
+        )
+          .eq("channel_id", channel.id).eq("external_contact_id", recipient)
+          .maybeSingle();
         if (contact) {
           const attrs = (contact.attributes ?? {}) as Json;
           await db.from("contacts").update({
-            attributes: { ...attrs, dead: true, dead_reason: code, dead_at: new Date().toISOString() },
+            attributes: {
+              ...attrs,
+              dead: true,
+              dead_reason: code,
+              dead_at: new Date().toISOString(),
+            },
           }).eq("id", contact.id);
         }
       }
@@ -1834,12 +2685,25 @@ async function handleMessenger(db: Db, p: Json) {
     }
 
     const acct = await accountForChannel(channel.id as string);
-    for (const comment of parseSocialCommentChanges(String(p.object ?? ""), entry, channel as Json)) {
+    for (
+      const comment of parseSocialCommentChanges(
+        String(p.object ?? ""),
+        entry,
+        channel as Json,
+      )
+    ) {
       const ingest = await ingestInbound(db, channel as Json, {
-        from: comment.from, name: comment.name, metaMessageId: comment.commentId,
-        msgType: "text", content: comment.content, sentAt: comment.sentAt, acct,
+        from: comment.from,
+        name: comment.name,
+        metaMessageId: comment.commentId,
+        msgType: "text",
+        content: comment.content,
+        sentAt: comment.sentAt,
+        acct,
       });
-      if (ingest.inserted) await maybeAutoReplySocialComment(db, channel as Json, comment);
+      if (ingest.inserted) {
+        await maybeAutoReplySocialComment(db, channel as Json, comment);
+      }
     }
 
     for (const m of ((entry.messaging ?? []) as Json[])) {
@@ -1849,7 +2713,9 @@ async function handleMessenger(db: Db, p: Json) {
       if (!sender || (!message && !postback)) continue; // ignora delivery/read
       if (message?.is_echo) continue; // ignora echo das mensagens enviadas pela própria página
       if (message && hasMessengerAttachments(message)) continue; // o sync-facebook baixa e envia a mídia real
-      const actionId = ((message?.quick_reply as Json | undefined)?.payload as string | undefined) ??
+      const actionId = ((message?.quick_reply as Json | undefined)?.payload as
+        | string
+        | undefined) ??
         (postback?.payload as string | undefined) ?? "";
       const text = (message?.text as string | undefined) ??
         (postback?.title as string | undefined) ?? actionId ?? "[anexo]";
@@ -1857,21 +2723,31 @@ async function handleMessenger(db: Db, p: Json) {
       // o webhook não manda o nome do remetente -- a Graph API devolve via GET /{id}?fields=name
       // mesmo quando o evento não traz (comum no Instagram). Sem isso, Chatwoot cria nome
       // aleatório tipo "fragrant-feather-524".
-      const name = await fetchSenderName(db, channel.id as string, sender);
+      const profile = await fetchSenderProfile(
+        db,
+        channel.id as string,
+        sender,
+      );
 
       const inboundEventId = (message?.mid as string | undefined) ??
         (postback?.mid as string | undefined) ??
         `postback-${sender}-${String(entry.time ?? Date.now())}-${actionId}`;
       await ingestInbound(db, channel as Json, {
         from: sender,
-        name,
+        name: profile.name,
+        avatarUrl: profile.avatarUrl,
         metaMessageId: inboundEventId,
         msgType: "text",
         content: text,
         acct,
+        referral: (m.referral as Json | undefined) ??
+          (postback?.referral as Json | undefined) ?? undefined,
       });
 
-      if (/^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_|plantio_|nutricao_)/.test(actionId)) {
+      if (
+        /^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_|plantio_|nutricao_)/
+          .test(actionId)
+      ) {
         const claimed = await claimDelivery(
           db,
           socialPriceActionClaimKey(
@@ -1886,7 +2762,13 @@ async function handleMessenger(db: Db, p: Json) {
         } else if (claimed && actionId.startsWith("plantio_")) {
           await handlePlantioClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed && actionId.startsWith("nutricao_")) {
-          await handleNutricaoClick(db, channel as Json, sender, actionId, acct);
+          await handleNutricaoClick(
+            db,
+            channel as Json,
+            sender,
+            actionId,
+            acct,
+          );
         } else if (claimed) {
           await handleSocialPrecoClick(
             db,
@@ -1918,16 +2800,38 @@ async function handleMessenger(db: Db, p: Json) {
   }
 }
 
-async function fetchSenderName(db: Db, channelId: string, senderId: string): Promise<string | undefined> {
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channelId).maybeSingle();
-  if (!secret?.channel_token) return undefined;
+async function fetchSenderProfile(
+  db: Db,
+  channelId: string,
+  senderId: string,
+): Promise<{ name?: string; avatarUrl?: string }> {
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channelId).maybeSingle();
+  if (!secret?.channel_token) return {};
   try {
-    const res = await getMeta(secret.channel_token, `${senderId}?fields=name`);
-    if (!res.ok) return undefined;
-    return (res.data as Json).name as string | undefined;
+    let res = await getMeta(
+      secret.channel_token,
+      `${senderId}?fields=name,profile_pic,profile_picture_url,username`,
+    );
+    if (!res.ok) {
+      res = await getMeta(secret.channel_token, `${senderId}?fields=name`);
+    }
+    if (!res.ok) return {};
+    const data = res.data as Json;
+    return {
+      name: (data.name ?? data.username) as string | undefined,
+      avatarUrl: (data.profile_pic ?? data.profile_picture_url) as
+        | string
+        | undefined,
+    };
   } catch (e) {
-    console.warn("fetchSenderName falhou", senderId, String(e).slice(0, 150));
-    return undefined;
+    console.warn(
+      "fetchSenderProfile falhou",
+      senderId,
+      String(e).slice(0, 150),
+    );
+    return {};
   }
 }
 
@@ -1944,10 +2848,16 @@ async function resumeCampaign(db: Db, channel: Json, from: string) {
   t.status = "active";
   await writeCampaigns(state);
 
-  const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  const hybrid = await getHybridRoute(channel.id as string, phone ?? "", channel.phone_number as string);
+  const hybrid = await getHybridRoute(
+    channel.id as string,
+    phone ?? "",
+    channel.phone_number as string,
+  );
   if (!hybrid && (!token || !phone)) return;
 
   for (const step of camp.steps) {
@@ -1965,12 +2875,19 @@ async function resumeCampaign(db: Db, channel: Json, from: string) {
           if (ogg) mediaUrl = ogg;
         }
         r = await hybridSendMedia(hybrid, key, mediaUrl, step.type as string, {
-          caption: (step.type !== "audio" && step.text) ? step.text as string : undefined,
-          fileName: step.type === "document" ? (step.text as string ?? "arquivo") : undefined,
+          caption: (step.type !== "audio" && step.text)
+            ? step.text as string
+            : undefined,
+          fileName: step.type === "document"
+            ? (step.text as string ?? "arquivo")
+            : undefined,
           isVoice: step.type === "audio",
         });
       }
-      if (r) { console.log("resumeCampaign hybrid:", step.type, "uazapi OK"); continue; }
+      if (r) {
+        console.log("resumeCampaign hybrid:", step.type, "uazapi OK");
+        continue;
+      }
       console.log("resumeCampaign hybrid:", step.type, "fallback oficial");
     }
 
@@ -1978,22 +2895,42 @@ async function resumeCampaign(db: Db, channel: Json, from: string) {
       let body: Json;
       if (step.type === "text") {
         if (!step.text) continue;
-        body = { messaging_product: "whatsapp", to: key, type: "text", text: { body: step.text } };
+        body = {
+          messaging_product: "whatsapp",
+          to: key,
+          type: "text",
+          text: { body: step.text },
+        };
       } else {
         if (!step.file) continue;
         const media: Json = { link: step.file };
         if (step.type !== "audio" && step.text) media.caption = step.text;
         if (step.type === "document" && step.text) media.filename = step.text;
-        body = { messaging_product: "whatsapp", to: key, type: step.type, [step.type]: media };
+        body = {
+          messaging_product: "whatsapp",
+          to: key,
+          type: step.type,
+          [step.type]: media,
+        };
       }
       r = await sendMeta(token, `${phone}/messages`, body);
-      if (!r.ok) console.error(`resumeCampaign step falhou (${step.type}):`, JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200));
+      if (!r.ok) {
+        console.error(
+          `resumeCampaign step falhou (${step.type}):`,
+          JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200),
+        );
+      }
     }
   }
 
   // marca concluído
   const s2 = await readCampaigns();
-  if (s2.targets[key]) { s2.targets[key].status = "done"; s2.targets[key].step = camp.steps.length; s2.targets[key].ts = new Date().toISOString(); await writeCampaigns(s2); }
+  if (s2.targets[key]) {
+    s2.targets[key].status = "done";
+    s2.targets[key].step = camp.steps.length;
+    s2.targets[key].ts = new Date().toISOString();
+    await writeCampaigns(s2);
+  }
 }
 
 function hasMessengerAttachments(message: Json): boolean {
@@ -2005,11 +2942,22 @@ function hasMessengerAttachments(message: Json): boolean {
 // Baixa direto na Graph API da Meta (o Hub em modo shared não serve o binário):
 // 1) GET graph.facebook.com/<ver>/<media_id> com Bearer <metaToken> -> { url, mime_type, file_size }
 // 2) fetch(url) com Bearer <metaToken> -> bytes (lookaside exige o token Meta)
-async function downloadWhatsAppMedia(metaToken: string, mediaId: string, filenameHint?: string): Promise<InboundAttachment | null> {
+async function downloadWhatsAppMedia(
+  metaToken: string,
+  mediaId: string,
+  filenameHint?: string,
+): Promise<InboundAttachment | null> {
   const auth = { Authorization: `Bearer ${metaToken}` };
-  const infoRes = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${mediaId}`, { headers: auth });
+  const infoRes = await fetch(
+    `https://graph.facebook.com/${GRAPH_VERSION}/${mediaId}`,
+    { headers: auth },
+  );
   if (!infoRes.ok) {
-    console.warn("WA mídia metadata falhou", infoRes.status, (await infoRes.text()).slice(0, 200));
+    console.warn(
+      "WA mídia metadata falhou",
+      infoRes.status,
+      (await infoRes.text()).slice(0, 200),
+    );
     return null;
   }
   const d = await infoRes.json().catch(() => ({})) as Json;
@@ -2020,7 +2968,10 @@ async function downloadWhatsAppMedia(metaToken: string, mediaId: string, filenam
   if (declaredSize && declaredSize > MAX_ATTACHMENT_BYTES) return null;
 
   const res = await fetch(url, { headers: auth });
-  if (!res.ok) { console.warn("WA mídia download falhou", res.status); return null; }
+  if (!res.ok) {
+    console.warn("WA mídia download falhou", res.status);
+    return null;
+  }
 
   const length = Number(res.headers.get("content-length") ?? 0);
   if (Number.isFinite(length) && length > MAX_ATTACHMENT_BYTES) return null;
@@ -2042,18 +2993,34 @@ async function downloadWhatsAppMedia(metaToken: string, mediaId: string, filenam
 
 // Extrai texto + anexo de uma mensagem/echo WhatsApp (mesmo formato p/ inbound e echo).
 async function extractWaContent(
-  m: Json, type: string, metaToken: string | undefined, channelId: string,
+  m: Json,
+  type: string,
+  metaToken: string | undefined,
+  channelId: string,
 ): Promise<{ content: string; attachments?: InboundAttachment[] }> {
-  if (type === "text") return { content: ((m.text as Json)?.body as string) ?? "" };
+  if (type === "text") {
+    return { content: ((m.text as Json)?.body as string) ?? "" };
+  }
   if (WA_MEDIA_TYPES.has(type)) {
     const media = (m[type] ?? {}) as Json;
     const mediaId = stringValue(media.id);
     const caption = stringValue(media.caption);
-    const filenameHint = type === "document" ? stringValue(media.filename) ?? undefined : undefined;
-    if (!metaToken) console.warn("WA mídia sem META_ACCESS_TOKEN — usando placeholder", channelId);
-    const downloaded = metaToken && mediaId ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint) : null;
+    const filenameHint = type === "document"
+      ? stringValue(media.filename) ?? undefined
+      : undefined;
+    if (!metaToken) {
+      console.warn(
+        "WA mídia sem META_ACCESS_TOKEN — usando placeholder",
+        channelId,
+      );
+    }
+    const downloaded = metaToken && mediaId
+      ? await downloadWhatsAppMedia(metaToken, mediaId, filenameHint)
+      : null;
     // anexo baixou: conteúdo = legenda (ou vazio; sem rótulo "[audio]"). Sem anexo: placeholder textual.
-    if (downloaded) return { content: caption ?? "", attachments: [downloaded] };
+    if (downloaded) {
+      return { content: caption ?? "", attachments: [downloaded] };
+    }
     return { content: caption ?? fallbackContent(type) };
   }
   return { content: `[${type}]` }; // tipo sem tradução (location/contacts/interactive/etc.)

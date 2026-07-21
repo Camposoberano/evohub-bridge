@@ -4,6 +4,11 @@ import { claimDelivery, type DbClient } from "./supabase.ts";
 import { optionalEnv } from "./env.ts";
 import { ensureCustomer } from "./customer.ts";
 import {
+  mergeLeadAttributes,
+  sourceSnapshot,
+  syncInboundCliente,
+} from "./lead-profile.ts";
+import {
   type ChatwootAttachment,
   createConversation,
   createConversationMessage,
@@ -48,6 +53,7 @@ export async function ingestInbound(
     skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
     acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
     referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
+    avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
   },
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   const direction = msg.outgoing ? "out" : "in";
@@ -100,18 +106,36 @@ export async function ingestInbound(
   const phone = channel.type === "whatsapp" && pareceTelefone
     ? `+${msg.from}`
     : null;
-  const customerId = await ensureCustomer(db, {
-    channelId: channel.id as string,
-    externalId: msg.from,
-    phone,
-    name: msg.name,
-  });
-
   const { data: existing, error: contactQueryError } = await db
     .from("contacts").select("*")
     .eq("channel_id", channel.id).eq("external_contact_id", msg.from)
     .maybeSingle();
   if (contactQueryError) throw contactQueryError;
+
+  const leadAttributes = mergeLeadAttributes(
+    (existing?.attributes as Json | undefined) ?? {},
+    channel,
+    msg.from,
+    msg.referral,
+    msg.avatarUrl,
+  );
+  const customerId = await ensureCustomer(db, {
+    channelId: channel.id as string,
+    externalId: msg.from,
+    phone,
+    name: msg.name,
+    avatarUrl: msg.avatarUrl,
+    attributes: leadAttributes,
+  });
+  if (!msg.outgoing) {
+    await syncInboundCliente(db, {
+      channel,
+      externalId: msg.from,
+      customerId,
+      name: msg.name,
+      referral: msg.referral,
+    });
+  }
 
   let contact = existing as Json | null;
   let sourceId = (existing?.attributes as Json | undefined)?.source_id as
@@ -136,8 +160,8 @@ export async function ingestInbound(
         chatwoot_contact_id: cw?.contact_id ??
           (contact?.chatwoot_contact_id ?? null),
         attributes: sourceId
-          ? { source_id: sourceId }
-          : ((contact?.attributes as Json) ?? {}),
+          ? { ...leadAttributes, source_id: sourceId }
+          : leadAttributes,
         last_seen_at: new Date().toISOString(),
       }, { onConflict: "channel_id,external_contact_id" }).select().single();
     if (upsertError) throw upsertError;
@@ -148,6 +172,9 @@ export async function ingestInbound(
         customer_id: customerId,
         name: msg.name || contact.name,
         phone,
+        attributes: sourceId
+          ? { ...leadAttributes, source_id: sourceId }
+          : leadAttributes,
         last_seen_at: new Date().toISOString(),
       })
       .eq("id", contact.id);
@@ -161,6 +188,7 @@ export async function ingestInbound(
   if (convQueryError) throw convQueryError;
 
   let conv = openConv as Json | null;
+  const source = sourceSnapshot(channel, msg.from, msg.referral);
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
     const cwConv = skip
@@ -175,17 +203,18 @@ export async function ingestInbound(
       status: "open",
       origem: msg.referral ? "anuncio" : null,
       referral: msg.referral ?? null,
+      ...source,
     }).select().single();
     if (convInsertError) throw convInsertError;
     conv = insertedConv as Json;
-  } else if (msg.referral && !conv.origem) {
-    // conversa já existia e AGORA chegou referral de anúncio -> marca a origem (janela vira 72h).
-    db.from("conversations").update({
-      origem: "anuncio",
-      referral: msg.referral,
-    })
-      .eq("id", conv.id).then(() => {}, () => {});
-    conv.origem = "anuncio";
+  } else {
+    const sourceUpdate = {
+      ...source,
+      origem: msg.referral ? "anuncio" : conv.origem,
+      referral: msg.referral ?? conv.referral ?? null,
+    };
+    await db.from("conversations").update(sourceUpdate).eq("id", conv.id);
+    conv = { ...conv, ...sourceUpdate };
   }
 
   const attachments = msg.attachments ?? [];

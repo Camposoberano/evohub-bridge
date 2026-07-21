@@ -29,6 +29,31 @@ import {
 } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
+
+async function fetchSocialProfile(
+  token: string,
+  contactId: string,
+): Promise<{ name?: string; avatarUrl?: string }> {
+  try {
+    let response = await getMeta(
+      token,
+      `${contactId}?fields=name,profile_pic,profile_picture_url,username`,
+    );
+    if (!response.ok) {
+      response = await getMeta(token, `${contactId}?fields=name`);
+    }
+    if (!response.ok) return {};
+    const data = response.data as Json;
+    return {
+      name: (data.name ?? data.username) as string | undefined,
+      avatarUrl: (data.profile_pic ?? data.profile_picture_url) as
+        | string
+        | undefined,
+    };
+  } catch {
+    return {};
+  }
+}
 type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
@@ -204,6 +229,7 @@ async function syncInbound(
     media_repaired: 0,
     media_failed: 0,
   };
+  const profileCache = new Map<string, { name?: string; avatarUrl?: string }>();
 
   for (const conversation of conversations) {
     const updatedMs = Date.parse(conversation.updated_time as string);
@@ -284,9 +310,18 @@ async function syncInbound(
       const msgType = inboundMsgType(message, attachments);
       const content = (message.message as string | undefined)?.trim() ||
         fallbackContent(msgType);
+      let profile = profileCache.get(contactId);
+      if (!profile && !isFromPage) {
+        profile = await fetchSocialProfile(
+          secret.channel_token as string,
+          contactId,
+        );
+        profileCache.set(contactId, profile);
+      }
       const ingest = await ingestInbound(db, channel, {
         from: contactId,
-        name: contactName,
+        name: profile?.name ?? contactName,
+        avatarUrl: profile?.avatarUrl,
         metaMessageId,
         msgType,
         content,
@@ -294,6 +329,7 @@ async function syncInbound(
         attachments,
         outgoing: isFromPage,
         acct,
+        referral: (message.referral as Json | undefined) ?? undefined,
       });
 
       if (ingest.inserted) result.inserted++;

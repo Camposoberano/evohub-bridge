@@ -32,6 +32,32 @@ export default function Central() {
   const [showOficiais, setShowOficiais] = useState(false); // seção recolhível dos canais oficiais
   const [sincronizando, setSincronizando] = useState(false);
   const [novoCanalOpen, setNovoCanalOpen] = useState(false);
+  const [health, setHealth] = useState(null);
+
+  async function carregarSaude() {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/operational-health`, {
+      headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) setHealth(data);
+  }
+
+  async function definirResponsavel(channel) {
+    const owner = prompt(`Responsável pelo canal ${channel.name}:`, channel.owner_name || "");
+    if (owner === null) return;
+    const identifier = prompt("Identificador do vendedor (e-mail, código ou telefone):", channel.owner_identifier || "");
+    if (identifier === null) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/operational-health`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ channel_id: channel.id, owner_name: owner, owner_identifier: identifier }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setMsg(res.ok ? "Responsável atualizado." : `Erro: ${data.error || res.status}`);
+    if (res.ok) await carregar();
+  }
 
   // Atualiza status dos canais oficiais (consulta o EVO Hub e grava na base).
   async function atualizarCanais() {
@@ -107,6 +133,7 @@ export default function Central() {
     const c = await acc("GET");
     if (c.ok && c.data.accounts) setContas(c.data.accounts);
     if (c.ok && c.data.channelMap) setChannelMap(c.data.channelMap);
+    await carregarSaude();
   }, []);
 
   useEffect(() => {
@@ -149,6 +176,25 @@ export default function Central() {
 
         {msg && <div className="card" style={{ marginBottom: 16, fontSize: 13 }}>{msg}</div>}
 
+        {health && (
+          <section style={{ marginBottom: 18, border: `1px solid ${health.ok ? "#256d4b" : "#9b3956"}`, padding: 16, background: "var(--surface)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontWeight: 700 }}>Saúde operacional</div>
+                <div style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 3 }}>
+                  {health.totals?.active_channels || 0}/{health.totals?.channels || 0} canais ativos · {health.totals?.recent_contacts_24h || 0} leads nas últimas 24h
+                </div>
+              </div>
+              <span className={`badge ${health.ok ? "badge-green" : "badge-red"}`}>{health.ok ? "Operação estável" : "Atenção necessária"}</span>
+            </div>
+            {health.issues?.length > 0 && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
+                {health.issues.map((issue) => <span key={issue.key} className={`badge ${issue.severity === "critical" ? "badge-red" : "badge-amber"}`}>{issue.key}: {issue.count}</span>)}
+              </div>
+            )}
+          </section>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16, alignItems: "start" }}>
           {contas.map((conta) => {
             // canais oficiais aparecem na tela atribuída (channelMap; default = principal).
@@ -180,6 +226,7 @@ export default function Central() {
                           <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <span style={{ width: 8, height: 8, borderRadius: 999, background: plat.color }} />
                             <span style={{ flex: 1, fontSize: 14 }}>{c.name} <span style={{ color: "var(--text-faint)", fontSize: 12 }}>· {plat.label}</span></span>
+                            <button className="btn-ghost mini" title="Definir responsável comercial" onClick={() => definirResponsavel(c)}>{c.owner_name || "Sem responsável"}</button>
                             <span className={"badge " + cls}>{txt}</span>
                           </div>
                         );
@@ -277,6 +324,7 @@ export default function Central() {
                     <span style={{ width: 8, height: 8, borderRadius: 999, background: plat.color, flex: "0 0 auto" }} />
                     <div className="integ-body"><div className="integ-name">{c.name}</div><div className="integ-desc">{plat.label}{c.phone_number_id ? " · " + c.phone_number_id : ""}</div></div>
                     <span className={"badge " + cls}>{txt}</span>
+                    <button className="btn-ghost mini" title="Definir responsável comercial" onClick={() => definirResponsavel(c)}>{c.owner_name || "Sem responsável"}</button>
                     <select value={contaDoCanal(c.id)} onChange={(e) => atribuirCanal(c.id, e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
                       {contas.map((ct) => <option key={ct.id} value={ct.id}>{ct.label}</option>)}
                     </select>
@@ -295,10 +343,12 @@ export default function Central() {
           {uaz.length === 0 ? <div style={{ padding: 16, color: "var(--text-dim)" }}>Nenhuma instância.</div> :
             uaz.map((i) => {
               const [cls, txt] = statusBadge(i.status);
+              const channel = canais.find((c) => c.name === i.name || c.external_id === i.name);
               return (
                 <div key={i.name} className="integ">
                   <div className="integ-body"><div className="integ-name">{i.name}</div><div className="integ-desc">{i.number || "—"}</div></div>
                   <span className={"badge " + cls}>{txt}</span>
+                  {channel && <button className="btn-ghost mini" title="Definir responsável comercial" onClick={() => definirResponsavel(channel)}>{channel.owner_name || "Sem responsável"}</button>}
                   <select value={assign[i.name] || ""} onChange={(e) => atribuir(i.name, e.target.value)} style={{ fontSize: 12, padding: "4px 8px" }}>
                     <option value="">— tela —</option>
                     {contas.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
