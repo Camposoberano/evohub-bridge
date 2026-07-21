@@ -1,4 +1,5 @@
 import {
+  inferSocialDetailAction,
   inferSocialMenuAction,
   inferSocialSalesIntent,
   socialContactText,
@@ -51,6 +52,29 @@ Deno.test("sincronizador reconhece o texto dos botões comerciais", () => {
   assert(
     inferSocialMenuAction("Falar com Cícero") === "menu_humano",
     "deve abrir contato",
+  );
+  assert(
+    inferSocialMenuAction("Info nutricional") === "menu_nutricao",
+    "deve reconhecer o menu do funil já enviado",
+  );
+  assert(
+    inferSocialMenuAction("Assistir vídeos") === "menu_depoimento",
+    "deve reconhecer o título antigo de vídeos",
+  );
+});
+
+Deno.test("sincronizador reconhece temas de plantio e nutrição", () => {
+  assert(
+    inferSocialDetailAction("Solo e adubação") === "plantio_solo",
+    "deve abrir a orientação de solo",
+  );
+  assert(
+    inferSocialDetailAction("Proteína") === "nutricao_2",
+    "deve abrir proteína",
+  );
+  assert(
+    inferSocialDetailAction("Produção estimada") === "nutricao_9",
+    "deve abrir produção estimada",
   );
 });
 

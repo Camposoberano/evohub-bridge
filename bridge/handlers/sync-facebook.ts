@@ -16,9 +16,14 @@ import {
   inferSocialPriceReplyFromPrompts,
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
-import { inferSocialMenuAction } from "../shared/social-sales.ts";
+import {
+  inferSocialDetailAction,
+  inferSocialMenuAction,
+} from "../shared/social-sales.ts";
 import {
   handleMenuClick,
+  handleNutricaoClick,
+  handlePlantioClick,
   handleSocialPrecoClick,
   handleSocialSalesIntent,
 } from "./hub-webhook.ts";
@@ -299,6 +304,7 @@ async function syncInbound(
         Number.isFinite(messageAt) && Date.now() - messageAt < 5 * 60_000;
       if ((ingest.inserted || isRecentDuplicate) && !isFromPage && content) {
         const menuAction = inferSocialMenuAction(content);
+        const detailAction = inferSocialDetailAction(content);
         const inferredReply = await inferStoredSocialPriceReply(
           db,
           channel.id as string,
@@ -306,7 +312,43 @@ async function syncInbound(
           content,
           message.created_time as string | undefined,
         );
-        if (menuAction) {
+        if (detailAction) {
+          try {
+            const eventId = metaMessageId ??
+              `sync-${contactId}-${String(message.created_time ?? "")}`;
+            const claimed = await claimDelivery(
+              db,
+              socialPriceActionClaimKey(
+                channel.id as string,
+                eventId,
+                detailAction,
+              ),
+              "social-detail-action",
+            );
+            if (claimed && detailAction.startsWith("plantio_")) {
+              await handlePlantioClick(
+                db,
+                channel,
+                contactId,
+                detailAction,
+                acct,
+              );
+            } else if (claimed) {
+              await handleNutricaoClick(
+                db,
+                channel,
+                contactId,
+                detailAction,
+                acct,
+              );
+            }
+          } catch (error) {
+            console.error(
+              "sync-facebook detalhe técnico falhou:",
+              String(error).slice(0, 240),
+            );
+          }
+        } else if (menuAction) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;

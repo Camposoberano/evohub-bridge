@@ -697,9 +697,14 @@ async function markSocialLead(
   const acct = await accountForChannel(channel.id as string);
   try {
     const labels = await getConversationLabels(cwConvId, acct);
+    const sourceLabel = channel.type === "facebook"
+      ? "canal-facebook"
+      : channel.type === "instagram"
+      ? "canal-instagram"
+      : null;
     await setConversationLabels(
       cwConvId,
-      [...new Set([...labels, ...addedLabels])],
+      [...new Set([...labels, ...addedLabels, ...(sourceLabel ? [sourceLabel] : [])])],
       acct,
     );
     await createConversationMessage(cwConvId, {
@@ -768,14 +773,18 @@ export async function handleSocialSalesIntent(
       ], "Cliente pediu contato com o Cícero. Responder o quanto antes.");
     } else {
       await sendSocialPieces(db, channel, from, [{
-        type: "interactive",
+        type: "list",
         payload: {
           text: SOCIAL_INFO_TEXT,
-          buttons: [
-            { id: "menu_preco", title: "Ver preço" },
-            { id: "menu_depoimento", title: "Ver vídeos" },
-            { id: "menu_humano", title: "Falar com Cícero" },
-          ],
+          sections: [{
+            rows: [
+              { id: "menu_preco", title: "Ver preço" },
+              { id: "menu_depoimento", title: "Ver vídeos" },
+              { id: "menu_plantio", title: "Como plantar" },
+              { id: "menu_nutricao", title: "Ver nutrição" },
+              { id: "menu_humano", title: "Falar com Cícero" },
+            ],
+          }],
         },
       }], `social-info:${messageId}`);
       await markSocialLead(db, channel, from, [
@@ -1223,6 +1232,10 @@ const PLANTIO_RESUMOS: Record<string, string> = {
 };
 
 async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await handleSocialPlantioSequence(db, channel, from);
+    return;
+  }
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -1287,6 +1300,13 @@ async function handlePlantioSequence(db: Db, channel: Json, from: string, acct?:
 export async function handlePlantioClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
   const resumo = PLANTIO_RESUMOS[id];
   if (!resumo) return;
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await sendSocialPieces(db, channel, from, [
+      { type: "text", payload: { content: resumo } },
+      socialPlantioListPiece(),
+    ]);
+    return;
+  }
 
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
@@ -1352,6 +1372,62 @@ export async function handlePlantioClick(db: Db, channel: Json, from: string, id
     content: "Quer ver outro tema? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
     status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
   });
+}
+
+function socialPlantioListPiece(): { type: string; payload: Json } {
+  return {
+    type: "list",
+    payload: {
+      text: "Quer consultar outro tema de plantio? Escolha abaixo.",
+      sections: [{
+        rows: [
+          { id: "plantio_1", title: "A semente" },
+          { id: "plantio_2", title: "Plantio em linha" },
+          { id: "plantio_3", title: "Plantio a lanço" },
+          { id: "plantio_4", title: "Calagem do solo" },
+          { id: "plantio_5", title: "Adubação de base" },
+          { id: "plantio_6", title: "Adubação cobertura" },
+          { id: "plantio_7", title: "Controle de mato" },
+          { id: "plantio_8", title: "Pragas" },
+          { id: "plantio_9", title: "Corte e silagem" },
+          { id: "plantio_10", title: "Produtividade" },
+        ],
+      }],
+    },
+  };
+}
+
+async function handleSocialPlantioSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+): Promise<void> {
+  const { data: pdfMedia } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", "plantio_pdf")
+    .eq("active", true).limit(1).maybeSingle();
+  const pieces: { type: string; payload: Json }[] = [];
+  if (pdfMedia?.url) {
+    pieces.push({
+      type: "text",
+      payload: {
+        content:
+          `📄 Instruções completas de plantio do Mega Sorgo Santa Elisa:\n${pdfMedia.url}`,
+      },
+    });
+  }
+  pieces.push({
+    type: "interactive",
+    payload: {
+      text:
+        "🌱 O que o senhor precisa resolver agora no plantio? Escolha uma opção e eu envio a orientação direto ao ponto.",
+      buttons: [
+        { id: "plantio_inicio", title: "Como começar" },
+        { id: "plantio_solo", title: "Solo e adubação" },
+        { id: "plantio_colheita", title: "Corte e silagem" },
+      ],
+    },
+  });
+  await sendSocialPieces(db, channel, from, pieces);
 }
 
 // ── Info Nutricional — dados do Laboratório Prado (amostra 2025-12-05) ──
@@ -1469,6 +1545,10 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
 };
 
 async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?: CwAcct): Promise<void> {
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await handleSocialNutricaoSequence(db, channel, from);
+    return;
+  }
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
@@ -1529,6 +1609,13 @@ async function handleNutricaoSequence(db: Db, channel: Json, from: string, acct?
 export async function handleNutricaoClick(db: Db, channel: Json, from: string, id: string, acct?: CwAcct): Promise<void> {
   const resumo = NUTRICAO_RESUMOS[id];
   if (!resumo) return;
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await sendSocialPieces(db, channel, from, [
+      { type: "text", payload: { content: resumo } },
+      socialNutricaoListPiece(),
+    ]);
+    return;
+  }
 
   const { data: secret } = await db.from("channel_secrets").select("channel_token").eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
@@ -1581,6 +1668,43 @@ export async function handleNutricaoClick(db: Db, channel: Json, from: string, i
     content: "Quer ver outro dado? [lista]", meta_message_id: metaId2, chatwoot_message_id: cwMsgId2,
     status: r2.ok ? "sent" : "failed", sent_at: new Date().toISOString(),
   });
+}
+
+function socialNutricaoListPiece(): { type: string; payload: Json } {
+  return {
+    type: "list",
+    payload: {
+      text: "Quer consultar outro dado do laudo? Escolha abaixo.",
+      sections: [{
+        rows: NUTRICAO_ROWS.map((row) => ({
+          id: row.id,
+          title: row.title.replace(/^[^A-Za-zÀ-ÿ]+/u, "").trim(),
+        })),
+      }],
+    },
+  };
+}
+
+async function handleSocialNutricaoSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+): Promise<void> {
+  const { data: pdfMedia } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", "nutricao_pdf")
+    .eq("active", true).limit(1).maybeSingle();
+  const pieces: { type: string; payload: Json }[] = [];
+  if (pdfMedia?.url) {
+    pieces.push({
+      type: "text",
+      payload: {
+        content:
+          `🧪 Análise Bromatológica completa do Mega Sorgo Santa Elisa:\n${pdfMedia.url}`,
+      },
+    });
+  }
+  pieces.push(socialNutricaoListPiece());
+  await sendSocialPieces(db, channel, from, pieces);
 }
 
 async function handleSaudacao(db: Db, channel: Json, from: string, _acct?: CwAcct): Promise<void> {
@@ -1747,7 +1871,7 @@ async function handleMessenger(db: Db, p: Json) {
         acct,
       });
 
-      if (/^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_)/.test(actionId)) {
+      if (/^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_|plantio_|nutricao_)/.test(actionId)) {
         const claimed = await claimDelivery(
           db,
           socialPriceActionClaimKey(
@@ -1759,6 +1883,10 @@ async function handleMessenger(db: Db, p: Json) {
         );
         if (claimed && actionId.startsWith("menu_")) {
           await handleMenuClick(db, channel as Json, sender, actionId, acct);
+        } else if (claimed && actionId.startsWith("plantio_")) {
+          await handlePlantioClick(db, channel as Json, sender, actionId, acct);
+        } else if (claimed && actionId.startsWith("nutricao_")) {
+          await handleNutricaoClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed) {
           await handleSocialPrecoClick(
             db,

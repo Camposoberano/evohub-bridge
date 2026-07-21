@@ -7,6 +7,9 @@ export type SocialMenuAction =
   | "menu_plantio"
   | "menu_nutricao"
   | "menu_humano";
+export type SocialDetailAction =
+  | `plantio_${string}`
+  | `nutricao_${string}`;
 
 const DEFAULT_SALES_WHATSAPP = "5519999715895";
 const DEFAULT_CONTACT_IMAGE =
@@ -49,12 +52,46 @@ export function inferSocialSalesIntent(text: string): SocialSalesIntent | null {
 export function inferSocialMenuAction(text: string): SocialMenuAction | null {
   const value = normalize(text).replace(/^meta ai\s+/, "");
   const actions: Record<string, SocialMenuAction> = {
+    "preco": "menu_preco",
     "ver preco": "menu_preco",
+    "assistir videos": "menu_depoimento",
     "ver videos": "menu_depoimento",
     "como plantar": "menu_plantio",
     "ver plantio": "menu_plantio",
+    "info nutricional": "menu_nutricao",
     "ver nutricao": "menu_nutricao",
     "falar com cicero": "menu_humano",
+  };
+  return actions[value] ?? null;
+}
+
+export function inferSocialDetailAction(
+  text: string,
+): SocialDetailAction | null {
+  const value = normalize(text).replace(/^meta ai\s+/, "");
+  const actions: Record<string, SocialDetailAction> = {
+    "como comecar": "plantio_inicio",
+    "solo e adubacao": "plantio_solo",
+    "corte e silagem": "plantio_colheita",
+    "a semente": "plantio_1",
+    "plantio em linha": "plantio_2",
+    "plantio a lanco": "plantio_3",
+    "calagem do solo": "plantio_4",
+    "adubacao de base": "plantio_5",
+    "adubacao cobertura": "plantio_6",
+    "controle de mato": "plantio_7",
+    "pragas": "plantio_8",
+    "produtividade": "plantio_10",
+    "visao geral": "nutricao_1",
+    "proteina": "nutricao_2",
+    "energia ndt": "nutricao_3",
+    "fibras": "nutricao_4",
+    "minerais": "nutricao_5",
+    "gordura": "nutricao_6",
+    "digestibilidade": "nutricao_7",
+    "fermentacao": "nutricao_8",
+    "producao estimada": "nutricao_9",
+    "comparativo": "nutricao_10",
   };
   return actions[value] ?? null;
 }
