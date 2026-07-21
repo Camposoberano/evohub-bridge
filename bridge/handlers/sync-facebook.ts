@@ -318,6 +318,8 @@ async function syncInbound(
                 channel,
                 contactId,
                 inferredReply,
+                metaMessageId ??
+                  `sync-${contactId}-${String(message.created_time ?? "")}`,
               );
             }
           } catch (error) {

@@ -512,6 +512,7 @@ async function sendSocialPieces(
   channel: Json,
   from: string,
   pieces: { type: string; payload: Json }[],
+  dedupeScope?: string,
 ): Promise<void> {
   const { data: contact } = await db.from("contacts").select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
@@ -536,6 +537,7 @@ async function sendSocialPieces(
             chatwoot_conversation_id: cwConvId,
             type: piece.type,
             payload: piece.payload,
+            dedupe_scope: dedupeScope,
           }),
         },
       ),
@@ -556,9 +558,21 @@ export async function handleSocialPrecoClick(
   channel: Json,
   from: string,
   id: string,
+  actionEventId?: string,
 ): Promise<void> {
+  const actionScope = actionEventId ? `social-price-action:${actionEventId}` : undefined;
   if (id === "preco_tamanho") {
-    await handleSocialPrecoSequence(db, channel, from);
+    await sendSocialPieces(db, channel, from, [{
+      type: "interactive",
+      payload: {
+        text: "📐 Qual outra área o senhor quer calcular?",
+        buttons: [
+          { id: "tam_2kg", title: "Meio hectare" },
+          { id: "tam_4kg", title: "1 hectare" },
+          { id: "preco_area_maior", title: "2 hectares ou mais" },
+        ],
+      },
+    }], actionScope);
     return;
   }
   if (id === "preco_area_maior") {
@@ -571,7 +585,7 @@ export async function handleSocialPrecoClick(
           { id: "tam_20kg", title: "4 hectares ou mais" },
         ],
       },
-    }]);
+    }], actionScope);
     return;
   }
   if (id === "preco_pagamento") {
@@ -585,7 +599,7 @@ export async function handleSocialPrecoClick(
           { id: "pag_boleto", title: "Boleto" },
         ],
       },
-    }]);
+    }], actionScope);
     return;
   }
 
@@ -603,7 +617,7 @@ export async function handleSocialPrecoClick(
     await sendSocialPieces(db, channel, from, [{
       type: "text",
       payload: { content: paymentText[id] },
-    }]);
+    }], actionScope);
     return;
   }
 
@@ -635,7 +649,7 @@ export async function handleSocialPrecoClick(
       },
     },
   );
-  await sendSocialPieces(db, channel, from, pieces);
+  await sendSocialPieces(db, channel, from, pieces, actionScope);
 }
 
 // clique nos botões da sequência de preço.
@@ -1605,7 +1619,13 @@ async function handleMessenger(db: Db, p: Json) {
         if (claimed && actionId === "menu_preco") {
           await handleMenuClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed) {
-          await handleSocialPrecoClick(db, channel as Json, sender, actionId);
+          await handleSocialPrecoClick(
+            db,
+            channel as Json,
+            sender,
+            actionId,
+            inboundEventId,
+          );
         }
       }
     }

@@ -4,8 +4,9 @@ export function outboundClaimKey(
   conversationId: number,
   type: string,
   payload: Json,
+  scope?: string,
 ): string {
-  const content = JSON.stringify(payload);
+  const content = JSON.stringify(scope ? { payload, scope } : payload);
   let hash = 0x811c9dc5;
   for (let index = 0; index < content.length; index++) {
     hash ^= content.charCodeAt(index);

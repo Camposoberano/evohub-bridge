@@ -22,3 +22,15 @@ Deno.test("vídeos sequenciais recebem claims diferentes", () => {
     }),
   );
 });
+
+Deno.test("cliques legítimos usam escopos de deduplicação diferentes", () => {
+  const payload = { text: "Qual outra área?" };
+  assertNotEquals(
+    outboundClaimKey(570, "interactive", payload, "click-1"),
+    outboundClaimKey(570, "interactive", payload, "click-2"),
+  );
+  assertEquals(
+    outboundClaimKey(570, "interactive", payload, "click-1"),
+    outboundClaimKey(570, "interactive", payload, "click-1"),
+  );
+});

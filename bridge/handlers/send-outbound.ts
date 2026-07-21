@@ -60,6 +60,7 @@ export async function handle(req: Request): Promise<Response> {
   const type = (body.type as string) ?? "text";
   const payload = (body.payload as Json) ??
     (body.content ? { content: body.content } : {});
+  const dedupeScope = body.dedupe_scope as string | undefined;
 
   const db = admin();
   const { data: conv } = await db.from("conversations").select(
@@ -141,7 +142,7 @@ export async function handle(req: Request): Promise<Response> {
 
   // Anti-dup: n8n cron pode chamar send-outbound 2x pra mesma scheduled_message se o envio
   // demora mais que o intervalo do cron (60s). Claim atômico por conteúdo+conversa (2min TTL).
-  const claimKey = outboundClaimKey(cwConvId, type, payload);
+  const claimKey = outboundClaimKey(cwConvId, type, payload, dedupeScope);
   if (!await claimDeliveryWithTtl(db, claimKey, "send-outbound", 2 * 60_000)) {
     console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
     return json({ ok: true, deduplicated: true });
