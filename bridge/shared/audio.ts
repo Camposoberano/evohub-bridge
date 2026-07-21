@@ -8,9 +8,13 @@ const BUCKET = "soberano-out"; // público; mídia gerada pelo bridge (PTT)
 let bucketReady = false;
 async function ensureBucket() {
   if (bucketReady) return;
-  const { error } = await (admin() as any).storage.createBucket(BUCKET, { public: true });
+  const { error } = await (admin() as any).storage.createBucket(BUCKET, {
+    public: true,
+  });
   // "already exists" não é erro real; qualquer outro loga mas segue (bucket pode já existir).
-  if (error && !/exist/i.test(error.message ?? "")) console.warn("createBucket soberano-out:", error.message);
+  if (error && !/exist/i.test(error.message ?? "")) {
+    console.warn("createBucket soberano-out:", error.message);
+  }
   bucketReady = true;
 }
 
@@ -29,26 +33,117 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     // A imagem Deno traz /usr/local/lib/libgcc_s.so.1 incompatível que sombreia o do sistema
     // e quebra o ffmpeg (exit 127). Força /usr/lib primeiro p/ pegar o libgcc certo da alpine.
     const cmd = new Deno.Command("ffmpeg", {
-      args: ["-y", "-i", inPath, "-vn", "-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1", "-application", "voip", outPath],
+      args: [
+        "-y",
+        "-i",
+        inPath,
+        "-vn",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-application",
+        "voip",
+        outPath,
+      ],
       env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
-      stderr: "piped", stdout: "null",
+      stderr: "piped",
+      stdout: "null",
     });
     const { success, code, stderr } = await cmd.output();
-    if (!success) { console.error(`ffmpeg falhou (code ${code}):`, new TextDecoder().decode(stderr).slice(0, 300)); return null; }
+    if (!success) {
+      console.error(
+        `ffmpeg falhou (code ${code}):`,
+        new TextDecoder().decode(stderr).slice(0, 300),
+      );
+      return null;
+    }
     const bytes = await Deno.readFile(outPath);
     if (bytes.length === 0) return null;
 
     await ensureBucket();
     const path = `ptt/${crypto.randomUUID()}.ogg`;
     const { error } = await (admin() as any).storage.from(BUCKET).upload(
-      path, new Blob([bytes], { type: "audio/ogg" }),
+      path,
+      new Blob([bytes], { type: "audio/ogg" }),
       { contentType: "audio/ogg", upsert: false },
     );
-    if (error) { console.error("upload ogg falhou:", error.message); return null; }
+    if (error) {
+      console.error("upload ogg falhou:", error.message);
+      return null;
+    }
     const { data } = (admin() as any).storage.from(BUCKET).getPublicUrl(path);
     return (data?.publicUrl as string) ?? null;
   } catch (e) {
     console.error("toVoiceOgg erro:", String(e).slice(0, 200));
+    return null;
+  } finally {
+    if (inPath) await Deno.remove(inPath).catch(() => {});
+    if (outPath) await Deno.remove(outPath).catch(() => {});
+  }
+}
+
+// Instagram rejeita OGG (subcode 2534080). Converte para MP3/MPEG, que pode ser
+// entregue como attachment de audio; o caller ainda mantém um link como fallback.
+export async function toSocialMp3(srcUrl: string): Promise<string | null> {
+  let inPath = "", outPath = "";
+  try {
+    const res = await fetch(srcUrl);
+    if (!res.ok) return null;
+    const input = new Uint8Array(await res.arrayBuffer());
+    inPath = await Deno.makeTempFile({ suffix: ".bin" });
+    outPath = await Deno.makeTempFile({ suffix: ".mp3" });
+    await Deno.writeFile(inPath, input);
+    const cmd = new Deno.Command("ffmpeg", {
+      args: [
+        "-y",
+        "-i",
+        inPath,
+        "-vn",
+        "-c:a",
+        "libmp3lame",
+        "-b:a",
+        "128k",
+        "-ar",
+        "44100",
+        "-ac",
+        "1",
+        outPath,
+      ],
+      env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
+      stderr: "piped",
+      stdout: "null",
+    });
+    const { success, code, stderr } = await cmd.output();
+    if (!success) {
+      console.error(
+        `ffmpeg mp3 falhou (code ${code}):`,
+        new TextDecoder().decode(stderr).slice(0, 300),
+      );
+      return null;
+    }
+    const bytes = await Deno.readFile(outPath);
+    if (bytes.length === 0) return null;
+
+    await ensureBucket();
+    const path = `social-audio/${crypto.randomUUID()}.mp3`;
+    const { error } = await (admin() as any).storage.from(BUCKET).upload(
+      path,
+      new Blob([bytes], { type: "audio/mpeg" }),
+      { contentType: "audio/mpeg", upsert: false },
+    );
+    if (error) {
+      console.error("upload mp3 falhou:", error.message);
+      return null;
+    }
+    const { data } = (admin() as any).storage.from(BUCKET).getPublicUrl(path);
+    return (data?.publicUrl as string) ?? null;
+  } catch (error) {
+    console.error("toSocialMp3 erro:", String(error).slice(0, 200));
     return null;
   } finally {
     if (inPath) await Deno.remove(inPath).catch(() => {});

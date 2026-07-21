@@ -240,8 +240,9 @@ const version = {
     "social-sales-lead-qualification",
     "social-planting-nutrition-flows",
     "facebook-list-persistent-buttons",
+    "instagram-audio-mp3-fallback",
   ],
-  build: "2026-07-21-facebook-list-buttons",
+  build: "2026-07-21-instagram-audio-fallback",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para

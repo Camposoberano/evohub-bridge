@@ -28,7 +28,7 @@ import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { toVoiceOgg } from "../shared/audio.ts";
+import { toSocialMp3, toVoiceOgg } from "../shared/audio.ts";
 import {
   getHybridRoute,
   hybridSendMedia,
@@ -254,7 +254,7 @@ export async function handle(req: Request): Promise<Response> {
     // VOZ gravada (PTT): transcodifica pra ogg/opus E envia por MEDIA_ID (não link). Áudio por
     // link o WhatsApp mostra como ARQUIVO; só bytes subidos por media_id viram bolha de voz.
     // Fallback pro link se transcode/upload falhar (pelo menos o áudio toca).
-    const oggUrl = await toVoiceOgg(src);
+    const oggUrl = isWhatsapp ? await toVoiceOgg(src) : null;
     let audioObj: Json = { link: oggUrl ?? src };
     if (oggUrl && channel.phone_number_id && channelToken) {
       try {
@@ -396,9 +396,17 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (!res && !isWhatsapp) {
+    let socialPayload = payload;
+    let instagramAudioUrl: string | null = null;
+    if (type === "audio" && channel.type === "instagram") {
+      instagramAudioUrl = await toSocialMp3(String(payload.media_url ?? ""));
+      if (instagramAudioUrl) {
+        socialPayload = { ...payload, media_url: instagramAudioUrl };
+      }
+    }
     const socialMessages = renderSocialFunnelMessages(
       type,
-      payload,
+      socialPayload,
       channel.type as "facebook" | "instagram",
     );
     if (socialMessages.length === 0) {
@@ -415,6 +423,27 @@ export async function handle(req: Request): Promise<Response> {
       });
       res = itemResult;
       if (!itemResult.ok) break;
+    }
+    if (!res?.ok && type === "audio" && channel.type === "instagram") {
+      const audioUrl = instagramAudioUrl ?? String(payload.media_url ?? "");
+      const fallbackText = `🎧 Ouça o áudio desta etapa:\n${audioUrl}`;
+      res = await sendMeta(channelToken!, "me/messages", {
+        recipient: { id: to },
+        message: { text: fallbackText },
+        messaging_type: "RESPONSE",
+      });
+      if (res.ok) {
+        registroTexto = "[áudio enviado por link no Instagram]";
+        db.from("events").insert({
+          source: "social-audio",
+          event_type: "instagram_audio_link_fallback",
+          channel_id: channel.id,
+          payload: {
+            conversation_id: conv.id,
+            chatwoot_conversation_id: cwConvId,
+          },
+        }).then(() => {}, () => {});
+      }
     }
   }
 
