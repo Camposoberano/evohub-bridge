@@ -131,7 +131,10 @@ export function inferSocialPriceReply(
     return null;
   }
 
-  if (prompt.includes("qual area") || prompt.includes("tamanho da area")) {
+  if (
+    prompt.includes("qual area") || prompt.includes("qual outra area") ||
+    prompt.includes("tamanho da area")
+  ) {
     if (selectedAnswer === "meio hectare") return "tam_2kg";
     if (selectedAnswer === "1 hectare") return "tam_4kg";
     if (selectedAnswer === "2 hectares ou mais") return "preco_area_maior";
