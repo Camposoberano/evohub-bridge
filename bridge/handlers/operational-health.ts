@@ -50,10 +50,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const now = new Date();
   const monitoringWindow = await ensureMonitoringWindow(db, now);
   const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const since15m = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
   const overdue = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
   const [
     channelsResult,
-    failedMessages,
+    failedMessages15m,
+    failedMessages24h,
     overdueQueue,
     recentContacts,
     adConversations,
@@ -61,6 +63,10 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     db.from("channels").select(
       "id,name,type,status,phone_number,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
     ).order("name"),
+    exactCount(
+      db.from("messages").select("id", { count: "exact", head: true })
+        .eq("status", "failed").gte("sent_at", since15m),
+    ),
     exactCount(
       db.from("messages").select("id", { count: "exact", head: true })
         .eq("status", "failed").gte("sent_at", since24h),
@@ -107,7 +113,16 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
 
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
-    { key: "failed_messages_24h", severity: "critical", count: failedMessages },
+    {
+      key: "failed_messages_15m",
+      severity: "critical",
+      count: failedMessages15m,
+    },
+    {
+      key: "failed_messages_history_24h",
+      severity: "warning",
+      count: failedMessages24h,
+    },
     { key: "overdue_funnel_queue", severity: "critical", count: overdueQueue },
     {
       key: "lead_missing_identifier_24h",
@@ -162,6 +177,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       active_channels: activeChannels.length,
       recent_contacts_24h: contacts.length,
       ad_conversations_24h: ads.length,
+      failed_messages_24h: failedMessages24h,
     },
     issues,
     channels,
