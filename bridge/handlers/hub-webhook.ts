@@ -137,9 +137,24 @@ export async function handle(req: Request): Promise<Response> {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 async function handleLifecycle(db: Db, p: Json) {
-  const externalId = p.external_id as string;
+  const externalId = p.external_id as string | undefined;
   const hubChannelId = p.channel_id as string;
   const eventType = p.event_type as string;
+
+  // Canais criados diretamente no EVO Hub chegam sem external_id. Depois que o
+  // canal e importado, o hub_channel_id passa a ser o vinculo estavel local.
+  let localChannelId: string | undefined = externalId;
+  if (!localChannelId && hubChannelId) {
+    const { data: imported } = await db.from("channels").select("id").eq(
+      "hub_channel_id",
+      hubChannelId,
+    ).maybeSingle();
+    localChannelId = imported?.id as string | undefined;
+  }
+  if (!localChannelId) {
+    console.warn("lifecycle sem canal local", hubChannelId, eventType);
+    return;
+  }
 
   const patch: Json = { hub_channel_id: hubChannelId ?? null };
 
@@ -177,7 +192,7 @@ async function handleLifecycle(db: Db, p: Json) {
       // channel_token vem no detalhe — guarda/atualiza (idempotente).
       if (detail.token) {
         await db.from("channel_secrets").upsert({
-          channel_id: externalId,
+          channel_id: localChannelId,
           channel_token: detail.token as string,
         });
       }
@@ -186,7 +201,7 @@ async function handleLifecycle(db: Db, p: Json) {
     patch.status = "inactive";
   }
 
-  await db.from("channels").update(patch).eq("id", externalId);
+  await db.from("channels").update(patch).eq("id", localChannelId);
 }
 
 // ── WhatsApp passthrough (entrada) ───────────────────────────────────────────
