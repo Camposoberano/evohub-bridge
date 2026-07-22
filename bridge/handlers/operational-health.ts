@@ -106,13 +106,24 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     return !item.ad_id && !item.creative_id && !attribution.ad_id &&
       !attribution.creative_id;
   }).length;
-  const disconnected =
-    channels.filter((item) =>
-      item.status !== "active" && item.status !== "connected"
+  const disconnectedChannels = channels.filter((item) =>
+    item.status !== "active" && item.status !== "connected"
+  );
+  const knownSuspended =
+    disconnectedChannels.filter((item) =>
+      String(item.last_error ?? "").toLowerCase().includes(
+        "preservado e suspenso",
+      )
     ).length;
+  const disconnected = disconnectedChannels.length - knownSuspended;
 
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
+    {
+      key: "channel_known_suspended",
+      severity: "warning",
+      count: knownSuspended,
+    },
     {
       key: "failed_messages_15m",
       severity: "critical",
