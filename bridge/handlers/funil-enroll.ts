@@ -79,12 +79,12 @@ function closingList(gancho: { text: string; row: Botao } | null): Peca {
   };
 }
 
-function turnoBRT(): string {
-  const h = ((Date.now() - TZ_OFFSET) % 86_400_000) / 3_600_000 | 0;
+function turnoBRT(now = Date.now()): string {
+  const h = ((now - TZ_OFFSET) % 86_400_000) / 3_600_000 | 0;
   return h < 12 ? "bom dia" : h < 18 ? "boa tarde" : "boa noite";
 }
 
-function saudacaoDinamica(): string {
+export function saudacaoDinamica(now = Date.now()): string {
   const aberturas = ["Olá", "Oi", "E aí"];
   const finais = [
     "tudo bem?",
@@ -92,9 +92,11 @@ function saudacaoDinamica(): string {
     "como vai?",
     "tudo certo?",
   ];
-  const i = Date.now() % aberturas.length;
-  const j = (Date.now() >> 4) % finais.length;
-  const turno = turnoBRT();
+  const i = now % aberturas.length;
+  // Bitwise converte Date.now() para inteiro assinado de 32 bits e pode gerar
+  // indice negativo. Divisao normal preserva um indice valido ao longo do tempo.
+  const j = Math.floor(now / 16) % finais.length;
+  const turno = turnoBRT(now);
   return `${aberturas[i]}, ${turno}, vida boa! ${
     finais[j]
   } 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾`;

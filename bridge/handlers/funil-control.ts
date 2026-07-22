@@ -238,6 +238,13 @@ export async function handle(req: Request): Promise<Response> {
       return json({ error: "canal ou contato não encontrado" }, 404);
     }
     try {
+      // Uma sequencia comercial manual substitui a conversa automatica naquele
+      // momento. Pausa o funil principal antes de enviar para nao misturar
+      // preco, audios e videos de jornadas diferentes.
+      const funnelPaused = await autoPauseFunil(
+        String(conv.id),
+        `macro manual: ${action}`,
+      );
       const dispatch = await handleMenuClick(
         db,
         resolved.channel,
@@ -266,6 +273,7 @@ export async function handle(req: Request): Promise<Response> {
         action,
         dispatched: menuId,
         channel: deliveryChannelLabel(resolved.channel),
+        funnel_paused: funnelPaused,
       });
     } catch (e) {
       const detail = String(e).slice(0, 240);
