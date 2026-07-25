@@ -28,7 +28,11 @@ import {
   handlePlantioClick,
   handlePrecoClick,
 } from "./hub-webhook.ts";
-import { handleCatalogClick, sendCatalogRootMenu } from "./catalog.ts";
+import {
+  handleCatalogClick,
+  handleQualificationReply,
+  sendCatalogRootMenu,
+} from "./catalog.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -164,6 +168,24 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     });
 
     if (msg.direction === "incoming") {
+      // Resposta livre no meio da qualificação do catálogo (região/hectares/plantio) tem
+      // prioridade sobre a detecção de intenção — não é um clique, então não passou por
+      // handleUazapiClick acima.
+      let consumedByQualification = false;
+      if (!msg.menuClickId && msg.from) {
+        try {
+          consumedByQualification = await handleQualificationReply(
+            db,
+            channel as Json,
+            msg.from,
+            msg.content,
+            acct,
+          );
+        } catch (e) {
+          console.error("uazapi-webhook qualificação erro:", e);
+        }
+      }
+
       try {
         await autoEnrollFunil(
           db,
@@ -176,10 +198,12 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         console.error("uazapi-webhook auto-enroll erro:", e);
       }
 
-      try {
-        await handleUazapiIntent(db, channel as Json, msg, acct);
-      } catch (e) {
-        console.error("uazapi-webhook intent erro:", e);
+      if (!consumedByQualification) {
+        try {
+          await handleUazapiIntent(db, channel as Json, msg, acct);
+        } catch (e) {
+          console.error("uazapi-webhook intent erro:", e);
+        }
       }
     }
   }
@@ -204,7 +228,8 @@ async function handleUazapiClick(
     await handleNutricaoClick(db, channel, from, id, acct);
   } else if (
     id.startsWith("grp_") || id.startsWith("cat_") ||
-    id.startsWith("prod_") || id.startsWith("acao_") || id.startsWith("pg_")
+    id.startsWith("prod_") || id.startsWith("acao_") || id.startsWith("pg_") ||
+    id.startsWith("quali_obj_")
   ) {
     await handleCatalogClick(db, channel, from, id, acct);
   } else {

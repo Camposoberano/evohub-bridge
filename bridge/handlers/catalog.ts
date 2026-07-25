@@ -33,6 +33,16 @@ const PRODUCT_ACTIONS: { code: string; title: string }[] = [
   { code: "consultor", title: "Falar com consultor" },
 ];
 
+const QUALIFICATION_OBJECTIVES: { code: string; label: string }[] = [
+  { code: "silagem", label: "Silagem" },
+  { code: "graos", label: "Grãos" },
+  { code: "pastejo", label: "Pastejo" },
+  { code: "formacao_pastagem", label: "Formação de pastagem" },
+  { code: "cobertura_solo", label: "Cobertura de solo" },
+  { code: "adubacao_verde", label: "Adubação verde" },
+  { code: "cultura_inverno", label: "Cultura de inverno" },
+];
+
 type ConvRef = { id: string; chatwoot_conversation_id: number | null };
 
 async function resolveConversation(
@@ -340,6 +350,10 @@ async function handleProductAction(
     await sendText(db, channel, from, conv, acct, (product?.description as string) || `Sem descrição adicional pra ${name}.`);
     return;
   }
+  if (actionCode === "orcamento") {
+    await startQualification(db, channel, from, conv, acct, sku, name);
+    return;
+  }
   if (actionCode === "consultor") {
     await pauseFunil(conv, "catalog_humano");
     await sendText(
@@ -373,6 +387,181 @@ async function handleProductAction(
     acct,
     `Essa opção pra *${name}* ainda está sendo preparada. Quer falar direto com um consultor?`,
   );
+}
+
+// Qualificação progressiva (dispara na ação "Solicitar orçamento"): objetivo (lista) ->
+// região (texto livre) -> hectares (texto livre) -> plantio (texto livre) -> cria quotes +
+// avisa o cliente + registra nota pro consultor. Uma qualificação ativa por conversa —
+// pedir orçamento de outro produto no meio do fluxo reinicia com o produto novo.
+async function startQualification(
+  db: Db,
+  channel: Json,
+  from: string,
+  conv: ConvRef | null,
+  acct: CwAcct | undefined,
+  sku: string,
+  productName: string,
+): Promise<void> {
+  if (!conv) {
+    await sendText(
+      db,
+      channel,
+      from,
+      conv,
+      acct,
+      "Pra montar seu orçamento preciso retomar a conversa — manda um oi que eu te ajudo.",
+    );
+    return;
+  }
+  const { data: product } = await db.from("products").select("id").eq("sku", sku).maybeSingle();
+  if (!product) {
+    await sendText(db, channel, from, conv, acct, "Produto não encontrado pra orçamento.");
+    return;
+  }
+  await db.from("leads_qualification").upsert({
+    conversation_id: conv.id,
+    product_id: product.id as string,
+    objective: null,
+    objective_code: null,
+    region: null,
+    hectares: null,
+    planting_date_label: null,
+    qualification_stage: "awaiting_objective",
+  }, { onConflict: "conversation_id" });
+
+  const rows: HybridListRow[] = QUALIFICATION_OBJECTIVES.map((o) => ({
+    id: `quali_obj_${o.code}`,
+    title: o.label,
+  }));
+  await sendList(
+    db,
+    channel,
+    from,
+    conv,
+    acct,
+    `Combinado! Pra te passar o orçamento certo de *${productName}*, qual é o seu objetivo?`,
+    [{ title: "Objetivo", rows }],
+    "Escolher objetivo",
+  );
+}
+
+async function handleQualificationObjective(
+  db: Db,
+  channel: Json,
+  from: string,
+  conv: ConvRef | null,
+  acct: CwAcct | undefined,
+  code: string,
+): Promise<void> {
+  if (!conv) return;
+  const objective = QUALIFICATION_OBJECTIVES.find((o) => o.code === code);
+  if (!objective) return;
+  const { data: updated } = await db.from("leads_qualification")
+    .update({ objective_code: code, objective: objective.label, qualification_stage: "awaiting_region" })
+    .eq("conversation_id", conv.id).eq("qualification_stage", "awaiting_objective")
+    .select("id").maybeSingle();
+  if (!updated) return; // fluxo já avançou ou expirou — evita pergunta fora de ordem
+  await sendText(db, channel, from, conv, acct, "Show. Qual sua cidade e estado? (ex: Cascavel-PR)");
+}
+
+// Intercepta texto livre quando a conversa está no meio da qualificação. Retorna true se
+// consumiu a mensagem (o webhook não deve rodar detecção de intenção por cima dela).
+export async function handleQualificationReply(
+  db: Db,
+  channel: Json,
+  from: string,
+  content: string,
+  acct?: CwAcct,
+): Promise<boolean> {
+  const conv = await resolveConversation(db, channel, from);
+  if (!conv) return false;
+  const { data: lead } = await db.from("leads_qualification")
+    .select("id,product_id,objective,qualification_stage")
+    .eq("conversation_id", conv.id)
+    .in("qualification_stage", ["awaiting_region", "awaiting_hectares", "awaiting_date"])
+    .maybeSingle();
+  if (!lead) return false;
+  const text = (content ?? "").trim();
+  if (!text) return false;
+
+  if (lead.qualification_stage === "awaiting_region") {
+    await db.from("leads_qualification").update({ region: text, qualification_stage: "awaiting_hectares" })
+      .eq("id", lead.id);
+    await sendText(db, channel, from, conv, acct, "Quantos hectares você pretende plantar? (só o número, ex: 40)");
+    return true;
+  }
+  if (lead.qualification_stage === "awaiting_hectares") {
+    const parsed = Number(text.replace(",", ".").replace(/[^\d.]/g, ""));
+    if (!parsed || Number.isNaN(parsed)) {
+      await sendText(db, channel, from, conv, acct, "Não entendi — manda só o número de hectares (ex: 40).");
+      return true;
+    }
+    await db.from("leads_qualification").update({ hectares: parsed, qualification_stage: "awaiting_date" })
+      .eq("id", lead.id);
+    await sendText(db, channel, from, conv, acct, "Última: pra quando está previsto o plantio? (ex: setembro, próxima safra, já plantei)");
+    return true;
+  }
+  if (lead.qualification_stage === "awaiting_date") {
+    await db.from("leads_qualification").update({ planting_date_label: text, qualification_stage: "complete" })
+      .eq("id", lead.id);
+    await finalizeQualification(db, channel, from, conv, acct, lead.id as string);
+    return true;
+  }
+  return false;
+}
+
+async function finalizeQualification(
+  db: Db,
+  channel: Json,
+  from: string,
+  conv: ConvRef,
+  acct: CwAcct | undefined,
+  leadId: string,
+): Promise<void> {
+  const { data: lead } = await db.from("leads_qualification")
+    .select("product_id,objective,region,hectares,planting_date_label")
+    .eq("id", leadId).maybeSingle();
+  if (!lead) return;
+  const { data: product } = await db.from("products").select("name")
+    .eq("id", lead.product_id).maybeSingle();
+  const productName = (product?.name as string) ?? "produto";
+
+  const { data: quote } = await db.from("quotes").insert({
+    conversation_id: conv.id,
+    product_id: lead.product_id,
+    lead_qualification_id: leadId,
+    stage: "orcamento_solicitado",
+  }).select("id").maybeSingle();
+
+  await sendText(
+    db,
+    channel,
+    from,
+    conv,
+    acct,
+    `Perfeito! Já registrei seu pedido de orçamento de *${productName}*:\n\n` +
+      `📍 Objetivo: ${lead.objective}\n📍 Local: ${lead.region}\n📍 Área: ${lead.hectares} hectares\n📍 Plantio: ${lead.planting_date_label}\n\n` +
+      `Um consultor Campo Soberano confirma preço, frete e disponibilidade e volta aqui com a proposta. 🙂`,
+  );
+
+  if (conv.chatwoot_conversation_id) {
+    try {
+      await createConversationMessage(
+        conv.chatwoot_conversation_id,
+        {
+          content: `💰 Novo orçamento pelo catálogo (${quote?.id ?? "sem id"})\n` +
+            `Produto: ${productName}\nObjetivo: ${lead.objective}\nLocal: ${lead.region}\n` +
+            `Área: ${lead.hectares} hectares\nPlantio: ${lead.planting_date_label}\n\n` +
+            `Confirmar preço/frete/disponibilidade e enviar proposta.`,
+          messageType: "outgoing",
+          private: true,
+        },
+        acct,
+      );
+    } catch (e) {
+      console.warn("catalog: nota privada orçamento falhou", String(e).slice(0, 150));
+    }
+  }
 }
 
 export async function handleCatalogClick(
@@ -414,6 +603,10 @@ export async function handleCatalogClick(
     const sku = rest.slice(0, sepIndex);
     const actionCode = rest.slice(sepIndex + 1);
     await handleProductAction(db, channel, from, conv, acct, sku, actionCode);
+    return;
+  }
+  if (id.startsWith("quali_obj_")) {
+    await handleQualificationObjective(db, channel, from, conv, acct, id.slice("quali_obj_".length));
     return;
   }
   console.warn("catalog: clique sem handler", id);

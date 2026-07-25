@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|preco_|tam_|pag_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_)/
+    /^(menu_|preco_|tam_|pag_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
       .test(value)
   ) {
     return value;
