@@ -34,7 +34,11 @@ export function buildHybridMenuFallback(
 export function normalizeHybridMenuClick(
   value: string | undefined,
 ): string | undefined {
-  if (!value || /^(menu_|preco_|tam_|pag_|plantio_|nutricao_)/.test(value)) {
+  if (
+    !value ||
+    /^(menu_|preco_|tam_|pag_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_)/
+      .test(value)
+  ) {
     return value;
   }
   const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")

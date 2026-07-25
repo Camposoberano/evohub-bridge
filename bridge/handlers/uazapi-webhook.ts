@@ -9,6 +9,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import {
+  isCatalogoIntent,
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
@@ -27,6 +28,7 @@ import {
   handlePlantioClick,
   handlePrecoClick,
 } from "./hub-webhook.ts";
+import { handleCatalogClick, sendCatalogRootMenu } from "./catalog.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -200,6 +202,11 @@ async function handleUazapiClick(
     await handlePlantioClick(db, channel, from, id, acct);
   } else if (id.startsWith("nutricao_")) {
     await handleNutricaoClick(db, channel, from, id, acct);
+  } else if (
+    id.startsWith("grp_") || id.startsWith("cat_") ||
+    id.startsWith("prod_") || id.startsWith("acao_") || id.startsWith("pg_")
+  ) {
+    await handleCatalogClick(db, channel, from, id, acct);
   } else {
     console.warn("uazapi-webhook: clique sem handler", id);
     return;
@@ -232,6 +239,19 @@ async function handleUazapiIntent(
       msg.metaMessageId,
       JSON.stringify(transcription.slice(0, 160)),
     );
+  }
+
+  if (isCatalogoIntent(intentText)) {
+    const claimed = await claimDelivery(
+      db,
+      `intent-catalogo-${channel.id}-${from}-${msg.metaMessageId ?? new Date().toISOString()}`,
+      "intent",
+    );
+    if (claimed) {
+      await sendCatalogRootMenu(db, channel, from, acct);
+      console.log("uazapi-webhook: intent disparado", "catalogo", from);
+    }
+    return;
   }
 
   const intent = isPrecoIntent(intentText)

@@ -8,6 +8,7 @@
 import {
   instPost as uazInstPost,
   listInstances,
+  tokenForInstance,
   uazapiConfigured,
 } from "./uazapi.ts";
 import { optionalEnv } from "./env.ts";
@@ -17,6 +18,10 @@ import {
   buildHybridMenuPayload,
   type HybridMenuButton,
 } from "./hybrid-menu.ts";
+import {
+  buildHybridListPayload,
+  type HybridListSection,
+} from "./hybrid-list.ts";
 
 type Json = Record<string, unknown>;
 type UazInstance = {
@@ -161,6 +166,19 @@ export async function getHybridRoute(
   };
 }
 
+// Rota direta pra canal uazapi-nativo (sem par Meta oficial — ex.: Campo Soberano).
+// getHybridRoute() exige um channel.phone_number cruzando com uma instância uazapi
+// conectada ao MESMO número que já atende pelo canal oficial; canais uazapi-only não
+// têm esse par e resolvem a instância direto pelo nome/external_id do canal.
+export async function getDirectUazapiRoute(
+  channelId: string,
+  instanceName: string,
+): Promise<HybridRoute | null> {
+  const token = await tokenForInstance(instanceName);
+  if (!token) return null;
+  return { provider: "uazapi", instance: instanceName, token, channelId };
+}
+
 export type SendResult = {
   ok: boolean;
   status: number;
@@ -288,6 +306,40 @@ export async function hybridSendMenu(
   } catch (e) {
     console.warn("hybrid menu erro, fallback:", String(e).slice(0, 100));
     await recordRouteEvent(route, "fallback_requested", "interactive", to, 0);
+    return null;
+  }
+}
+
+// Envia lista nativa (type:"list") pela rota híbrida — navegação de catálogo/menu com
+// várias seções/linhas (uazapi /send/menu, formato choices "[Seção]"/"texto|id|descrição").
+export async function hybridSendList(
+  route: HybridRoute,
+  to: string,
+  text: string,
+  sections: HybridListSection[],
+  buttonLabel: string,
+  footerText?: string,
+): Promise<SendResult | null> {
+  try {
+    const r = await uazInstPost(
+      "/send/menu",
+      route.token,
+      buildHybridListPayload(to, text, sections, buttonLabel, footerText),
+    );
+    if (!r.ok) {
+      console.warn(
+        "hybrid list falhou, fallback oficial:",
+        r.status,
+        JSON.stringify(r.data).slice(0, 300),
+      );
+      await recordRouteEvent(route, "fallback_requested", "list", to, r.status);
+      return null;
+    }
+    await recordRouteEvent(route, "send_success", "list", to, r.status);
+    return { ok: true, status: r.status, data: r.data, via: "uazapi" };
+  } catch (e) {
+    console.warn("hybrid list erro, fallback:", String(e).slice(0, 100));
+    await recordRouteEvent(route, "fallback_requested", "list", to, 0);
     return null;
   }
 }
