@@ -198,7 +198,12 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         console.error("uazapi-webhook auto-enroll erro:", e);
       }
 
-      if (!consumedByQualification) {
+      // Clique já tratado acima (handleUazapiClick) não deve rodar de novo pela detecção de
+      // intenção em texto livre — o texto visível do clique (ex.: "Fotos e vídeos", "Solicitar
+      // orçamento") pode casar por acidente com isVideoIntent/isPrecoIntent/etc e disparar o
+      // funil errado por cima da resposta certa. Isso vale pros cliques antigos (menu_/preco_/
+      // tam_/pag_/plantio_/nutricao_) e pros novos do catálogo — todos já têm handler dedicado.
+      if (!msg.menuClickId && !consumedByQualification) {
         try {
           await handleUazapiIntent(db, channel as Json, msg, acct);
         } catch (e) {
