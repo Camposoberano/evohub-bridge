@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canRouteClick,
+  catalogTextClaimKey,
   clickDomain,
   directInstanceCandidates,
 } from "../shared/journey-router.ts";
@@ -53,4 +54,20 @@ Deno.test("canal uazapi nativo prioriza nome da instancia antes do UUID externo"
     ["6836", "c48b43ec-83c2-46d8-bb38-d00e2fb9115f"],
   );
   assertEquals(directInstanceCandidates("6836", "6836"), ["6836"]);
+});
+
+Deno.test("reentrega do mesmo texto de catalogo usa a mesma trava", () => {
+  const input = {
+    channelId: "canal-6836",
+    from: "5511999999999",
+    metaMessageId: "META-123",
+    sentAt: "2026-07-29T19:08:52.093Z",
+    content: "Vou te passar os valores",
+  };
+  assertEquals(catalogTextClaimKey(input), catalogTextClaimKey(input));
+  assertEquals(
+    catalogTextClaimKey({ ...input, metaMessageId: "META-124" }) ===
+      catalogTextClaimKey(input),
+    false,
+  );
 });

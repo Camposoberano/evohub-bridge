@@ -34,7 +34,7 @@ import {
   routeCatalogText,
   sendCatalogJourneyReminder,
 } from "./catalog.ts";
-import { clickDomain } from "../shared/journey-router.ts";
+import { catalogTextClaimKey, clickDomain } from "../shared/journey-router.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -197,22 +197,38 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
           );
           if (catalogActive) {
-            let catalogIntentText = msg.content;
-            if (isAudioType(msg.msgType) && msg.attachments?.length) {
-              const audio = msg.attachments[0];
-              const transcription = await transcribeAudio(
-                audio.bytes,
-                audio.contentType,
-              );
-              if (transcription) catalogIntentText = transcription;
-            }
-            consumedByCatalog = await routeCatalogText(
+            // Marcar como consumida mesmo quando esta for uma reentrega. Sem
+            // isso, a copia rejeitada pelo claim continuaria para o Mega Sorgo.
+            consumedByCatalog = true;
+            const claimed = await claimDelivery(
               db,
-              channel as Json,
-              msg.from,
-              catalogIntentText,
-              acct,
+              catalogTextClaimKey({
+                channelId: String(channel.id),
+                from: msg.from,
+                metaMessageId: msg.metaMessageId,
+                sentAt: msg.sentAt,
+                content: msg.content,
+              }),
+              "catalog-text",
             );
+            if (claimed) {
+              let catalogIntentText = msg.content;
+              if (isAudioType(msg.msgType) && msg.attachments?.length) {
+                const audio = msg.attachments[0];
+                const transcription = await transcribeAudio(
+                  audio.bytes,
+                  audio.contentType,
+                );
+                if (transcription) catalogIntentText = transcription;
+              }
+              await routeCatalogText(
+                db,
+                channel as Json,
+                msg.from,
+                catalogIntentText,
+                acct,
+              );
+            }
           }
         } catch (e) {
           console.error("uazapi-webhook catalog route erro:", e);

@@ -47,3 +47,15 @@ export function directInstanceCandidates(
     .map((value) => value.trim());
   return [...new Set(candidates)];
 }
+
+export function catalogTextClaimKey(input: {
+  channelId: string;
+  from: string;
+  metaMessageId?: string | null;
+  sentAt?: string | null;
+  content?: string | null;
+}): string {
+  const eventId = input.metaMessageId?.trim() ||
+    `${input.sentAt ?? "sem-data"}-${input.content ?? ""}`.slice(0, 180);
+  return `catalog-text-${input.channelId}-${input.from}-${eventId}`;
+}
