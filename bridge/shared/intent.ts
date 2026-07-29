@@ -52,17 +52,6 @@ export function isNutricaoIntent(text: string): boolean {
   return NUTRICAO_RE.test(t);
 }
 
-// "produtos", "catálogo", "sementes", "quero comprar sementes" — entrada da vitrine Campo Soberano.
-const CATALOGO_RE =
-  /(\bprodutos?\b|\bcatalogo\b|\bsementes?\b|\bvitrine\b|quero\s+comprar)/;
-
-export function isCatalogoIntent(text: string): boolean {
-  const t = fold(text ?? "");
-  if (!t.trim()) return false;
-  if (PRECO_RE.test(t)) return false;
-  return CATALOGO_RE.test(t);
-}
-
 // "bom dia", "boa tarde", "boa noite", "olá", "oi", "eai", "e aí", "vida boa", "opa", "hey".
 // Saudações genéricas que não casam com nenhum outro intent.
 const SAUDACAO_RE =

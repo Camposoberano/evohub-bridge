@@ -64,7 +64,11 @@ export async function maintainFunnels(
 
   const conversationIds = sequences.map((item: Json) => item.conversation_id);
   const since = new Date(now - 48 * 60 * 60_000).toISOString();
-  const [{ data: conversations }, { data: pauseEvents }] = await Promise.all([
+  const [
+    { data: conversations },
+    { data: pauseEvents },
+    { data: catalogStates, error: catalogStateError },
+  ] = await Promise.all([
     db.from("conversations")
       .select("id,channel_id,outcome")
       .in("id", conversationIds),
@@ -75,9 +79,17 @@ export async function maintainFunnels(
       .gte("received_at", since)
       .order("received_at", { ascending: false })
       .limit(2_000),
+    db.from("catalog_nav_state")
+      .select("conversation_id")
+      .in("conversation_id", conversationIds)
+      .eq("journey", "catalogo"),
   ]);
+  if (catalogStateError) throw catalogStateError;
   const conversationMap = new Map(
     (conversations ?? []).map((item: Json) => [String(item.id), item]),
+  );
+  const catalogConversationIds = new Set(
+    (catalogStates ?? []).map((item: Json) => String(item.conversation_id)),
   );
   const latestPause = new Map<string, Json>();
   for (const event of (pauseEvents ?? []) as Json[]) {
@@ -124,13 +136,17 @@ export async function maintainFunnels(
         },
       });
       result.completed++;
-      if (await scheduleSilentFollowup(db, sequence, lastSentAt, now)) {
+      if (
+        !catalogConversationIds.has(conversationId) &&
+        await scheduleSilentFollowup(db, sequence, lastSentAt, now)
+      ) {
         result.followups++;
       }
       continue;
     }
 
     if (sequence.status !== "paused") continue;
+    if (catalogConversationIds.has(conversationId)) continue;
     const pausedRows = rows.filter((row) => row.status === "paused");
     if (!pausedRows.length) continue;
     const pause = latestPause.get(conversationId);

@@ -15,6 +15,10 @@ import { handleMenuClick } from "./hub-webhook.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
+import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
+
+export { autoPauseFunil } from "../shared/funnel-state.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -208,6 +212,44 @@ export async function handle(req: Request): Promise<Response> {
     }, 500);
   }
 
+  if (action === "catalogo" || action === "abrir-catalogo") {
+    const resolved = await resolveChannelAndContact(db, conv);
+    if (!resolved) {
+      return json({ error: "canal ou contato não encontrado" }, 404);
+    }
+    await sendCatalogRootMenu(
+      db,
+      resolved.channel,
+      resolved.from,
+      acct,
+      "catalogo_manual",
+    );
+    await nota(
+      cwConvId,
+      "🛒 *Catálogo aberto manualmente.* O funil Mega Sorgo foi pausado para não misturar as jornadas.",
+      acct,
+    );
+    return json({ ok: true, action: "catalogo", journey: "catalogo" });
+  }
+
+  if (action === "catalogo-sair" || action === "voltar-mega-sorgo") {
+    const resolved = await resolveChannelAndContact(db, conv);
+    if (!resolved) {
+      return json({ error: "canal ou contato não encontrado" }, 404);
+    }
+    await leaveCatalogJourney(db, resolved.channel, resolved.from, acct);
+    await nota(
+      cwConvId,
+      "↩️ *Catálogo encerrado.* A conversa voltou ao contexto Mega Sorgo. O funil permanece pausado até uma retomada manual.",
+      acct,
+    );
+    return json({
+      ok: true,
+      action: "catalogo-sair",
+      journey: "mega_sorgo",
+    });
+  }
+
   const recoveryMatch = action.match(/^recuperacao-([1-4])$/);
   if (recoveryMatch) {
     return await dispatchRecovery(
@@ -296,7 +338,7 @@ export async function handle(req: Request): Promise<Response> {
 
   return json({
     error: "ação desconhecida: " + action +
-      " (use: funil, pause, stop, resume, status, preco, video, plantio, nutricao, recuperacao-1..4)",
+      " (use: funil, pause, stop, resume, status, catalogo, catalogo-sair, preco, video, plantio, nutricao, recuperacao-1..4)",
   }, 400);
 }
 
@@ -457,31 +499,6 @@ async function nota(cwConvId: number, text: string, acct: CwAcct) {
   } catch (e) {
     console.warn("funil-control nota falhou:", String(e).slice(0, 120));
   }
-}
-
-// Auto-pause: chamado pelo hub-webhook quando intent é detectado em conversa com funil ativo.
-export async function autoPauseFunil(
-  conversationId: string,
-  reason = "intenção comercial",
-): Promise<boolean> {
-  const db = admin();
-  const { data: seq } = await db.from("sales_sequences").select("id, status")
-    .eq("conversation_id", conversationId).eq("status", "running")
-    .maybeSingle();
-  if (!seq) return false;
-  await db.from("scheduled_messages").update({ status: "paused" })
-    .eq("conversation_id", conversationId).eq("status", "pending");
-  await db.from("sales_sequences").update({ status: "paused" }).eq(
-    "id",
-    seq.id,
-  );
-  await db.from("events").insert({
-    source: "funil",
-    event_type: "auto_paused",
-    payload: { conversation_id: conversationId, reason },
-  });
-  console.log("funil auto-paused:", conversationId);
-  return true;
 }
 
 function json(obj: unknown, status = 200): Response {

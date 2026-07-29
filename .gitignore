@@ -14,3 +14,6 @@ imagens da dental jua.json
 
 # conteúdo de outro projeto (não versionar aqui)
 docs/
+!docs/
+docs/*
+!docs/design-separacao-mega-sorgo-catalogo.md

@@ -9,7 +9,6 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import {
-  isCatalogoIntent,
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
@@ -17,7 +16,7 @@ import {
   transcribeAudio,
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
-import { autoPauseFunil } from "./funil-control.ts";
+import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
   normalizeHybridButtonReply,
   normalizeHybridMenuClick,
@@ -31,8 +30,11 @@ import {
 import {
   handleCatalogClick,
   handleQualificationReply,
-  sendCatalogRootMenu,
+  isCatalogJourneyActive,
+  routeCatalogText,
+  sendCatalogJourneyReminder,
 } from "./catalog.ts";
+import { clickDomain } from "../shared/journey-router.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -186,16 +188,35 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         }
       }
 
-      try {
-        await autoEnrollFunil(
-          db,
-          channel as Json,
-          msg.from,
-          msg.content,
-          msg.fromAd,
-        );
-      } catch (e) {
-        console.error("uazapi-webhook auto-enroll erro:", e);
+      let consumedByCatalog = false;
+      if (!msg.menuClickId && !consumedByQualification) {
+        try {
+          const catalogActive = await isCatalogJourneyActive(
+            db,
+            channel as Json,
+            msg.from,
+          );
+          if (catalogActive) {
+            let catalogIntentText = msg.content;
+            if (isAudioType(msg.msgType) && msg.attachments?.length) {
+              const audio = msg.attachments[0];
+              const transcription = await transcribeAudio(
+                audio.bytes,
+                audio.contentType,
+              );
+              if (transcription) catalogIntentText = transcription;
+            }
+            consumedByCatalog = await routeCatalogText(
+              db,
+              channel as Json,
+              msg.from,
+              catalogIntentText,
+              acct,
+            );
+          }
+        } catch (e) {
+          console.error("uazapi-webhook catalog route erro:", e);
+        }
       }
 
       // Clique já tratado acima (handleUazapiClick) não deve rodar de novo pela detecção de
@@ -203,7 +224,20 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       // orçamento") pode casar por acidente com isVideoIntent/isPrecoIntent/etc e disparar o
       // funil errado por cima da resposta certa. Isso vale pros cliques antigos (menu_/preco_/
       // tam_/pag_/plantio_/nutricao_) e pros novos do catálogo — todos já têm handler dedicado.
-      if (!msg.menuClickId && !consumedByQualification) {
+      if (
+        !msg.menuClickId && !consumedByQualification && !consumedByCatalog
+      ) {
+        try {
+          await autoEnrollFunil(
+            db,
+            channel as Json,
+            msg.from,
+            msg.content,
+            msg.fromAd,
+          );
+        } catch (e) {
+          console.error("uazapi-webhook auto-enroll erro:", e);
+        }
         try {
           await handleUazapiIntent(db, channel as Json, msg, acct);
         } catch (e) {
@@ -221,6 +255,16 @@ async function handleUazapiClick(
   id: string,
   acct: Awaited<ReturnType<typeof accountForChannel>>,
 ): Promise<void> {
+  const domain = clickDomain(id);
+  if (
+    domain === "mega_sorgo" &&
+    await isCatalogJourneyActive(db, channel, from)
+  ) {
+    await sendCatalogJourneyReminder(db, channel, from, acct);
+    console.log("uazapi-webhook: clique Mega Sorgo bloqueado no catálogo", id);
+    return;
+  }
+
   if (id.startsWith("menu_")) {
     await handleMenuClick(db, channel, from, id, acct);
   } else if (
@@ -269,19 +313,6 @@ async function handleUazapiIntent(
       msg.metaMessageId,
       JSON.stringify(transcription.slice(0, 160)),
     );
-  }
-
-  if (isCatalogoIntent(intentText)) {
-    const claimed = await claimDelivery(
-      db,
-      `intent-catalogo-${channel.id}-${from}-${msg.metaMessageId ?? new Date().toISOString()}`,
-      "intent",
-    );
-    if (claimed) {
-      await sendCatalogRootMenu(db, channel, from, acct);
-      console.log("uazapi-webhook: intent disparado", "catalogo", from);
-    }
-    return;
   }
 
   const intent = isPrecoIntent(intentText)

@@ -251,8 +251,11 @@ const version = {
     "lead-profile-autocapture",
     "channel-owner-tracking",
     "operational-monitor-7d",
+    "catalog-manual-entry-only",
+    "catalog-mega-sorgo-journey-isolation",
+    "catalog-product-price-source",
   ],
-  build: "2026-07-21-lead-operations-monitor",
+  build: "2026-07-29-catalog-journey-isolation",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -520,6 +523,8 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-recuperar-2": "recuperacao-2",
   "cmd-recuperar-3": "recuperacao-3",
   "cmd-recuperar-4": "recuperacao-4",
+  "cmd-abrir-catalogo": "catalogo",
+  "cmd-voltar-mega-sorgo": "catalogo-sair",
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
 

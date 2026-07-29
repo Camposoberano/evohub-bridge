@@ -19,7 +19,7 @@ import {
   setConversationLabels,
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
-import { autoPauseFunil } from "./funil-control.ts";
+import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
   isNutricaoIntent,
   isPlantioIntent,
