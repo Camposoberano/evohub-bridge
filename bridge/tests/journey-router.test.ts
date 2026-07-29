@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { canRouteClick, clickDomain } from "../shared/journey-router.ts";
+import {
+  canRouteClick,
+  clickDomain,
+  directInstanceCandidates,
+} from "../shared/journey-router.ts";
 
 Deno.test("ids do catalogo nunca pertencem ao Mega Sorgo", () => {
   for (
@@ -38,4 +42,15 @@ Deno.test("id desconhecido nao e atribuido a uma jornada", () => {
   assertEquals(clickDomain("outro"), null);
   assertEquals(canRouteClick("catalogo", "outro"), true);
   assertEquals(canRouteClick("mega_sorgo", "outro"), true);
+});
+
+Deno.test("canal uazapi nativo prioriza nome da instancia antes do UUID externo", () => {
+  assertEquals(
+    directInstanceCandidates(
+      "6836",
+      "c48b43ec-83c2-46d8-bb38-d00e2fb9115f",
+    ),
+    ["6836", "c48b43ec-83c2-46d8-bb38-d00e2fb9115f"],
+  );
+  assertEquals(directInstanceCandidates("6836", "6836"), ["6836"]);
 });

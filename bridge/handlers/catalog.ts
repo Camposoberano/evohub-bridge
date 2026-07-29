@@ -25,6 +25,7 @@ import {
 import { createConversationMessage, type CwAcct } from "../shared/chatwoot.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { isPrecoIntent } from "../shared/intent.ts";
+import { directInstanceCandidates } from "../shared/journey-router.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -119,10 +120,18 @@ export async function isCatalogJourneyActive(
 }
 
 async function resolveRoute(channel: Json) {
-  const instanceName = (channel.external_id as string) ||
-    (channel.name as string);
-  if (!instanceName) return null;
-  return await getDirectUazapiRoute(channel.id as string, instanceName);
+  const candidates = directInstanceCandidates(
+    channel.name,
+    channel.external_id,
+  );
+  for (const instanceName of candidates) {
+    const route = await getDirectUazapiRoute(
+      channel.id as string,
+      instanceName,
+    );
+    if (route) return route;
+  }
+  return null;
 }
 
 // Registra a mensagem já enviada no Chatwoot/messages, se houver conversa resolvida.

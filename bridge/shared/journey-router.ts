@@ -35,3 +35,15 @@ export function canRouteClick(
   const domain = clickDomain(id);
   return domain === null || domain === activeJourney;
 }
+
+export function directInstanceCandidates(
+  name: unknown,
+  externalId: unknown,
+): string[] {
+  const candidates = [name, externalId]
+    .filter((value): value is string =>
+      typeof value === "string" && value.trim().length > 0
+    )
+    .map((value) => value.trim());
+  return [...new Set(candidates)];
+}
