@@ -14,7 +14,7 @@
 
 ## Coolify API
 - **URL**: `https://coolify.institutobelem.com/api/v1`
-- **Token**: `Bearer 3|4FvyBACAPxzx1L3tUveIXPNMVFDJ8GiHr3OQAgKEc7a87560`
+- **Token**: ler de `$COOLIFY_TOKEN` (`.env` local, nunca commitar). Uso: `Authorization: Bearer $COOLIFY_TOKEN`
 - **Servidor UUID**: `g5oxpau2ffnvso50m3wuhwxq` (bridge/servidor)
 - **Painel UUID**: `wwkt5an839c410ceklpu1cns`
 - **Logs**: `GET /applications/{uuid}/logs?take=100`
