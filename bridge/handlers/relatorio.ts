@@ -1,5 +1,13 @@
 import { admin } from "../shared/supabase.ts";
 import { isDefaultAdMessage } from "../shared/ad-lead.ts";
+import {
+  isNutricaoIntent,
+  isPlantioIntent,
+  isPrecoIntent,
+  isSaudacaoIntent,
+  isVideoIntent,
+} from "../shared/intent.ts";
+import { isAuthedCronOrUser } from "../shared/report-auth.ts";
 
 type Json = Record<string, unknown>;
 
@@ -27,6 +35,11 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response(null, { status: 204 });
 
   const url = new URL(req.url);
+  // Antes público (defeito 9 da auditoria 08/2026): a página mostra transcrição literal de
+  // conversa, nome de cliente e final do telefone pra qualquer request, sem token nenhum.
+  if (!await isAuthedCronOrUser(req, url)) {
+    return new Response("unauthorized", { status: 401 });
+  }
   const dateParam = url.searchParams.get("data");
   const hoje = dateParam || new Date().toISOString().slice(0, 10);
 
@@ -94,14 +107,21 @@ export async function handle(req: Request): Promise<Response> {
   for (const c of (contacts ?? [])) contactMap.set(c.id as string, c as Json);
 
   let totalIn = 0, totalOut = 0, totalFailed = 0;
+  // intentX = o LEAD pediu (detectado no texto/clique de entrada, bridge/shared/intent.ts).
+  // botEntregouPreco = o BOT entregou preço (fingerprint de saída) -- mantido à parte porque
+  // mede outra coisa: antes os dois eram a mesma variável (tevePreco), então "pediram preço"
+  // na prática media "o bot mandou a tabela", não o lead ter perguntado.
   let intentPreco = 0, intentVideo = 0, intentPlantio = 0, intentNutricao = 0;
-  let funilEnroll = 0, funilPedidoPreco = 0, funilPagamento = 0;
+  let funilEnroll = 0, funilPedidoPreco = 0, funilPagamento = 0, botEntregouPreco = 0;
   let novasConvs = 0, foraDeCampanha = 0;
   const semResposta: { conv: string; contato: string; msg: string; ts: string }[] = [];
   const msgsIgnoradas: { conv: string; contato: string; msg: string; ts: string }[] = [];
   const reacoesNegativas: { conv: string; contato: string; msg: string; contexto: string }[] = [];
   const perguntasSemIntent: { msg: string; count: number }[] = [];
   const perguntasMap = new Map<string, number>();
+  // "Reação positiva" (👍, "obrigado") e saudação isolada (isSaudacaoIntent) não contam como
+  // pergunta sem resposta -- não pedem nada, e antes lotavam o topo do ranking todo dia.
+  const REACAO_CURTA_RE = /^[\p{Emoji}\s.!?]{1,4}$/u;
 
   const conversas: ConvReport[] = [];
 
@@ -114,9 +134,12 @@ export async function handle(req: Request): Promise<Response> {
     const cwId = (conv?.chatwoot_conversation_id as number) ?? null;
 
     let convIn = 0, convOut = 0, convFailed = 0;
-    let teveFunil = false, tevePreco = false, tevePagamento = false;
-    let teveVideo = false, tevePlantio = false, teveNutricao = false;
+    let teveFunil = false, tevePagamento = false;
     let teveAdLead = false, teveFingerprint = false;
+    // sinal de SAÍDA: o bot entregou o conteúdo (etapa do funil concluída).
+    let botTevePreco = false, botTeveVideo = false, botTevePlantio = false, botTeveNutricao = false;
+    // sinal de ENTRADA: o lead pediu/perguntou (intent real, bridge/shared/intent.ts).
+    let leadPediuPreco = false, leadPediuVideo = false, leadPediuPlantio = false, leadPediuNutricao = false;
     const resumoLinhas: string[] = [];
     const etapasSet = new Set<string>();
     let ultimoBot = "";
@@ -136,16 +159,23 @@ export async function handle(req: Request): Promise<Response> {
       if (dir === "out") {
         ultimoBot = content;
         if (FUNIL_FINGERPRINT.test(content)) teveFingerprint = true;
-        if (content.includes("Preparei 5 vídeos") || content.includes("Separei 5 vídeos")) { teveVideo = true; etapasSet.add("video"); }
-        if (content.includes("Lista de temas de plantio")) { tevePlantio = true; etapasSet.add("plantio"); }
-        if (content.includes("Lista de info nutricional") || content.includes("Análise Bromatológica")) { teveNutricao = true; etapasSet.add("nutricao"); }
-        if (content.includes("imagem preco_") || content.includes("Tabela de preços")) { tevePreco = true; etapasSet.add("preco"); }
+        if (content.includes("Preparei 5 vídeos") || content.includes("Separei 5 vídeos")) { botTeveVideo = true; etapasSet.add("video"); }
+        if (content.includes("Lista de temas de plantio")) { botTevePlantio = true; etapasSet.add("plantio"); }
+        if (content.includes("Lista de info nutricional") || content.includes("Análise Bromatológica")) { botTeveNutricao = true; etapasSet.add("nutricao"); }
+        if (content.includes("imagem preco_") || content.includes("Tabela de preços")) { botTevePreco = true; etapasSet.add("preco"); }
         if (content.includes("Cícero Sobreira") || content.includes("Campo Soberano")) { teveFunil = true; etapasSet.add("funil"); }
         if (isPagamentoMsg(content)) { tevePagamento = true; etapasSet.add("pagamento"); }
       }
 
       if (dir === "in" && content.trim()) {
         if (isDefaultAdMessage(content)) teveAdLead = true;
+
+        // Intent do LEAD -- mesma detecção usada pelo bot em produção (bridge/shared/intent.ts),
+        // então "pediram preço" aqui conta o mesmo sinal que decide se o funil responde preço.
+        if (isPrecoIntent(content)) leadPediuPreco = true;
+        else if (isVideoIntent(content)) leadPediuVideo = true;
+        else if (isPlantioIntent(content)) leadPediuPlantio = true;
+        else if (isNutricaoIntent(content)) leadPediuNutricao = true;
 
         const nextOut = mensagens.slice(i + 1).find(x => (x.direction as string) === "out");
         if (!nextOut && convOut > 0) {
@@ -156,7 +186,17 @@ export async function handle(req: Request): Promise<Response> {
           localNegativas.push({ conv: convId.slice(0, 8), contato: nome, msg: content.slice(0, 100), contexto: ultimoBot.slice(0, 80) });
         }
 
-        if (convOut === 0 && content.length > 2 && !content.startsWith("[")) {
+        // "Sem intent": nenhum detector reconheceu a mensagem, não é a mensagem padrão do
+        // anúncio, não é saudação isolada e não é só emoji/reação curta. Antes só olhava a
+        // 1ª mensagem da conversa (convOut === 0) -- por isso o topo do ranking era sempre
+        // a mensagem padrão do CTWA, não uma pergunta sem resposta de verdade.
+        const semIntent = !isPrecoIntent(content) && !isVideoIntent(content) &&
+          !isPlantioIntent(content) && !isNutricaoIntent(content) &&
+          !isSaudacaoIntent(content);
+        if (
+          semIntent && content.length > 2 && !content.startsWith("[") &&
+          !isDefaultAdMessage(content) && !REACAO_CURTA_RE.test(content.trim())
+        ) {
           localPerguntas.push(content.toLowerCase().trim().slice(0, 50));
         }
       }
@@ -188,10 +228,11 @@ export async function handle(req: Request): Promise<Response> {
 
     // Funil e intents contam uma vez por conversa, não por mensagem
     if (teveFunil || enrolledSet.has(convId)) funilEnroll++;
-    if (tevePreco) { funilPedidoPreco++; intentPreco++; }
-    if (teveVideo) intentVideo++;
-    if (tevePlantio) intentPlantio++;
-    if (teveNutricao) intentNutricao++;
+    if (leadPediuPreco) { funilPedidoPreco++; intentPreco++; }
+    if (leadPediuVideo) intentVideo++;
+    if (leadPediuPlantio) intentPlantio++;
+    if (leadPediuNutricao) intentNutricao++;
+    if (botTevePreco) botEntregouPreco++;
     if (tevePagamento) funilPagamento++;
 
     msgsIgnoradas.push(...localIgnoradas);
@@ -215,7 +256,7 @@ export async function handle(req: Request): Promise<Response> {
 
     let statusConv: "converteu" | "engajou" | "ignorou" | "perdeu" = "ignorou";
     if (tevePagamento) statusConv = "converteu";
-    else if (tevePreco || teveVideo || tevePlantio || teveNutricao) statusConv = "engajou";
+    else if (botTevePreco || botTeveVideo || botTevePlantio || botTeveNutricao) statusConv = "engajou";
     else if (convOut > 0 && convIn > 0) statusConv = "engajou";
     if (convIn > 2 && convOut === 0) statusConv = "perdeu";
 
@@ -237,13 +278,14 @@ export async function handle(req: Request): Promise<Response> {
     totalIn, totalOut, totalFailed, semResposta, msgsIgnoradas,
     reacoesNegativas, perguntasSemIntent, conversas,
     intentPreco, intentVideo, intentPlantio, intentNutricao,
-    funilEnroll, funilPedidoPreco, funilPagamento,
+    funilEnroll, funilPedidoPreco, funilPagamento, botEntregouPreco,
   });
 
   const html = renderHTML(hoje, {
     totalConvs: conversas.length,
     novasConvs, foraDeCampanha,
     totalIn, totalOut, totalFailed,
+    botEntregouPreco,
     intentPreco, intentVideo, intentPlantio, intentNutricao,
     funilEnroll, funilPedidoPreco, funilPagamento,
     semResposta, msgsIgnoradas, reacoesNegativas, perguntasSemIntent,
@@ -277,7 +319,7 @@ function gerarRecomendacoes(d: {
   perguntasSemIntent: { msg: string; count: number }[];
   conversas: ConvReport[];
   intentPreco: number; intentVideo: number; intentPlantio: number; intentNutricao: number;
-  funilEnroll: number; funilPedidoPreco: number; funilPagamento: number;
+  funilEnroll: number; funilPedidoPreco: number; funilPagamento: number; botEntregouPreco: number;
 }): Recomendacao[] {
   const recs: Recomendacao[] = [];
 
@@ -357,6 +399,18 @@ function gerarRecomendacoes(d: {
     });
   }
 
+  // "pediram" (intent do lead) vs "entregou" (fingerprint de saída) medem coisas diferentes;
+  // divergência grande indica ou push proativo do funil (entregou > pediram) ou lead pedindo
+  // e o bot não reconhecendo (pediram > entregou).
+  if (d.funilPedidoPreco > d.botEntregouPreco) {
+    recs.push({
+      tipo: "atencao",
+      titulo: `${d.funilPedidoPreco - d.botEntregouPreco} lead(s) pediram preço e o bot não entregou`,
+      detalhe: `${d.funilPedidoPreco} leads perguntaram preço, mas só ${d.botEntregouPreco} conversa(s) receberam a tabela.`,
+      acao: "Conferir se a intent de preço está sendo detectada nesses casos (catálogo pode estar engolindo a resposta) ou se o humano precisou assumir.",
+    });
+  }
+
   if (recs.length === 0) {
     recs.push({
       tipo: "acerto", titulo: "Dia sem problemas detectados",
@@ -372,7 +426,7 @@ interface ReportData {
   totalConvs: number; novasConvs: number; foraDeCampanha: number;
   totalIn: number; totalOut: number; totalFailed: number;
   intentPreco: number; intentVideo: number; intentPlantio: number; intentNutricao: number;
-  funilEnroll: number; funilPedidoPreco: number; funilPagamento: number;
+  funilEnroll: number; funilPedidoPreco: number; funilPagamento: number; botEntregouPreco: number;
   semResposta: { conv: string; contato: string; msg: string; ts: string }[];
   msgsIgnoradas: { conv: string; contato: string; msg: string; ts: string }[];
   reacoesNegativas: { conv: string; contato: string; msg: string; contexto: string }[];
@@ -398,7 +452,7 @@ function renderHTML(data: string, r: ReportData): string {
     <div class="funil">
       <div class="funil-step"><div class="funil-num">${r.funilEnroll}</div><div class="funil-label">Entraram no funil</div></div>
       <div class="funil-arrow">→</div>
-      <div class="funil-step"><div class="funil-num">${r.funilPedidoPreco}</div><div class="funil-label">Pediram preço</div></div>
+      <div class="funil-step"><div class="funil-num">${r.funilPedidoPreco}</div><div class="funil-label">Pediram preço<br><small>(bot entregou: ${r.botEntregouPreco})</small></div></div>
       <div class="funil-arrow">→</div>
       <div class="funil-step"><div class="funil-num">${r.funilPagamento}</div><div class="funil-label">Pagamento</div></div>
     </div>

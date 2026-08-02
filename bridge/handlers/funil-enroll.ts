@@ -11,6 +11,7 @@ import {
   addBusinessSeconds,
   clampBusinessTime,
 } from "../shared/business-time.ts";
+import { isContactBlocked } from "../shared/lead-block.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -297,10 +298,17 @@ export async function handle(req: Request): Promise<Response> {
 
   const db = admin();
   const { data: conv } = await db.from("conversations").select(
-    "id, chatwoot_conversation_id",
+    "id, chatwoot_conversation_id, contacts(attributes)",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
+
+  // Contato marcado com a etiqueta "nao-compra" (bridge/handlers/funil-control.ts,
+  // ação marcar-nao-compra) nunca mais entra no funil -- nem auto-enroll, nem clique manual
+  // "iniciar funil", nem recuperação, porque os três caminhos convergem nesta função.
+  if (isContactBlocked(conv.contacts)) {
+    return json({ ok: false, blocked: "contato-bloqueado" }, 422);
+  }
 
   // dedup: já está no funil? force=true -> limpa a sequência + a fila antiga e re-enfileira
   // (re-teste). Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.

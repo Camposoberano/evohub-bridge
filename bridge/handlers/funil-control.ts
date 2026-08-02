@@ -17,6 +17,7 @@ import { recoveryPieces } from "../shared/recovery-content.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
+import { blockContact } from "../shared/lead-block.ts";
 
 export { autoPauseFunil } from "../shared/funnel-state.ts";
 
@@ -96,6 +97,62 @@ export async function handle(req: Request): Promise<Response> {
       acct,
     );
     return json({ ok: true, action: "stop", cancelled: cancelled ?? 0 });
+  }
+
+  // "pago" e "nao-compra" são etiquetas PERSISTENTES no Chatwoot (poll dedicado em
+  // server.ts, startOutcomeLabelLoop -- diferente do poll de cmd-* que remove a etiqueta
+  // depois de rodar). Cícero marca a etiqueta e ela fica visível como status permanente.
+  if (action === "marcar-pago") {
+    const { count: cancelled } = await db.from("scheduled_messages").update({
+      status: "cancelled",
+    })
+      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .select("id", { count: "exact", head: true });
+    await db.from("sales_sequences").update({ status: "cancelled" })
+      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+    await db.from("conversations").update({
+      outcome: "won",
+      outcome_source: "label",
+      outcome_set_at: new Date().toISOString(),
+    }).eq("id", conv.id);
+    await nota(
+      cwConvId,
+      `✅ *Marcado como PAGO* — funil encerrado (${
+        cancelled ?? 0
+      } mensagens removidas da fila).`,
+      acct,
+    );
+    return json({ ok: true, action: "marcar-pago", cancelled: cancelled ?? 0 });
+  }
+
+  if (action === "marcar-nao-compra") {
+    const { count: cancelled } = await db.from("scheduled_messages").update({
+      status: "cancelled",
+    })
+      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .select("id", { count: "exact", head: true });
+    await db.from("sales_sequences").update({ status: "cancelled" })
+      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+    await db.from("conversations").update({
+      outcome: "lost",
+      outcome_source: "label",
+      outcome_set_at: new Date().toISOString(),
+    }).eq("id", conv.id);
+    if (conv.contact_id) {
+      await blockContact(db, conv.contact_id as string, "nao-compra");
+    }
+    await nota(
+      cwConvId,
+      `🚫 *Marcado como NÃO COMPRA* — funil encerrado (${
+        cancelled ?? 0
+      } mensagens removidas da fila) e contato bloqueado pra futuros funis.`,
+      acct,
+    );
+    return json({
+      ok: true,
+      action: "marcar-nao-compra",
+      cancelled: cancelled ?? 0,
+    });
   }
 
   if (action === "resume") {

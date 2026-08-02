@@ -8,6 +8,7 @@ import {
   sourceSnapshot,
   syncInboundCliente,
 } from "./lead-profile.ts";
+import { isUnmappedMsgType, type MsgType, normalizeMsgType } from "./msg-type.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -21,18 +22,13 @@ import {
 } from "./chatwoot.ts";
 
 type Json = Record<string, unknown>;
-type MsgType =
-  | "text"
-  | "image"
-  | "audio"
-  | "video"
-  | "document"
-  | "sticker"
-  | "location"
-  | "contact"
-  | "interactive"
-  | "template"
-  | "unknown";
+export type { MsgType };
+
+// Janela pra casar o echo de saída (coexistência) com a linha já gravada pelo envio.
+// 30s é folgado o bastante pra latência normal do provedor devolver o echo e curto o
+// bastante pra não casar duas mensagens de texto idênticas enviadas de propósito (ex:
+// "Oi!" mandado duas vezes em conversas diferentes -- aqui já filtrado por conversation_id).
+const ECHO_MERGE_WINDOW_MS = 30_000;
 
 export type InboundAttachment = ChatwootAttachment & {
   sourceUrl?: string;
@@ -235,6 +231,40 @@ export async function ingestInbound(
     if (recentDup) return { inserted: false, reason: "duplicate-recent-text" };
   }
 
+  // Echo de saída (coexistência). Quando o payload do provedor não traz wasSentByApi, a
+  // mensagem que o próprio bridge acabou de enviar volta pelo webhook e vira uma SEGUNDA linha
+  // em messages -- medido em 6,5% das linhas do relatório, inflando "Enviadas" e daily_metrics.
+  // Aqui a linha já gravada pelo envio absorve o echo (completa o meta_message_id, que o
+  // caminho de envio nem sempre tem) em vez de duplicar. Só texto: echo de mídia sem legenda
+  // não tem conteúdo para casar com segurança.
+  if (msg.outgoing && msg.content.trim()) {
+    const { data: echoDup, error: echoDupError } = await db.from("messages")
+      .select("id,meta_message_id")
+      .eq("conversation_id", conv.id)
+      .eq("direction", "out")
+      .eq("content", msg.content)
+      .gte(
+        "sent_at",
+        new Date(Date.now() - ECHO_MERGE_WINDOW_MS).toISOString(),
+      )
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (echoDupError) throw echoDupError;
+    if (echoDup) {
+      if (msg.metaMessageId && !echoDup.meta_message_id) {
+        await db.from("messages")
+          .update({ meta_message_id: msg.metaMessageId })
+          .eq("id", echoDup.id);
+      }
+      return {
+        inserted: false,
+        reason: "duplicate-echo",
+        message_id: echoDup.id as string,
+      };
+    }
+  }
+
   let cwMsg: (Record<string, unknown> & { id?: number }) | null = null;
   if (skip) {
     // nativo: não posta no Chatwoot. Entrada já chega na caixa nativa pelo repasse do EVO Hub.
@@ -272,6 +302,11 @@ export async function ingestInbound(
   const chatwootMediaUrl = cwMsg
     ? firstAttachmentUrl(cwMsg)
     : (msg.attachments?.[0]?.sourceUrl ?? null);
+  if (isUnmappedMsgType(msg.msgType)) {
+    // Tipo cru sem alias conhecido: cai em "unknown" mesmo assim, mas fica no log pra virar
+    // entrada nova em ALIASES de bridge/shared/msg-type.ts em vez de continuar sumindo.
+    console.warn("inbound: msgType sem mapeamento ->", msg.msgType);
+  }
   const { data: insertedMessage, error: messageError } = await db.from(
     "messages",
   ).insert({
@@ -403,17 +438,6 @@ export async function repairInboundMedia(
   if (updateError) throw updateError;
 
   return { repaired: true };
-}
-
-function normalizeMsgType(value: string): MsgType {
-  if (
-    value === "text" || value === "image" || value === "audio" ||
-    value === "video" ||
-    value === "document" || value === "sticker" || value === "location" ||
-    value === "contact" ||
-    value === "interactive" || value === "template"
-  ) return value;
-  return "unknown";
 }
 
 function firstAttachmentUrl(message: Record<string, unknown>): string | null {

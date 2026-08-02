@@ -39,6 +39,7 @@ import {
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
+import { normalizeMsgType } from "../shared/msg-type.ts";
 
 type Json = Record<string, unknown>;
 
@@ -61,6 +62,15 @@ export async function handle(req: Request): Promise<Response> {
   const payload = (body.payload as Json) ??
     (body.content ? { content: body.content } : {});
   const dedupeScope = body.dedupe_scope as string | undefined;
+  // Elo com a fila do funil (bridge/shared/funnel-queue.ts) -- ausente em chamada manual/n8n
+  // avulsa, presente quando send-outbound é acionado por scheduled_messages.
+  const funnelLink = {
+    funnel: (body.funnel as string | undefined) ?? null,
+    funnel_day: typeof body.funnel_day === "number" ? body.funnel_day : null,
+    funnel_step: (body.funnel_step as string | undefined) ?? null,
+    scheduled_message_id: (body.scheduled_message_id as string | undefined) ??
+      null,
+  };
 
   const db = admin();
   const { data: conv } = await db.from("conversations").select(
@@ -210,6 +220,7 @@ export async function handle(req: Request): Promise<Response> {
         meta_message_id: metaId,
         chatwoot_message_id: cwMsgId ?? null,
         status: res.ok ? "sent" : "failed",
+        ...funnelLink,
       });
       results.push({ ok: res.ok, meta_message_id: metaId });
       if (!res.ok) {
@@ -479,12 +490,15 @@ export async function handle(req: Request): Promise<Response> {
     conversation_id: conv.id,
     channel_id: channel.id,
     direction: "out",
-    msg_type: type === "interactive" ? "interactive" : type,
+    // normalizeMsgType porque "list" (send-outbound aceita como tipo) não é valor do enum
+    // msg_type -- sem isso o insert falhava/virava "unknown" pra esse tipo de envio.
+    msg_type: normalizeMsgType(type),
     content: registroTexto,
     media_url: (payload.media_url as string) ?? null,
     meta_message_id: metaId,
     chatwoot_message_id: cwMsgId ?? null,
     status: res.ok ? "sent" : "failed",
+    ...funnelLink,
   });
 
   if (!res.ok) {
