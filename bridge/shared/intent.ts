@@ -67,6 +67,36 @@ export function isSaudacaoIntent(text: string): boolean {
   return SAUDACAO_RE.test(t);
 }
 
+// FECHAMENTO — o lead está passando dados para concluir o pedido (CEP, CPF/CNPJ, endereço).
+// Serve para PROTEGER a venda: pausa o funil e prioriza o atendimento. NÃO marca como pago —
+// quem carimba "pago" é o humano, pela etiqueta, depois de conferir o comprovante.
+//
+// Cuidado deliberado com falso positivo: CPF e telefone celular têm 11 dígitos. Por isso só
+// conta número quando vem FORMATADO (com ponto/traço) ou acompanhado da palavra-chave. Um
+// "5511999998888" solto não dispara.
+const FECHAMENTO_PALAVRA_RE =
+  /(\bcep\b|\bcpf\b|\bcnpj\b|\bendereco\b|\brazao\s+social\b|\bbairro\b|\bnumero\s+da\s+casa\b)/;
+
+// CEP formatado: 12345-678 / 12.345-678. CPF: 123.456.789-01. CNPJ: 12.345.678/0001-90.
+const CEP_FMT_RE = /\b\d{2}\.?\d{3}[-\s]\d{3}\b/;
+const CPF_FMT_RE = /\b\d{3}\.\d{3}\.\d{3}[-\s]?\d{2}\b/;
+const CNPJ_FMT_RE = /\b\d{2}\.\d{3}\.\d{3}\/\d{4}[-\s]?\d{2}\b/;
+
+export function isFechamentoIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  if (FECHAMENTO_PALAVRA_RE.test(t)) return true;
+  return CEP_FMT_RE.test(t) || CPF_FMT_RE.test(t) || CNPJ_FMT_RE.test(t);
+}
+
+// Documento recebido (PDF de comprovante, normalmente). Trata como fechamento em andamento
+// pelo mesmo motivo: prioriza e protege, sem concluir a venda sozinho.
+export function isComprovanteMsgType(
+  msgType: string | null | undefined,
+): boolean {
+  return String(msgType ?? "").toLowerCase() === "document";
+}
+
 // Transcreve áudio curto via provedor configurado. null se sem chave, áudio grande demais
 // ou erro (caller segue sem transcrição — detecção por áudio é best-effort).
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;

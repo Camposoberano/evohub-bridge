@@ -22,6 +22,8 @@ import {
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
+  isComprovanteMsgType,
+  isFechamentoIntent,
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
@@ -400,6 +402,46 @@ async function handleWhatsApp(db: Db, p: Json) {
               );
               if (transcricao) intentText = transcricao;
             }
+            // FECHAMENTO EM ANDAMENTO: lead mandando CEP/CPF/endereço ou o comprovante em
+            // PDF. Não conclui a venda (isso continua na etiqueta, decisão humana) — só
+            // pausa o funil pra nenhuma mensagem de marketing atravessar o fechamento, e
+            // atribui a conversa pra alguém assumir. Ver conversa #798 (venda de 03/08):
+            // o lead mandou CEP às 13:41 e fechou às 13:55.
+            if (
+              isFechamentoIntent(intentText) || isComprovanteMsgType(type)
+            ) {
+              try {
+                const { data: _ctf } = await db.from("contacts").select("id")
+                  .eq("channel_id", channel.id)
+                  .eq("external_contact_id", from).maybeSingle();
+                const { data: _cvf } = _ctf
+                  ? await db.from("conversations")
+                    .select("id,chatwoot_conversation_id")
+                    .eq("contact_id", _ctf.id).neq("status", "resolved")
+                    .order("opened_at", { ascending: false }).limit(1)
+                    .maybeSingle()
+                  : { data: null };
+                if (_cvf) {
+                  await autoPauseFunil(_cvf.id as string, "fechamento");
+                  const assignee = Number(
+                    optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0",
+                  );
+                  const cwId = _cvf.chatwoot_conversation_id as number | null;
+                  if (assignee > 0 && cwId) {
+                    await assignConversation(cwId, assignee, acct);
+                    await createConversationMessage(cwId, {
+                      content:
+                        "📄 *FECHAMENTO EM ANDAMENTO* — o cliente enviou dados/comprovante. Funil pausado e conversa atribuída. Confira e marque a etiqueta *pago* quando confirmar o pagamento.",
+                      messageType: "outgoing",
+                      private: true,
+                    }, acct);
+                  }
+                }
+              } catch (e) {
+                console.error("fechamento-detect erro:", e);
+              }
+            }
+
             const detectedIntent = isPrecoIntent(intentText)
               ? "preço"
               : isVideoIntent(intentText)
