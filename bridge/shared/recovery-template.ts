@@ -8,8 +8,10 @@
 // botão, isso conta como mensagem de entrada, a janela reabre e aí o conteúdo rico de
 // recovery-content.ts pode ser enviado normalmente.
 //
-// Os textos dos botões foram escolhidos para casar com shared/intent.ts (PRECO_RE,
-// VIDEO_RE, PLANTIO_RE) — mudar o texto do template no Meta quebra o roteamento.
+// ATENÇÃO — template é por WABA, não global. Cada canal oficial tem o seu `waba_id`
+// (channels.waba_id) e um template só existe dentro da WABA onde foi aprovado. Mandar o
+// nome de outra WABA devolve "(#132001) Template name does not exist in the translation".
+// Foi exatamente o erro cometido em 03/08: os templates foram criados na WABA errada.
 import { sendMetaMessage } from "./hub.ts";
 
 type Json = Record<string, unknown>;
@@ -20,15 +22,45 @@ type DbClient = {
   };
 };
 
-/** variação da recuperação → template aprovado no WhatsApp Business. */
-export const RECOVERY_TEMPLATES: Record<number, string> = {
-  1: "boa_vindas", // "ME CHAMO CICERO SOBREIRA..." [Lembro sim][Me lembre][não me interesso]
-  2: "retomada_conversa", // "faz alguns dias que conversamos" [Ver preço][Ver vídeos][Falar com Cícero]
-  3: "convite_videos", // "gravamos vídeos na lavoura" [Quero ver os vídeos][Ver preço][Não tenho interesse]
-  4: "tirar_duvida", // "ficou alguma dúvida" [Como plantar][Ver preço][Não tenho interesse]
+/**
+ * variação da recuperação → template aprovado, POR WABA.
+ * Conferir com: GET /{waba_id}/message_templates?fields=name,language,status
+ */
+const TEMPLATES_BY_WABA: Record<string, Record<number, string>> = {
+  // canal "5895" — 743886211614541
+  "743886211614541": {
+    1: "bem_vindo", // "falamos anteriormente sobre o mega sorgo" [Lembro sim|Tenho duvidas|Qual preço]
+    2: "mega_sorgo", // "quais dúvidas o senhor tem" [PREÇO|INFORMAÇÕES|TO TRANQUILO]
+    3: "rece__o", // "ainda tem interesse nas sementes" [quero saber mais|ok]
+    4: "customer_satisfaction_survey_13_1", // "ola amigo lembra de mim" [sim me lembro sim]
+  },
+  // canal "6836" — 100191609666845. Só tem um template aprovado; repete nas 4 variações.
+  "100191609666845": {
+    1: "boa_noite",
+    2: "boa_noite",
+    3: "boa_noite",
+    4: "boa_noite",
+  },
 };
 
 export const RECOVERY_TEMPLATE_LANG = "pt_BR";
+
+/** Nomes submetidos em 03/08 na WABA 743886211614541, aguardando aprovação da Meta.
+ *  Quando saírem APPROVED, substituir 2/3/4 acima — os botões destes casam com
+ *  shared/intent.ts (PRECO_RE, VIDEO_RE, PLANTIO_RE), os atuais não. */
+export const TEMPLATES_PENDENTES = [
+  "retomada_conversa",
+  "convite_videos",
+  "tirar_duvida",
+] as const;
+
+export function templateFor(
+  wabaId: string | null | undefined,
+  variation: number,
+): string | null {
+  if (!wabaId) return null;
+  return TEMPLATES_BY_WABA[String(wabaId)]?.[variation] ?? null;
+}
 
 export type TemplateSendResult = {
   ok: boolean;
@@ -47,20 +79,25 @@ export async function sendRecoveryTemplate(
   to: string,
   variation: number,
 ): Promise<TemplateSendResult> {
-  const template = RECOVERY_TEMPLATES[variation];
-  if (!template) {
-    return {
-      ok: false,
-      template: "",
-      error: `variação ${variation} sem template`,
-    };
-  }
   const phoneNumberId = channel.phone_number_id as string | undefined;
   if (!phoneNumberId) {
     return {
       ok: false,
-      template,
+      template: "",
       error: "canal sem phone_number_id (não-oficial)",
+    };
+  }
+
+  const template = templateFor(
+    channel.waba_id as string | undefined,
+    variation,
+  );
+  if (!template) {
+    return {
+      ok: false,
+      template: "",
+      error:
+        `sem template mapeado para waba=${channel.waba_id} variação=${variation}`,
     };
   }
 
