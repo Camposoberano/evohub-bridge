@@ -35,6 +35,7 @@ import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as syncComments } from "./handlers/sync-comments.ts";
 import { handle as syncChatwootOut } from "./handlers/sync-chatwoot-out.ts";
 import { handle as labelWindow } from "./handlers/label-window.ts";
+import { handle as syncLabels } from "./handlers/sync-labels.ts";
 import { handle as metricsRollup } from "./handlers/metrics-rollup.ts";
 import { handle as llmOrchestrate } from "./handlers/llm-orchestrate.ts";
 import { handle as relatorio } from "./handlers/relatorio.ts";
@@ -89,6 +90,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/sync-comments": syncComments,
   "/sync-chatwoot-out": syncChatwootOut,
   "/label-window": labelWindow,
+  "/sync-labels": syncLabels,
   "/metrics-rollup": metricsRollup,
   "/llm-orchestrate": llmOrchestrate,
   "/relatorio": relatorio,
@@ -368,6 +370,38 @@ function startLabelWindowLoop() {
       console.error("label-window (auto) erro:", e);
     }
   }, LABEL_WINDOW_INTERVAL_MS);
+}
+
+// Espelha as etiquetas do Chatwoot em conversations.labels e deriva outcome (won/lost).
+// O comercial marca venda/não-compra por etiqueta; sem isso o banco fica sem taxa de
+// conversão. 10min basta: é dado de análise, não de operação.
+// Kill-switch: SYNC_LABELS_ENABLED=false.
+const SYNC_LABELS_INTERVAL_MS = 10 * 60_000;
+function startSyncLabelsLoop() {
+  if (optionalEnv("SYNC_LABELS_ENABLED") === "false") {
+    console.log("sync-labels loop OFF (SYNC_LABELS_ENABLED=false)");
+    return;
+  }
+  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const url = `http://internal/sync-labels?token=${encodeURIComponent(token)}`;
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const res = await syncLabels(new Request(url));
+      const body = await res.json();
+      if (body.labels_updated > 0 || body.outcome_set > 0 || body.errors?.length) {
+        console.log("sync-labels (auto):", JSON.stringify(body));
+      }
+    } catch (e) {
+      console.error("sync-labels (auto) erro:", e);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, 60_000); // primeira passada ~1min após subir, pra fazer o backfill
+  setInterval(tick, SYNC_LABELS_INTERVAL_MS);
 }
 
 // Rollup diário de daily_metrics — loop interno (sem cron externo). Roda a cada 24h
@@ -786,6 +820,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startAvatarLoop();
   startChatwootOutLoop();
   startLabelWindowLoop();
+  startSyncLabelsLoop();
   startRollupLoop();
   startRetentionLoop();
   startEnrichLoop();
