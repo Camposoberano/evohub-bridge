@@ -14,6 +14,8 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
+import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
+import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
@@ -427,6 +429,60 @@ async function dispatchRecovery(
   }
 
   try {
+    // Janela fechada (canal oficial): texto livre seria rejeitado pela Meta. Manda o
+    // template aprovado, que tem botões — o toque do lead reabre a janela e aí a próxima
+    // recuperação já entra com o conteúdo rico. Ver shared/recovery-template.ts.
+    const win = await windowState(db, conv, resolved.channel);
+    if (!win.aberta) {
+      const sent = await sendRecoveryTemplate(
+        db,
+        resolved.channel,
+        resolved.from,
+        variation,
+      );
+      if (!sent.ok) throw new Error(`template ${sent.template}: ${sent.error}`);
+
+      const labelsFechada = await getConversationLabels(cwConvId, acct);
+      await setConversationLabels(
+        cwConvId,
+        [
+          ...new Set([
+            ...labelsFechada.filter((label) =>
+              label !== "recuperacao-respondeu"
+            ),
+            `recuperacao-${variation}-enviada`,
+            "recuperacao-aguardando",
+          ]),
+        ],
+        acct,
+      );
+      await db.from("events").insert({
+        source: "recovery",
+        event_type: "recovery_sent",
+        payload: {
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          variation,
+          channel,
+          via: "template",
+          template: sent.template,
+          janela: win.tipo,
+        },
+      });
+      await nota(
+        cwConvId,
+        `✅ *Recuperação ${variation} enviada por TEMPLATE* (${sent.template}) — a janela ${win.tipo} estava fechada. Quando o cliente tocar num botão a janela reabre e o conteúdo completo pode ser enviado.`,
+        acct,
+      );
+      return json({
+        ok: true,
+        action: `recuperacao-${variation}`,
+        channel,
+        via: "template",
+        template: sent.template,
+      });
+    }
+
     const media = await recoveryMedia(db, variation);
     const pieces = recoveryPieces(variation, media);
     for (const piece of pieces) {
