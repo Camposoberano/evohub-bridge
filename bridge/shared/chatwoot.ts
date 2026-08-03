@@ -318,7 +318,9 @@ export async function createConversationMessage(
 ): Promise<Record<string, unknown> & { id?: number }> {
   const attachments = input.attachments ?? [];
   const isPrivate = input.private === true;
-  const url = `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`;
+  const url = `${
+    baseOf(acct)
+  }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`;
 
   if (attachments.length > 0) {
     const makeForm = () => {
@@ -407,6 +409,45 @@ export async function getConversationLabels(
 }
 
 // substitui a lista INTEIRA de labels da conversa (Chatwoot não tem add/remove individual).
+/**
+ * Atribui a conversa a um agente. Sem isso o lead quente vira só etiqueta + nota privada
+ * e depende de alguém ver a nota — em 03/08 as 400 conversas estavam sem responsável e
+ * 11 leads que clicaram "Quero garantir" ficaram sem desfecho.
+ *
+ * Não lança: falhar a atribuição não pode derrubar o atendimento ao cliente, que é o que
+ * importa no momento do clique. Devolve false e quem chama decide se registra.
+ */
+export async function assignConversation(
+  conversationId: number,
+  assigneeId: number,
+  acct: CwAcct = envAcct(),
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${
+        baseOf(acct)
+      }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/assignments`,
+      {
+        method: "POST",
+        headers: appHeaders(acct),
+        body: JSON.stringify({ assignee_id: assigneeId }),
+      },
+    );
+    if (!res.ok) {
+      console.warn(
+        `assignConversation ${conversationId} -> ${res.status}: ${
+          (await res.text()).slice(0, 160)
+        }`,
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn(`assignConversation ${conversationId} erro:`, e);
+    return false;
+  }
+}
+
 export async function setConversationLabels(
   conversationId: number,
   labels: string[],

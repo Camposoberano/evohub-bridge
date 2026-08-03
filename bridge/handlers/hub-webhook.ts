@@ -13,6 +13,7 @@ import { numKey, readCampaigns, writeCampaigns } from "../shared/campaigns.ts";
 import { isNativeChannel } from "../shared/native.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
+  assignConversation,
   createConversationMessage,
   type CwAcct,
   getConversationLabels,
@@ -1268,8 +1269,24 @@ export async function handlePrecoClick(
     const texto =
       "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
     await envia({ type: "text", text: { body: texto } }, texto, "text");
+
+    // Atribui a conversa a um atendente. Sem isso o lead quente ficava só com etiqueta e
+    // nota privada: em 03/08, 11 dos 14 que clicaram aqui nunca foram fechados porque a
+    // conversa não tinha dono. A mensagem acima promete "o Cícero vai te chamar" — a
+    // atribuição é o que faz essa promessa cair na fila de alguém.
+    const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+    let atribuido = false;
+    if (assignee > 0 && conv?.chatwoot_conversation_id) {
+      atribuido = await assignConversation(
+        conv.chatwoot_conversation_id as number,
+        assignee,
+        acct,
+      );
+    }
     await registra(
-      "🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!",
+      atribuido
+        ? "🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Conversa atribuída — fechar a venda AGORA!"
+        : "🔥 *LEAD QUENTE — clicou 🛒 QUERO GARANTIR na tabela de preço.* Fechar a venda AGORA!",
       true,
     );
     return;
