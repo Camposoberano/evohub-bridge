@@ -78,6 +78,13 @@ export async function pumpFunnelQueue(limit = 10): Promise<{ found: number; sent
           chatwoot_conversation_id: Number(row.chatwoot_conversation_id),
           type: String(row.type ?? "text"),
           payload,
+          // Elo pra messages.funnel/funnel_day/funnel_step/scheduled_message_id (migration
+          // 0012) -- sem isso o relatório não consegue dizer qual peça da sequência gerou
+          // qual resposta do lead.
+          funnel: row.funnel ?? "mega-sorgo",
+          funnel_day: row.day ?? null,
+          funnel_step: row.type ?? null,
+          scheduled_message_id: id,
         }),
       }));
       const body = await res.json().catch(() => ({} as Json));

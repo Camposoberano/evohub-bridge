@@ -656,6 +656,11 @@ async function sendSelectedProductPrice(
 
 // Retorna true sempre que a conversa pertence ao catálogo. Isso impede que o
 // mesmo texto continue para os detectores do Mega Sorgo.
+// Texto que não bate com nenhum handler ainda vem do menu/qualificação (dígitos avulsos,
+// "sim"/"não" etc): não vale a pena responder com o fallback de handoff pra esse ruído.
+const IGNORAR_SEM_HANDOFF_RE = /^\s*(\d{1,3}|sim|s|nao|não|n|ok|obrigad[oa]|valeu)\s*[.!?]*\s*$/i;
+const REABRIR_MENU_RE = /\b(menu|catalogo|cat[áa]logo|voltar)\b/i;
+
 export async function routeCatalogText(
   db: Db,
   channel: Json,
@@ -667,6 +672,23 @@ export async function routeCatalogText(
   if (!context.active) return false;
   if (isPrecoIntent(content)) {
     await sendSelectedProductPrice(db, channel, from, context, acct);
+  } else if (REABRIR_MENU_RE.test(content)) {
+    await sendCatalogRootMenu(db, channel, from, acct, "catalogo_pedido_texto");
+  } else if (!IGNORAR_SEM_HANDOFF_RE.test(content)) {
+    // Auditoria de mensagens 08/2026 (defeito 7): antes disto, qualquer texto que não fosse
+    // pedido de preço era consumido em silêncio -- routeCatalogText sempre devolvia `true`
+    // e uazapi-webhook.ts pulava auto-enroll/intent por cima, então o cliente nunca recebia
+    // resposta. Sem handler de conteúdo pra essa pergunta livre, ao menos confirma o
+    // recebimento e chama o humano em vez de deixar a mensagem sem eco nenhum.
+    await sendText(
+      db,
+      channel,
+      from,
+      context.conv,
+      acct,
+      "Recebi sua mensagem! Pra tirar essa dúvida específica, o Cícero vai te responder por aqui em instantes. " +
+        "Se quiser continuar navegando, digite *menu* pra voltar ao catálogo.",
+    );
   }
   return true;
 }

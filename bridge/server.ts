@@ -49,7 +49,7 @@ import {
   runOperationalAudit,
 } from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
-import { admin } from "./shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
@@ -256,8 +256,14 @@ const version = {
     "catalog-manual-entry-only",
     "catalog-mega-sorgo-journey-isolation",
     "catalog-product-price-source",
+    "report-auth-token-or-jwt",
+    "msg-type-alias-normalization",
+    "outbound-echo-dedup",
+    "first-response-trigger",
+    "message-funnel-link",
+    "outcome-label-pago-nao-compra",
   ],
-  build: "2026-07-29-catalog-journey-isolation",
+  build: "2026-08-02-outcome-labels",
 };
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
@@ -410,8 +416,13 @@ const ROLLUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 function startRollupLoop() {
   const run = async () => {
     try {
+      // /metrics-rollup passou a exigir auth (defeito 9 da auditoria 08/2026) -- o loop
+      // interno precisa do mesmo token de cron que os outros loops (ex: startRetentionLoop).
+      const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
       const res = await metricsRollup(
-        new Request("http://internal/metrics-rollup"),
+        new Request(
+          `http://internal/metrics-rollup?token=${encodeURIComponent(token)}`,
+        ),
       );
       console.log("metrics-rollup (auto):", JSON.stringify(await res.json()));
     } catch (e) {
@@ -671,6 +682,113 @@ function startMacroCommandLoop() {
   console.log("macro-command-poll loop ON (15s, filter API)");
 }
 
+// Etiquetas de resultado ("pago"/"nao-compra") — diferente do poll de cmd-* acima, essas
+// etiquetas são PERSISTENTES (o atendente marca e ela fica visível como status). Por isso
+// não removemos a etiqueta depois de rodar; a idempotência vem de um claim em `deliveries`
+// (mesmo primitivo usado em toda dedup do bridge) -- ação roda 1x por conversa/etiqueta,
+// não a cada tick de 20s. Falha na chamada libera o claim pro próximo tick tentar de novo.
+const OUTCOME_LABEL_POLL_INTERVAL_MS = 20_000;
+const OUTCOME_LABELS: Record<string, string> = {
+  "pago": "marcar-pago",
+  "nao-compra": "marcar-nao-compra",
+};
+const OUTCOME_LABEL_KEYS = Object.keys(OUTCOME_LABELS);
+const OUTCOME_FILTER_PAYLOAD = JSON.stringify({
+  payload: OUTCOME_LABEL_KEYS.map((label, i) => ({
+    attribute_key: "labels",
+    filter_operator: "equal_to",
+    values: [label],
+    query_operator: i < OUTCOME_LABEL_KEYS.length - 1 ? "OR" : null,
+  })),
+});
+
+function startOutcomeLabelLoop() {
+  if (optionalEnv("MACRO_POLL_ENABLED") === "false") return;
+  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+  const acct = envAcct();
+  const baseUrl = acct.url.replace(/\/+$/, "");
+  const filterUrl =
+    `${baseUrl}/api/v1/accounts/${acct.accountId}/conversations/filter`;
+  const db = admin();
+
+  const tick = async () => {
+    try {
+      const res = await fetch(filterUrl, {
+        method: "POST",
+        headers: {
+          "api_access_token": acct.token,
+          "Content-Type": "application/json",
+        },
+        body: OUTCOME_FILTER_PAYLOAD,
+      });
+      if (!res.ok) {
+        console.warn("outcome-label-poll: filter", res.status);
+        return;
+      }
+      const json = await res.json();
+      const convs = (json.payload ?? []) as Array<Record<string, unknown>>;
+
+      for (const conv of convs) {
+        const labels = (conv.labels ?? []) as string[];
+        const label = labels.find((l) => OUTCOME_LABEL_KEYS.includes(l));
+        if (!label) continue;
+        const cwConvId = conv.id as number;
+        const action = OUTCOME_LABELS[label];
+        const claimKey = `outcome-label-${cwConvId}-${label}`;
+        // já processado antes -- etiqueta fica visível, mas a ação (cancelar funil, marcar
+        // outcome, bloquear contato) só roda uma vez.
+        if (!await claimDelivery(db, claimKey, "outcome-label")) continue;
+
+        try {
+          const r = await fetch(
+            `http://localhost:${port}/funil-control?token=${
+              encodeURIComponent(secret)
+            }`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action,
+                chatwoot_conversation_id: cwConvId,
+              }),
+            },
+          );
+          const result = await r.json().catch(() => ({}));
+          if (!r.ok || result.ok !== true) {
+            console.warn(
+              "outcome-label-poll: falha, libera pra retry",
+              label,
+              cwConvId,
+              JSON.stringify(result).slice(0, 150),
+            );
+            await releaseDelivery(db, claimKey);
+            continue;
+          }
+          console.log(
+            "outcome-label-poll:",
+            label,
+            "conv",
+            cwConvId,
+            "->",
+            action,
+            "ok",
+          );
+        } catch (e) {
+          console.error("outcome-label-poll exec erro:", e);
+          await releaseDelivery(db, claimKey);
+        }
+      }
+    } catch (e) {
+      console.error("outcome-label-poll erro:", e);
+    }
+  };
+  setTimeout(tick, 12_000);
+  setInterval(tick, OUTCOME_LABEL_POLL_INTERVAL_MS);
+  console.log(
+    "outcome-label-poll loop ON (20s, filter API) -- etiquetas pago/nao-compra",
+  );
+}
+
 Deno.serve({ port }, async (req) => {
   const { pathname } = new URL(req.url);
 
@@ -827,6 +945,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startChannelSyncLoop();
   startDataCleanupLoop();
   startMacroCommandLoop();
+  startOutcomeLabelLoop();
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
   startOperationalMonitorLoop();
