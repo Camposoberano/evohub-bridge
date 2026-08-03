@@ -1,9 +1,11 @@
 // sync-labels — traz as etiquetas do Chatwoot para `conversations.labels` e deriva `outcome`.
 //
-// Motivo: o comercial marca venda/não-compra por etiqueta no Chatwoot, mas nada disso chegava
-// ao banco do bridge (labels vazio nas 400 conversas, outcome com 399 "open"). Sem isso não há
-// taxa de conversão — não dá para saber se uma mudança no funil melhorou algo.
+// Motivo: o comercial marca venda/não-compra por etiqueta, mas nada disso chegava ao banco do
+// bridge (labels vazio nas 400 conversas, outcome com 399 "open"). Sem isso não há taxa de
+// conversão — não dá para saber se uma mudança no funil melhorou algo.
 //
+// Convive com sync-wa-labels: este handler só substitui as etiquetas SEM prefixo `wa:`;
+// as do WhatsApp são preservadas. O desfecho é derivado do conjunto completo.
 // Não sobrescreve outcome definido à mão pelo dashboard (outcome_source='dashboard' vence).
 // Roda em loop no server.ts e também aceita chamada manual para backfill.
 // Auth: ?token=<SYNC_SECRET|CHATWOOT_WEBHOOK_SECRET>.
@@ -11,20 +13,12 @@ import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { type CwAcct, envAcct } from "../shared/chatwoot.ts";
-
-type Outcome = "won" | "lost";
-
-// Etiquetas comerciais → desfecho. O catálogo do Chatwoot tem variantes duplicadas
-// ("pago" aparece mais de uma vez, "pagamento-feito" tem descrição "pago"), então todas
-// as grafias em uso são mapeadas para o mesmo desfecho.
-const OUTCOME_LABELS: Record<string, Outcome> = {
-  "pago": "won",
-  "pagamento-feito": "won",
-  "venda": "won",
-  "nao-compra": "lost",
-  "nao-tem-interesse": "lost",
-  "sem-interesse": "lost",
-};
+import {
+  deriveOutcome,
+  mergeLabels,
+  sameLabels,
+  splitByOrigin,
+} from "../shared/outcome-labels.ts";
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) {
@@ -58,7 +52,9 @@ export async function handle(req: Request): Promise<Response> {
     for (const conv of convs) {
       const cwId = Number(conv.id);
       if (!Number.isFinite(cwId)) continue;
-      const labels = normalizeLabels(conv.labels);
+      const cwLabels = Array.isArray(conv.labels)
+        ? conv.labels.map((l) => String(l).trim()).filter(Boolean)
+        : [];
       scanned++;
 
       const { data: row, error: selErr } = await db.from("conversations")
@@ -71,17 +67,17 @@ export async function handle(req: Request): Promise<Response> {
       }
       if (!row) continue; // conversa do Chatwoot que o bridge não conhece
 
-      const patch: Record<string, unknown> = {};
+      // Preserva o que veio do WhatsApp; substitui só a fatia do Chatwoot.
+      const { whatsapp } = splitByOrigin(row.labels);
+      const next = mergeLabels(cwLabels, whatsapp);
 
-      // 1) espelha as etiquetas (sempre, mesmo sem etiqueta comercial — serve para análise)
-      if (!sameLabels(row.labels, labels)) {
-        patch.labels = labels;
+      const patch: Record<string, unknown> = {};
+      if (!sameLabels(row.labels, next)) {
+        patch.labels = next;
         labelsUpdated++;
       }
 
-      // 2) deriva o desfecho. "won" ganha de "lost" se as duas estiverem presentes:
-      // uma venda registrada é fato, "não compra" pode ter sobrado de antes.
-      const derived = deriveOutcome(labels);
+      const derived = deriveOutcome(next);
       const manual = row.outcome_source === "dashboard";
       if (derived && !manual && row.outcome !== derived) {
         patch.outcome = derived;
@@ -128,28 +124,6 @@ async function listConversations(
   // O endpoint responde {data:{payload:[...]}}; o filter API responde {payload:[...]}.
   const payload = json?.data?.payload ?? json?.payload ?? [];
   return Array.isArray(payload) ? payload : [];
-}
-
-function normalizeLabels(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  return [
-    ...new Set(raw.map((l) => String(l).trim().toLowerCase()).filter(Boolean)),
-  ].sort();
-}
-
-function sameLabels(current: unknown, next: string[]): boolean {
-  const a = Array.isArray(current) ? normalizeLabels(current) : [];
-  return a.length === next.length && a.every((v, i) => v === next[i]);
-}
-
-function deriveOutcome(labels: string[]): Outcome | null {
-  let lost = false;
-  for (const l of labels) {
-    const o = OUTCOME_LABELS[l];
-    if (o === "won") return "won";
-    if (o === "lost") lost = true;
-  }
-  return lost ? "lost" : null;
 }
 
 function isAuthorized(req: Request, url: URL): boolean {
