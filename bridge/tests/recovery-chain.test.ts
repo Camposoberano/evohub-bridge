@@ -71,11 +71,32 @@ Deno.test("'open' e o estado normal, nao encerramento", () => {
   assertEquals(decidir({ outcome: undefined }), 1);
 });
 
-// Quem respondeu não está sumido — está em conversa. Mandar recuperação por cima é ruído.
-Deno.test("lead que respondeu depois do funil sai da cadeia", () => {
-  assertEquals(decidir({ lastInboundAt: FIM + 60_000 }), null);
-  // resposta ANTES do fim do funil é o comportamento normal, não interrompe
+// O relógio conta do último sinal do lead. Quem acabou de falar tem silêncio ~0 e não
+// recebe nada; quem falou e sumiu entra normalmente, contando dali.
+Deno.test("cadencia conta a partir da ultima mensagem do lead", () => {
+  // respondeu agora: nada vence, mesmo com o funil terminado ha um dia
+  assertEquals(decidir({ lastInboundAt: FIM + DIA - 60_000 }), null);
+  // resposta anterior ao fim do funil nao muda nada: vale o fim do funil
   assertEquals(decidir({ lastInboundAt: FIM - 60_000 }), 1);
+  // respondeu no dia do funil e sumiu: um dia depois DELE, vence a variacao 1
+  assertEquals(
+    decidir({ now: FIM + DIA * 2, lastInboundAt: FIM + DIA }),
+    1,
+  );
+});
+
+// O caso dos 61 abandonados: funil pausado porque o lead falou, e ele sumiu depois. Medir
+// so pelo fim do funil descartava todos eles.
+Deno.test("lead que falou e sumiu ha semanas entra na cadeia", () => {
+  const falouEm = FIM + DIA; // pausou o funil aqui
+  assertEquals(
+    decidir({
+      now: falouEm + DIA * 8,
+      funnelEndedAt: FIM,
+      lastInboundAt: falouEm,
+    }),
+    1,
+  );
 });
 
 Deno.test("segue a ordem das variacoes, uma por vez", () => {

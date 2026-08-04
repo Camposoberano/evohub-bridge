@@ -75,13 +75,15 @@ export function dueRecoveryVariation(input: RecoveryDecision): number | null {
   // isClosedOutcome, não `if (outcome)`: a coluna é NOT NULL com default 'open'.
   if (isClosedOutcome(input.outcome)) return null;
 
-  // Lead que respondeu depois do funil não está silencioso — está em conversa. Quem cuida
-  // dele é o atendente ou o follow-up, não a recuperação.
-  if (input.lastInboundAt && input.lastInboundAt > input.funnelEndedAt) {
-    return null;
-  }
-
-  const idade = input.now - input.funnelEndedAt;
+  // O relógio conta do último sinal do lead, ou do fim do funil se ele nunca respondeu.
+  //
+  // Medir só pelo fim do funil estava errado: funil pausado quase sempre foi pausado PORQUE
+  // o lead falou, então a mensagem dele é posterior à última do funil. Descartar por isso
+  // eliminava 60 dos 61 abandonados — gente que falou há três semanas e sumiu, que é
+  // exatamente quem a recuperação existe pra buscar. Quem respondeu agora tem silêncio ~0
+  // e não vence nada, então a proteção continua de pé sem precisar de regra separada.
+  const ultimoSinal = Math.max(input.funnelEndedAt, input.lastInboundAt ?? 0);
+  const idade = input.now - ultimoSinal;
   if (idade < 0 || idade > IDADE_MAXIMA_MS) return null;
 
   if (
