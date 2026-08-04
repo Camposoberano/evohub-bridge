@@ -22,7 +22,12 @@ import {
   handle as funilEnroll,
   recoverEligibleFunnels,
 } from "./handlers/funil-enroll.ts";
-import { handle as funilControl } from "./handlers/funil-control.ts";
+import {
+  dispatchRecovery,
+  handle as funilControl,
+} from "./handlers/funil-control.ts";
+import { pumpRecoveryChain } from "./shared/recovery-chain.ts";
+import { accountForChannel } from "./shared/accounts.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
@@ -264,6 +269,8 @@ const version = {
     "first-response-trigger",
     "message-funnel-link",
     "outcome-label-pago-nao-compra",
+    "funil-fase5-logistica-e-pacote-2kg",
+    "recovery-chain-1-2-4-7",
   ],
   build: "2026-08-02-outcome-labels",
 };
@@ -399,7 +406,9 @@ function startSyncLabelsLoop() {
     try {
       const res = await syncLabels(new Request(url));
       const body = await res.json();
-      if (body.labels_updated > 0 || body.outcome_set > 0 || body.errors?.length) {
+      if (
+        body.labels_updated > 0 || body.outcome_set > 0 || body.errors?.length
+      ) {
         console.log("sync-labels (auto):", JSON.stringify(body));
       }
     } catch (e) {
@@ -427,7 +436,9 @@ function startSyncWaLabelsLoop() {
     return;
   }
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/sync-wa-labels?token=${encodeURIComponent(token)}`;
+  const url = `http://internal/sync-wa-labels?token=${
+    encodeURIComponent(token)
+  }`;
   let running = false;
   const tick = async () => {
     if (running) return;
@@ -435,7 +446,9 @@ function startSyncWaLabelsLoop() {
     try {
       const res = await syncWaLabels(new Request(url));
       const body = await res.json();
-      if (body.labels_updated > 0 || body.outcome_set > 0 || body.errors?.length) {
+      if (
+        body.labels_updated > 0 || body.outcome_set > 0 || body.errors?.length
+      ) {
         console.log("sync-wa-labels (auto):", JSON.stringify(body));
       }
     } catch (e) {
@@ -456,7 +469,8 @@ function startRollupLoop() {
     try {
       // /metrics-rollup passou a exigir auth (defeito 9 da auditoria 08/2026) -- o loop
       // interno precisa do mesmo token de cron que os outros loops (ex: startRetentionLoop).
-      const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+      const token = optionalEnv("SYNC_SECRET") ??
+        env("CHATWOOT_WEBHOOK_SECRET");
       const res = await metricsRollup(
         new Request(
           `http://internal/metrics-rollup?token=${encodeURIComponent(token)}`,
@@ -922,18 +936,38 @@ function startFunnelQueueLoop() {
   console.log("funnel-queue-pump loop ON (30s)");
 }
 
+// Cadeia automática de recuperação (1·2·4·7 dias). DESLIGADA por padrão: ligar significa
+// mandar mensagem sozinha pra centenas de leads parados, e essa decisão é do dono da conta,
+// não default de deploy. Liga com RECOVERY_CHAIN_ENABLED=true.
+async function runRecoveryChain() {
+  if (optionalEnv("RECOVERY_CHAIN_ENABLED") !== "true") return null;
+  return await pumpRecoveryChain(admin(), async (conv, cwConvId, variation) => {
+    const acct = await accountForChannel(String(conv.channel_id ?? ""));
+    const response = await dispatchRecovery(
+      admin(),
+      conv,
+      cwConvId,
+      variation,
+      acct,
+    );
+    return response.ok;
+  });
+}
+
 function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
       const result = await recoverEligibleFunnels(admin(), 48);
       const maintenance = await maintainFunnels(admin());
+      const chain = await runRecoveryChain();
       if (
         result.eligible || result.enrolled || maintenance.completed ||
-        maintenance.resumed || maintenance.followups
+        maintenance.resumed || maintenance.followups || chain?.sent ||
+        chain?.failed
       ) {
         console.log(
           "funnel-recovery:",
-          JSON.stringify({ eligible: result, maintenance }),
+          JSON.stringify({ eligible: result, maintenance, chain }),
         );
       }
     } catch (e) {

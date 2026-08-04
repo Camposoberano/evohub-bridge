@@ -401,7 +401,10 @@ export async function handle(req: Request): Promise<Response> {
   }, 400);
 }
 
-async function dispatchRecovery(
+// Exportada porque a cadeia automática (shared/recovery-chain.ts) dispara pelo mesmo
+// caminho da macro manual — mesmo claimDelivery, mesmas etiquetas, mesmo evento. Duas
+// implementações de "mandar recuperação" divergiriam na primeira mudança.
+export async function dispatchRecovery(
   db: Db,
   conv: Json,
   cwConvId: number,
