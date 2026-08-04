@@ -231,7 +231,12 @@ function fase4(): Peca[] {
   ];
 }
 
-// Fase 5: sem gancho (é a última) — fechamento é só o menu de dúvidas.
+// Fase 5 — oferta + LOGÍSTICA + entrada de 2 kg.
+// A logística (depósitos, nota fiscal, rastreio, frete) é quebra de objeção pesada pra quem
+// compra semente pela internet e não existia em nenhuma fase. A oferta de 2 kg baixa a
+// barreira: "testar antes de ampliar" converte melhor que "condição especial" genérica.
+// O gancho final pede CIDADE/CEP de propósito — a resposta dispara isFechamentoIntent
+// (shared/intent.ts), que pausa o funil e atribui a conversa pro atendente.
 function fase5(): Peca[] {
   return [
     {
@@ -244,8 +249,30 @@ function fase5(): Peca[] {
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
-    { offset: 210, kind: "media", mediaType: "video", slot: "video" },
-    { ...closingList(null) as Peca, offset: 280 },
+    {
+      offset: 210,
+      kind: "text_sequence",
+      texts: [
+        "🏢 *Nossos depósitos:*\n\n1️⃣ Campinas – SP\n2️⃣ Lucas do Rio Verde – MT\n3️⃣ Toledo – PR\n4️⃣ Fortaleza – CE\n5️⃣ Juazeiro do Norte – CE",
+        "🌱 *Disponibilidade por localidade:*\n\n🔹 *Mega Sorgo Santa Elisa*® — exclusivo no depósito de *Campinas – SP*\n🔹 *BRS 661* e *BRS Ponta Negra* (Embrapa) — *Fortaleza – CE* e *Toledo – PR*",
+        "📦 Todo pedido sai com *nota fiscal*, *rastreamento* e *frete grátis* pra qualquer região do Brasil 🇧🇷",
+      ],
+    },
+    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    {
+      offset: 350,
+      kind: "text",
+      text:
+        "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança.",
+    },
+    {
+      ...closingList({
+        text:
+          "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
+        row: { id: "f5_local", title: "📍 Vou informar" },
+      }) as Peca,
+      offset: 420,
+    },
   ];
 }
 
