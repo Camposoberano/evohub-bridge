@@ -25,6 +25,9 @@ const IDADE_MAXIMA_MS = 30 * DIA_MS;
  *  Meta: passou dela, o funil não volta sozinho (o auto-resume exige resposta do lead nas
  *  últimas 6h) e a conversa fica invisível pros dois sistemas. Eram 61 leads em 04/08. */
 export const ABANDONO_MS = 72 * 60 * 60_000;
+/** Saída nessa janela = atendente na conversa; a recuperação não entra por cima. Menor que
+ *  o gap de 20h entre variações, senão a recuperação anterior travaria a seguinte. */
+export const ATENDIMENTO_RECENTE_MS = 12 * 60 * 60_000;
 
 /**
  * A sequência está num estado em que a recuperação deve assumir?
@@ -61,6 +64,8 @@ export type RecoveryDecision = {
   lastInboundAt: number | null;
   /** quando saiu a última recuperação, ou null */
   lastRecoveryAt: number | null;
+  /** alguém do time falou com esse lead nas últimas horas? */
+  emAtendimento?: boolean;
   /** variações já enviadas pra essa conversa */
   sentVariations: number[];
   outcome?: string | null;
@@ -74,6 +79,11 @@ export function dueRecoveryVariation(input: RecoveryDecision): number | null {
   // Venda ganha ou perdida encerra o assunto. Recuperar quem já comprou queima o cliente.
   // isClosedOutcome, não `if (outcome)`: a coluna é NOT NULL com default 'open'.
   if (isClosedOutcome(input.outcome)) return null;
+
+  // Atendente falando com o lead agora: sair da frente. Como a cadência conta do último
+  // sinal DELE, um lead que respondeu ontem e está sendo atendido hoje teria a variação 1
+  // vencida — o template entraria por cima da conversa do Cícero.
+  if (input.emAtendimento) return null;
 
   // O relógio conta do último sinal do lead, ou do fim do funil se ele nunca respondeu.
   //
@@ -190,6 +200,19 @@ export async function pumpRecoveryChain(
       (c.outcome as string | null) ?? null,
     ]),
   );
+  // Conversas com saída recente = alguém do time está falando com o lead. Uma consulta só,
+  // janela curta, então o resultado é pequeno. O gap de 20h entre variações garante que a
+  // própria recuperação anterior não caia aqui e trave a cadeia.
+  const { data: saidaRecente } = await db.from("messages")
+    .select("conversation_id")
+    .in("conversation_id", ids)
+    .eq("direction", "out")
+    .gte("sent_at", new Date(now - ATENDIMENTO_RECENTE_MS).toISOString())
+    .limit(5_000);
+  const emAtendimento = new Set(
+    ((saidaRecente ?? []) as Json[]).map((m) => String(m.conversation_id)),
+  );
+
   const enviadasPorConversa = new Map<string, number[]>();
   const ultimaPorConversa = new Map<string, number>();
   for (const ev of (recoveryEvents ?? []) as Json[]) {
@@ -237,6 +260,7 @@ export async function pumpRecoveryChain(
         ? Date.parse(String(inbound.sent_at))
         : null,
       lastRecoveryAt: ultimaPorConversa.get(conversationId) ?? null,
+      emAtendimento: emAtendimento.has(conversationId),
       sentVariations: enviadasPorConversa.get(conversationId) ?? [],
       outcome: outcomeById.get(conversationId) ?? null,
     });

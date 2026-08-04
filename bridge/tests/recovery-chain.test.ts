@@ -99,6 +99,13 @@ Deno.test("lead que falou e sumiu ha semanas entra na cadeia", () => {
   );
 });
 
+// Contar o silêncio a partir do lead abriu esta brecha: lead responde ontem, Cicero
+// atende hoje, e a variacao 1 vence -- o template entraria no meio da conversa dele.
+Deno.test("nao entra por cima de atendente que esta falando com o lead", () => {
+  assertEquals(decidir({ now: FIM + DIA * 5, emAtendimento: true }), null);
+  assertEquals(decidir({ now: FIM + DIA * 5, emAtendimento: false }), 1);
+});
+
 Deno.test("segue a ordem das variacoes, uma por vez", () => {
   assertEquals(decidir({ now: FIM + DIA * 2, sentVariations: [1] }), 2);
   assertEquals(decidir({ now: FIM + DIA * 4, sentVariations: [1, 2] }), 3);
