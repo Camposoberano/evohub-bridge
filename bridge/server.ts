@@ -941,17 +941,23 @@ function startFunnelQueueLoop() {
 // não default de deploy. Liga com RECOVERY_CHAIN_ENABLED=true.
 async function runRecoveryChain() {
   if (optionalEnv("RECOVERY_CHAIN_ENABLED") !== "true") return null;
-  return await pumpRecoveryChain(admin(), async (conv, cwConvId, variation) => {
-    const acct = await accountForChannel(String(conv.channel_id ?? ""));
-    const response = await dispatchRecovery(
-      admin(),
-      conv,
-      cwConvId,
-      variation,
-      acct,
-    );
-    return response.ok;
-  });
+  const teto = Number(optionalEnv("RECOVERY_CHAIN_MAX_PER_ROUND") ?? "5");
+  return await pumpRecoveryChain(
+    admin(),
+    async (conv, cwConvId, variation) => {
+      const acct = await accountForChannel(String(conv.channel_id ?? ""));
+      const response = await dispatchRecovery(
+        admin(),
+        conv,
+        cwConvId,
+        variation,
+        acct,
+      );
+      return response.ok;
+    },
+    Date.now(),
+    Number.isFinite(teto) && teto > 0 ? teto : 5,
+  );
 }
 
 function startFunnelRecoveryLoop() {

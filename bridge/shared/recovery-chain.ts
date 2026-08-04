@@ -99,15 +99,19 @@ export type RecoveryDispatcher = (
 ) => Promise<boolean>;
 
 /**
- * Varre os funis terminados e dispara a recuperação vencida. Limite por rodada porque o
- * loop roda de 5 em 5 min: melhor um gotejamento constante do que uma rajada de centenas
- * de mensagens, que a Meta lê como spam.
+ * Varre os funis terminados e dispara a recuperação vencida.
+ *
+ * O teto por rodada é a trava mais importante daqui. Ao ligar pela primeira vez existe um
+ * represado grande (87 conversas elegíveis em 04/08), e o loop roda de 5 em 5 min: com
+ * teto 15 isso viraria 180 templates frios por hora e a Meta rebaixa a nota de qualidade
+ * do número por muito menos. Padrão 5 (60/h) esvazia o represado em ~1h30 sem rajada;
+ * sobe pelo RECOVERY_CHAIN_MAX_PER_ROUND depois que a nota se mostrar estável.
  */
 export async function pumpRecoveryChain(
   db: DbClient,
   dispatch: RecoveryDispatcher,
   now = Date.now(),
-  maxPorRodada = 15,
+  maxPorRodada = 5,
 ): Promise<RecoveryChainResult> {
   const result = { scanned: 0, due: 0, sent: 0, failed: 0 };
   if (!withinRecoveryHours(now)) return result;
