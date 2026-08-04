@@ -25,7 +25,9 @@ const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
-const FIM_ACESSO = 520; // último disparo do acesso (lista de fechamento) = +8min40
+// Teto do acesso: a próxima fase começa em ini+FIM_ACESSO, então peça agendada além disso
+// invade a fase seguinte. Exportado pra tests/funil-offsets.test.ts vigiar.
+export const FIM_ACESSO = 520; // último disparo do acesso (lista de fechamento) = +8min40
 const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 type Botao = { id: string; title: string };
@@ -38,6 +40,7 @@ type Peca =
     text: string;
     buttons: Botao[];
     headerSlot?: string;
+    mediaDay?: number;
   }
   | {
     offset: number;
@@ -45,6 +48,10 @@ type Peca =
     mediaType: "image" | "audio" | "video";
     slot: string;
     caption?: string;
+    // Por padrão a peça sorteia mídia do dia da própria fase (dia 1 = fase 1...). mediaDay
+    // aponta pra outro dia da faixa -- o dia 0 é o catálogo de artes fixas (preço, logística,
+    // plantio), que não pertence a fase nenhuma e é reaproveitado por várias.
+    mediaDay?: number;
   }
   | {
     offset: number;
@@ -258,11 +265,25 @@ function fase5(): Peca[] {
         "📦 Todo pedido sai com *nota fiscal*, *rastreamento* e *frete grátis* pra qualquer região do Brasil 🇧🇷",
       ],
     },
-    { offset: 280, kind: "media", mediaType: "video", slot: "video" },
+    // A arte da logística fecha a objeção do "compra pela internet": mostra a entrega,
+    // não só descreve. Vem do catálogo (dia 0), por isso mediaDay.
     {
-      offset: 350,
-      kind: "text",
-      text:
+      offset: 280,
+      kind: "media",
+      mediaType: "image",
+      slot: "logistica_img",
+      mediaDay: 0,
+    },
+    { offset: 350, kind: "media", mediaType: "video", slot: "video" },
+    // Oferta de entrada COM a foto do saco de 2 kg em vez de texto solto -- o produtor vê o
+    // que vai receber. Legenda no lugar do texto: é a mesma mensagem, uma peça só.
+    {
+      offset: 420,
+      kind: "media",
+      mediaType: "image",
+      slot: "preco_2kg",
+      mediaDay: 0,
+      caption:
         "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança.",
     },
     {
@@ -271,12 +292,12 @@ function fase5(): Peca[] {
           "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
         row: { id: "f5_local", title: "📍 Vou informar" },
       }) as Peca,
-      offset: 420,
+      offset: 490,
     },
   ];
 }
 
-const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
+export const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
 
 // calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
 // fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
@@ -406,7 +427,9 @@ export async function handle(req: Request): Promise<Response> {
           send_at: sendAt,
         });
       } else if (p.kind === "interactive") {
-        const header = p.headerSlot ? pick(dia, p.headerSlot) : null;
+        const header = p.headerSlot
+          ? pick(p.mediaDay ?? dia, p.headerSlot)
+          : null;
         const payload: Json = { text: p.text, buttons: p.buttons };
         if (header?.url) payload.header_image = header.url;
         rows.push({
@@ -436,7 +459,7 @@ export async function handle(req: Request): Promise<Response> {
           send_at: sendAt,
         });
       } else {
-        const m = pick(dia, p.slot);
+        const m = pick(p.mediaDay ?? dia, p.slot);
         if (!m?.url) continue; // sem mídia cadastrada nesse slot -> pula
         const payload: Json = { media_url: m.url };
         const cap = (p.caption ?? "") || (m.caption as string ?? "");
