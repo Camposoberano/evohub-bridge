@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  ABANDONO_MS,
   dueRecoveryVariation,
+  isAbandonedFunnel,
   RECOVERY_CHAIN_DAYS,
   withinRecoveryHours,
 } from "../shared/recovery-chain.ts";
@@ -22,6 +24,30 @@ function decidir(over: Partial<Parameters<typeof dueRecoveryVariation>[0]>) {
 
 Deno.test("cadencia e 1-2-4-7 dias", () => {
   assertEquals([...RECOVERY_CHAIN_DAYS], [1, 2, 4, 7]);
+});
+
+// 61 leads em 04/08 estavam num funil pausado ha mais de 72h: o funil nao anda (o
+// auto-resume exige resposta nas ultimas 6h) e a recuperacao nao os via, porque so olhava
+// sequencia 'completed'. Ficavam invisiveis pros dois sistemas.
+Deno.test("funil pausado alem da janela entra na recuperacao", () => {
+  const agora = FIM + DIA * 5;
+  assertEquals(isAbandonedFunnel("completed", agora, FIM), true);
+  assertEquals(isAbandonedFunnel("paused", agora, FIM), true);
+});
+
+// Mas pausa recente e atendimento em andamento -- mandar template por cima atropela o
+// atendente que acabou de assumir a conversa.
+Deno.test("pausa recente NAO entra: e conversa em atendimento", () => {
+  const agora = FIM + ABANDONO_MS - 60_000;
+  assertEquals(isAbandonedFunnel("paused", agora, FIM), false);
+  assertEquals(isAbandonedFunnel("paused", FIM + ABANDONO_MS, FIM), true);
+});
+
+Deno.test("funil rodando ou cancelado nunca entra", () => {
+  const agora = FIM + DIA * 10;
+  for (const s of ["running", "cancelled", ""]) {
+    assertEquals(isAbandonedFunnel(s, agora, FIM), false, `status ${s}`);
+  }
 });
 
 Deno.test("so vence depois do dia 1", () => {

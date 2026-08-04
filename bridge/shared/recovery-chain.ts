@@ -21,6 +21,26 @@ const DIA_MS = 24 * 60 * 60_000;
 const GAP_MINIMO_MS = 20 * 60 * 60_000;
 /** Conversa parada há mais de 30 dias não é recuperação, é lista fria. */
 const IDADE_MAXIMA_MS = 30 * DIA_MS;
+/** Funil pausado há mais que isso está abandonado, não em atendimento. 72h é a janela da
+ *  Meta: passou dela, o funil não volta sozinho (o auto-resume exige resposta do lead nas
+ *  últimas 6h) e a conversa fica invisível pros dois sistemas. Eram 61 leads em 04/08. */
+export const ABANDONO_MS = 72 * 60 * 60_000;
+
+/**
+ * A sequência está num estado em que a recuperação deve assumir?
+ *
+ * `completed` sempre. `paused` só depois do abandono — funil pausado hoje de manhã é
+ * conversa em atendimento, e mandar template por cima atropelaria o atendente.
+ */
+export function isAbandonedFunnel(
+  status: string,
+  now: number,
+  funnelEndedAt: number,
+): boolean {
+  if (status === "completed") return true;
+  if (status !== "paused") return false;
+  return now - funnelEndedAt >= ABANDONO_MS;
+}
 
 const BRT_OFFSET_MS = 3 * 60 * 60_000;
 /** O funil roda 6h-22h, mas recuperação é mensagem fria depois de dias de silêncio —
@@ -116,17 +136,40 @@ export async function pumpRecoveryChain(
   const result = { scanned: 0, due: 0, sent: 0, failed: 0 };
   if (!withinRecoveryHours(now)) return result;
 
+  // `paused` entra junto: funil que parou no meio e passou da janela nunca mais anda, e
+  // sem isso o lead some dos dois sistemas. Sem filtro de data no SQL porque last_sent_at
+  // vem nulo em parte das pausadas (35 de 76 em 04/08) — o corte é feito abaixo, depois
+  // de resolver a data real pela fila.
   const { data: sequences, error } = await db.from("sales_sequences")
-    .select("conversation_id,chatwoot_conversation_id,last_sent_at")
+    .select("conversation_id,chatwoot_conversation_id,last_sent_at,status")
     .eq("funnel", "mega-sorgo")
-    .eq("status", "completed")
-    .gte("last_sent_at", new Date(now - IDADE_MAXIMA_MS).toISOString())
-    .order("last_sent_at", { ascending: true })
+    .in("status", ["completed", "paused"])
     .limit(500);
   if (error) throw error;
   if (!sequences?.length) return result;
 
   const ids = (sequences as Json[]).map((s) => String(s.conversation_id));
+
+  // Fim real do funil pra quem não tem last_sent_at gravado: a última peça que saiu.
+  const semData = (sequences as Json[])
+    .filter((s) => !s.last_sent_at)
+    .map((s) => String(s.conversation_id));
+  const fimPorFila = new Map<string, number>();
+  if (semData.length) {
+    const { data: enviadas } = await db.from("scheduled_messages")
+      .select("conversation_id,sent_at")
+      .eq("funnel", "mega-sorgo")
+      .eq("status", "sent")
+      .in("conversation_id", semData)
+      .order("sent_at", { ascending: false })
+      .limit(10_000);
+    for (const row of (enviadas ?? []) as Json[]) {
+      const id = String(row.conversation_id);
+      const at = Date.parse(String(row.sent_at ?? ""));
+      // ordenado do mais novo pro mais velho: o primeiro de cada conversa é o último envio
+      if (Number.isFinite(at) && !fimPorFila.has(id)) fimPorFila.set(id, at);
+    }
+  }
   const [{ data: conversations }, { data: recoveryEvents }] = await Promise.all(
     [
       db.from("conversations").select("id,outcome").in("id", ids),
@@ -169,8 +212,13 @@ export async function pumpRecoveryChain(
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
     const cwConvId = Number(sequence.chatwoot_conversation_id ?? 0);
-    const funnelEndedAt = Date.parse(String(sequence.last_sent_at ?? ""));
+    const funnelEndedAt = sequence.last_sent_at
+      ? Date.parse(String(sequence.last_sent_at))
+      : (fimPorFila.get(conversationId) ?? NaN);
     if (!cwConvId || !Number.isFinite(funnelEndedAt)) continue;
+    if (
+      !isAbandonedFunnel(String(sequence.status ?? ""), now, funnelEndedAt)
+    ) continue;
 
     const { data: inbound } = await db.from("messages")
       .select("sent_at")
