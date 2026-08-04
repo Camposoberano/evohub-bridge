@@ -51,6 +51,19 @@ export function deriveOutcome(labels: string[]): Outcome | null {
   return lost ? "lost" : null;
 }
 
+/**
+ * A conversa está comercialmente encerrada?
+ *
+ * `conversations.outcome` é enum NOT NULL com default `'open'` — nunca é nulo. Quem
+ * testa a coluna por veracidade (`if (outcome)`) conclui que TODA conversa está fechada
+ * e desliga o que veio depois. Foi o que aconteceu com o follow-up silencioso: 135 funis
+ * concluídos e zero follow-ups agendados. Só `won` e `lost` encerram; `open` é o estado
+ * normal de quem ainda está em jogo.
+ */
+export function isClosedOutcome(outcome: string | null | undefined): boolean {
+  return outcome === "won" || outcome === "lost";
+}
+
 /** Separa as etiquetas guardadas por origem, para cada sync substituir só a sua. */
 export function splitByOrigin(
   stored: unknown,

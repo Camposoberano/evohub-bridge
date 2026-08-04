@@ -2,10 +2,22 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canonize,
   deriveOutcome,
+  isClosedOutcome,
   mergeLabels,
   splitByOrigin,
   WA_PREFIX,
 } from "../shared/outcome-labels.ts";
+
+// A coluna conversations.outcome é enum NOT NULL com default 'open': nunca chega nula.
+// Quem testar por veracidade (`if (outcome)`) conclui que toda conversa está encerrada.
+Deno.test("so won e lost encerram; 'open' e o default da coluna", () => {
+  assertEquals(isClosedOutcome("won"), true);
+  assertEquals(isClosedOutcome("lost"), true);
+  assertEquals(isClosedOutcome("open"), false);
+  assertEquals(isClosedOutcome(null), false);
+  assertEquals(isClosedOutcome(undefined), false);
+  assertEquals(isClosedOutcome(""), false);
+});
 
 // Grafias reais coletadas em produção: Chatwoot usa hífen, WhatsApp usa espaço,
 // acento e maiúsculas variadas — e a instância 5895 tem "Pago " com espaço no fim.

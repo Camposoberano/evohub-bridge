@@ -8,6 +8,7 @@
 // Cadência 1·2·4·7 dias a partir do fim do funil: densa no começo, quando o lead ainda
 // lembra, e espaçando depois pra não virar perseguição.
 import type { DbClient } from "./supabase.ts";
+import { isClosedOutcome } from "./outcome-labels.ts";
 
 type Json = Record<string, unknown>;
 
@@ -51,7 +52,8 @@ export type RecoveryDecision = {
  */
 export function dueRecoveryVariation(input: RecoveryDecision): number | null {
   // Venda ganha ou perdida encerra o assunto. Recuperar quem já comprou queima o cliente.
-  if (input.outcome) return null;
+  // isClosedOutcome, não `if (outcome)`: a coluna é NOT NULL com default 'open'.
+  if (isClosedOutcome(input.outcome)) return null;
 
   // Lead que respondeu depois do funil não está silencioso — está em conversa. Quem cuida
   // dele é o atendente ou o follow-up, não a recuperação.

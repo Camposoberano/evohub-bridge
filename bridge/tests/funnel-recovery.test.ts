@@ -62,3 +62,21 @@ Deno.test("retoma apenas pausa automática recente e sem atividade", () => {
     false,
   );
 });
+
+// conversations.outcome é enum NOT NULL com default 'open' — 393 das 420 conversas estão
+// nesse estado. A checagem antiga era `!input.outcome`, que dava falso pra todas e matou o
+// auto-resume em silêncio (último auto_resumed: 01/08). 'open' é conversa viva.
+Deno.test("outcome 'open' nao impede o auto-resume; won e lost impedem", () => {
+  const now = Date.parse("2026-07-18T18:00:00.000Z");
+  const base = {
+    now,
+    pauseAt: now - 100 * 60_000,
+    lastActivityAt: now - 95 * 60_000,
+    lastInboundAt: now - 2 * 60 * 60_000,
+    pauseType: "auto_paused",
+  };
+  assertEquals(canAutoResume({ ...base, outcome: "open" }), true);
+  assertEquals(canAutoResume({ ...base, outcome: null }), true);
+  assertEquals(canAutoResume({ ...base, outcome: "won" }), false);
+  assertEquals(canAutoResume({ ...base, outcome: "lost" }), false);
+});

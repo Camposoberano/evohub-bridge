@@ -1,5 +1,6 @@
 import type { DbClient } from "./supabase.ts";
 import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
+import { isClosedOutcome } from "./outcome-labels.ts";
 
 type Json = Record<string, unknown>;
 
@@ -36,7 +37,9 @@ export function canAutoResume(input: {
   pauseType: string;
   outcome?: string | null;
 }): boolean {
-  return input.pauseType === "auto_paused" && !input.outcome &&
+  // isClosedOutcome, não `!outcome`: conversations.outcome é NOT NULL com default 'open',
+  // então `!outcome` era falso pra TODA conversa e o auto-resume parou de existir.
+  return input.pauseType === "auto_paused" && !isClosedOutcome(input.outcome) &&
     input.now - input.pauseAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastActivityAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastInboundAt <= MAX_AUTO_RESUME_INBOUND_AGE_MS;
@@ -205,7 +208,11 @@ async function scheduleSilentFollowup(
     .select("outcome")
     .eq("id", conversationId)
     .maybeSingle();
-  if (conversation.data?.outcome) return false;
+  // Era `if (conversation.data?.outcome)`: como a coluna vem 'open' por padrão, isso
+  // barrava todo mundo — 135 funis concluídos e nenhum follow-up agendado.
+  if (isClosedOutcome(conversation.data?.outcome as string | null)) {
+    return false;
+  }
 
   const activity = await latestActivity(db, conversationId);
   if (

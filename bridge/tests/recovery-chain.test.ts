@@ -36,6 +36,15 @@ Deno.test("venda fechada ou perdida encerra a cadeia", () => {
   }
 });
 
+// conversations.outcome é NOT NULL com default 'open' — 393 das 420 conversas estão
+// assim. Tratar 'open' como encerramento desliga a cadeia inteira, que foi o bug que
+// deixou o follow-up silencioso sem rodar nenhuma vez em 135 funis concluídos.
+Deno.test("'open' e o estado normal, nao encerramento", () => {
+  assertEquals(decidir({ outcome: "open" }), 1);
+  assertEquals(decidir({ outcome: null }), 1);
+  assertEquals(decidir({ outcome: undefined }), 1);
+});
+
 // Quem respondeu não está sumido — está em conversa. Mandar recuperação por cima é ruído.
 Deno.test("lead que respondeu depois do funil sai da cadeia", () => {
   assertEquals(decidir({ lastInboundAt: FIM + 60_000 }), null);
