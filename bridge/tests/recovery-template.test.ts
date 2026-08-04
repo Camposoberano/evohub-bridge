@@ -23,8 +23,18 @@ Deno.test("toda variacao tem template nas duas WABAs oficiais", () => {
 
 // O erro de 03/08: templates foram criados numa WABA e o envio saiu por outra, gerando
 // "(#132001) Template name does not exist in the translation". O mapa é POR WABA.
+// Quatro ângulos diferentes, um por momento — se dois forem iguais, o lead recebe a mesma
+// abordagem duas vezes e a cadeia perde o sentido.
+Deno.test("as 4 variacoes do 5895 usam templates distintos", () => {
+  const nomes = [1, 2, 3, 4].map((v) => templateFor(WABA_5895, v));
+  assertEquals(new Set(nomes).size, 4, `repetiu: ${nomes.join(", ")}`);
+  assertEquals(nomes[0], "retomada_conversa"); // "faz alguns dias que conversamos"
+  assertEquals(nomes[1], "convite_videos"); // "quer assistir os vídeos"
+  assertEquals(nomes[2], "tirar_duvida"); // "ficou alguma dúvida"
+});
+
 Deno.test("template e resolvido por WABA, nao global", () => {
-  assertEquals(templateFor(WABA_5895, 1), "bem_vindo");
+  assertEquals(templateFor(WABA_5895, 1), "retomada_conversa");
   assertEquals(templateFor(WABA_6836, 1), "boa_noite");
   assertEquals(templateFor("108121798773503", 1), null); // WABA de outra conta
   assertEquals(templateFor(null, 1), null);

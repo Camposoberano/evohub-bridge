@@ -27,12 +27,15 @@ type DbClient = {
  * Conferir com: GET /{waba_id}/message_templates?fields=name,language,status
  */
 const TEMPLATES_BY_WABA: Record<string, Record<number, string>> = {
-  // canal "5895" — 743886211614541
+  // canal "5895" — 743886211614541.
+  // Quatro ângulos diferentes, um por momento da recuperação. Os botões de 1-3 casam com
+  // shared/intent.ts (PRECO_RE, VIDEO_RE, PLANTIO_RE), então o toque do lead é roteado pelo
+  // bot sem depender de atendente.
   "743886211614541": {
-    1: "bem_vindo", // "falamos anteriormente sobre o mega sorgo" [Lembro sim|Tenho duvidas|Qual preço]
-    2: "mega_sorgo", // "quais dúvidas o senhor tem" [PREÇO|INFORMAÇÕES|TO TRANQUILO]
-    3: "rece__o", // "ainda tem interesse nas sementes" [quero saber mais|ok]
-    4: "customer_satisfaction_survey_13_1", // "ola amigo lembra de mim" [sim me lembro sim]
+    1: "retomada_conversa", // "faz alguns dias que conversamos" [Ver preço|Ver vídeos|Falar com Cícero]
+    2: "convite_videos", // "gravamos vídeos na lavoura" [Quero ver os vídeos|Ver preço|Não tenho interesse]
+    3: "tirar_duvida", // "ficou alguma dúvida" [Como plantar|Ver preço|Não tenho interesse]
+    4: "bem_vindo", // última tentativa, com nome do Cícero [Lembro sim|Tenho duvidas|Qual preço]
   },
   // canal "6836" — 100191609666845. Só tem um template aprovado; repete nas 4 variações.
   "100191609666845": {
@@ -45,13 +48,15 @@ const TEMPLATES_BY_WABA: Record<string, Record<number, string>> = {
 
 export const RECOVERY_TEMPLATE_LANG = "pt_BR";
 
-/** Nomes submetidos em 03/08 na WABA 743886211614541, aguardando aprovação da Meta.
- *  Quando saírem APPROVED, substituir 2/3/4 acima — os botões destes casam com
- *  shared/intent.ts (PRECO_RE, VIDEO_RE, PLANTIO_RE), os atuais não. */
-export const TEMPLATES_PENDENTES = [
+/** Aprovados pela Meta em 03/08 na WABA 743886211614541 e já em uso no mapa acima.
+ *  Sobraram sem uso, aprovados na mesma WABA: `mega_sorgo`, `rece__o`,
+ *  `customer_satisfaction_survey_13_1` (botões não roteáveis) e
+ *  `boas_vidas_oficial_2026` (é da Orto Vital, outro negócio — não usar). */
+export const TEMPLATES_EM_USO = [
   "retomada_conversa",
   "convite_videos",
   "tirar_duvida",
+  "bem_vindo",
 ] as const;
 
 export function templateFor(
