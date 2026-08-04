@@ -271,9 +271,16 @@ const version = {
     "outcome-label-pago-nao-compra",
     "funil-fase5-logistica-e-pacote-2kg",
     "recovery-chain-1-2-4-7",
+    "recovery-chain-funil-abandonado",
+    "version-uptime",
   ],
-  build: "2026-08-02-outcome-labels",
+  build: "2026-08-04-recovery-chain",
 };
+
+// Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
+// quando o commit só mexe em lógica — foi o que aconteceu em 04/08: três correções no ar
+// e nenhum jeito de confirmar de fora se o deploy pegou. Uptime baixo prova container novo.
+const STARTED_AT = new Date().toISOString();
 
 // Instagram não entrega webhook de mensagens (Meta/Hub só manda object=page para
 // Messenger). /sync-facebook é o único caminho de entrada pro IG, então roda em loop
@@ -847,9 +854,14 @@ Deno.serve({ port }, async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (pathname === "/health") return new Response("ok");
   if (pathname === "/version") {
-    return new Response(JSON.stringify(version), {
-      headers: { "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({
+        ...version,
+        started_at: STARTED_AT,
+        uptime_s: Math.round((Date.now() - Date.parse(STARTED_AT)) / 1000),
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    );
   }
   if (pathname === "/hybrid-diag") {
     try {
