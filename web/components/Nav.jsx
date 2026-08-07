@@ -4,6 +4,8 @@ import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import Logo from "@/components/Logo";
 
+import ThemeToggle from "@/components/ThemeToggle";
+
 const I = {
   conexoes: "M9 7H7a5 5 0 0 0 0 10h2M15 7h2a5 5 0 0 1 0 10h-2M8 12h8",
   conversas: "M21 11.5a8.4 8.4 0 0 1-9 8.4 8.4 8.4 0 0 1-3.9-.9L3 20l1.3-4.1A8.4 8.4 0 1 1 21 11.5Z",
@@ -63,7 +65,10 @@ export default function Nav() {
             </Link>
           ))}
         </nav>
-        <button className="btn-ghost nav-exit" onClick={sair}>Sair</button>
+        <div className="nav-actions">
+          <ThemeToggle />
+          <button className="btn-ghost nav-exit" onClick={sair}>Sair</button>
+        </div>
       </div>
       {currentSubnav && (
         <div className="subnav-wrap">

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import Nav from "@/components/Nav";
+import { SkeletonCard } from "@/components/Skeleton";
 
 const DAY = 86_400_000;
 
@@ -107,7 +108,23 @@ export default function Analytics() {
   }, [msgs, f]);
   const numerosMortos = useMemo(() => (canalId === "todos" ? mortos : mortos.filter((m) => m.channel_id === canalId)).length, [mortos, canalId]);
 
-  if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
+  if (!pronto) {
+    return (
+      <>
+        <Nav />
+        <div className="shell">
+          <div className="stat-grid" style={{ marginTop: 20 }}>
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

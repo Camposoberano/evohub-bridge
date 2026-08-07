@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL, HUB_FRONTEND } from "@/lib/supabase";
 import Nav from "@/components/Nav";
+import { SkeletonCard } from "@/components/Skeleton";
+import Toast from "@/components/Toast";
 
 const PLAT = {
   whatsapp: { label: "WhatsApp", color: "#1fbf75" },
@@ -12,10 +14,10 @@ const PLAT = {
 };
 
 function statusBadge(s) {
-  if (s === "active") return ["badge-green", "Conectado"];
-  if (s === "pending") return ["badge-amber", "Pendente"];
-  if (s === "error") return ["badge-red", "Erro"];
-  return ["badge-gray", s === "inactive" ? "Inativo" : (s || "—")];
+  if (s === "active") return ["badge-green", "Conectado", "pulse-green"];
+  if (s === "pending") return ["badge-amber", "Pendente", "pulse-amber"];
+  if (s === "error") return ["badge-red", "Erro", "pulse-red"];
+  return ["badge-gray", s === "inactive" ? "Inativo" : (s || "—"), null];
 }
 
 function tally(rows) {
@@ -36,6 +38,15 @@ export default function Conexoes() {
   const [novoTipo, setNovoTipo] = useState("whatsapp");
   const [criando, setCriando] = useState(false);
   const [conectandoId, setConectandoId] = useState(null);
+  const [toasts, setToasts] = useState([]);
+
+  const showToast = (message, type = "info") => {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  };
+
+  const dismissToast = (id) => setToasts((prev) => prev.filter((t) => t.id !== id));
 
   const carregar = useCallback(async () => {
     const [chs, ct, cv, ms] = await Promise.all([
@@ -76,13 +87,14 @@ export default function Conexoes() {
         body: JSON.stringify({ type: novoTipo, name: novoNome.trim() }),
       });
       const j = await res.json();
-      if (!res.ok) { alert(j.error || "Erro ao criar canal"); return; }
+      if (!res.ok) { showToast(j.error || "Erro ao criar canal", "error"); return; }
       abrirConexao(j.connect_url);
       setModal(false);
       setNovoNome("");
+      showToast("Canal criado com sucesso! Conecte na aba aberta.", "success");
       carregar();
     } catch (err) {
-      alert("Falha: " + err.message);
+      showToast("Falha: " + err.message, "error");
     } finally {
       setCriando(false);
     }
@@ -98,11 +110,12 @@ export default function Conexoes() {
         body: JSON.stringify({ channel_id: canal.id }),
       });
       const j = await res.json();
-      if (!res.ok) { alert(j.error || "Erro ao conectar canal"); return; }
+      if (!res.ok) { showToast(j.error || "Erro ao conectar canal", "error"); return; }
       abrirConexao(j.connect_url);
+      showToast("Redirecionando para autorização da Meta...", "info");
       carregar();
     } catch (err) {
-      alert("Falha: " + err.message);
+      showToast("Falha: " + err.message, "error");
     } finally {
       setConectandoId(null);
     }
@@ -113,8 +126,6 @@ export default function Conexoes() {
     window.open(`${HUB_FRONTEND}/connect/${token}`, "_blank", "noopener");
   }
 
-  if (!pronto) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Carregando…</div>;
-
   const filtrados = canais.filter((c) =>
     (c.name || "").toLowerCase().includes(busca.toLowerCase()),
   );
@@ -122,8 +133,9 @@ export default function Conexoes() {
   return (
     <>
     <Nav />
+    <Toast toasts={toasts} onDismiss={dismissToast} />
     <div className="shell">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 22, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 24, fontWeight: 700 }}>Minhas conexões</div>
           <div style={{ color: "var(--text-dim)", fontSize: 14, marginTop: 3 }}>
@@ -131,7 +143,7 @@ export default function Conexoes() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <Link href="/orquestracao" className="btn-ghost">Orquestracao</Link>
+          <Link href="/orquestracao" className="btn-ghost">Orquestração</Link>
           <button className="btn-mint" onClick={() => setModal(true)}>+ Novo canal</button>
         </div>
       </div>
@@ -142,7 +154,13 @@ export default function Conexoes() {
         <span className="badge badge-gray">{canais.length} {canais.length === 1 ? "canal" : "canais"}</span>
       </div>
 
-      {filtrados.length === 0 ? (
+      {!pronto ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
+      ) : filtrados.length === 0 ? (
         <div className="card" style={{ textAlign: "center", padding: "56px 20px", color: "var(--text-dim)" }}>
           <div style={{ fontSize: 17, fontWeight: 600, color: "var(--text)" }}>Nenhum canal encontrado</div>
           <div style={{ marginTop: 6, marginBottom: 18 }}>Crie seu primeiro canal para começar</div>
@@ -152,7 +170,7 @@ export default function Conexoes() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 14 }}>
           {filtrados.map((c) => {
             const plat = PLAT[c.type] || { label: c.type, color: "#888" };
-            const [cls, txt] = statusBadge(c.status);
+            const [cls, txt, pulse] = statusBadge(c.status);
             const ident = c.phone_number || c.display_name || c.page_id || "—";
             const rota = rotasHibridas.find((r) => r.channel_id === c.id);
             return (
@@ -161,7 +179,10 @@ export default function Conexoes() {
                   <span style={{ fontSize: 12, fontWeight: 600, color: plat.color, background: plat.color + "22", padding: "3px 10px", borderRadius: 999 }}>
                     {plat.label}
                   </span>
-                  <span className={"badge " + cls}>{txt}</span>
+                  <span className={"badge " + cls}>
+                    {pulse && <span className={`pulse-dot ${pulse}`} />}
+                    {txt}
+                  </span>
                 </div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{c.name}</div>
                 <div style={{ fontSize: 13, color: "var(--text-dim)", marginTop: 2 }}>{ident}</div>
@@ -196,7 +217,7 @@ export default function Conexoes() {
       )}
 
       {modal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, zIndex: 50 }}
           onClick={() => setModal(false)}>
           <form className="card" style={{ width: 420, maxWidth: "100%" }} onClick={(e) => e.stopPropagation()} onSubmit={criarCanal}>
             <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Novo canal</div>
@@ -228,3 +249,4 @@ export default function Conexoes() {
     </>
   );
 }
+
