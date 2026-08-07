@@ -18,53 +18,6 @@ export function customerIdentityKey(
   return { key: `channel:${channelId}:${externalId}`, normalizedPhone: null };
 }
 
-/**
- * Telefone brasileiro real: 55 + DDD + 8 ou 9 dígitos = 12 ou 13.
- *
- * A chave de identidade aceita 10 a 15 dígitos, o que é largo demais: PSID do Facebook e
- * LID do WhatsApp são numéricos e caem nessa faixa. Em 07/08 havia 26 "telefones" de 14-15
- * dígitos em `customers` (21 do WhatsApp, 5 do Instagram) que são identificador interno,
- * não número. Esses não podem entrar na prospecção — viram lixo que ninguém consegue ligar.
- */
-function isTelefoneReal(digitsOnly: string): boolean {
-  return /^\d{12,13}$/.test(digitsOnly);
-}
-
-/**
- * Espelha o contato na lista de prospecção (`clientes`), que é o que o painel mostra.
- *
- * Até 07/08 essa tabela só era preenchida por `scripts/import-clientes.ts`, uma importação
- * manual: 9.172 linhas paradas, todas do mesmo número de origem. Quem chegava pelo WhatsApp
- * entrava em `contacts`/`customers` e nunca cruzava para cá — eram 216 leads que
- * conversaram de verdade e não apareciam no painel.
- *
- * `ignoreDuplicates` é essencial: sem ele o upsert sobrescreveria as 9.172 linhas
- * importadas, zerando `enrich_status='done'` e apagando nome e avatar já coletados.
- * Deixa `on_whatsapp` nulo de propósito — é assim que o loop de enriquecimento
- * (shared/enrich.ts) encontra a linha e completa o resto sozinho.
- */
-async function espelharNaProspeccao(
-  db: DbClient,
-  customerId: string,
-  normalizedPhone: string,
-  name?: string | null,
-): Promise<void> {
-  const phone = normalizedPhone.replace(/\D/g, "");
-  if (!isTelefoneReal(phone)) return;
-  // `clientes.phone` é só dígitos; `customers.canonical_phone` vem com "+". Comparar os dois
-  // sem normalizar nunca casa — foi por isso que a lista parecia não ter os leads novos.
-  const { error } = await db.from("clientes").upsert({
-    phone,
-    customer_id: customerId,
-    lead_name: name || null,
-  }, { onConflict: "phone", ignoreDuplicates: true });
-  if (error) {
-    // Prospecção é espelho, não caminho crítico: falhar aqui não pode derrubar a entrada
-    // da mensagem do lead.
-    console.error("espelharNaProspeccao:", error.message);
-  }
-}
-
 export async function ensureCustomer(
   db: DbClient,
   input: {
@@ -98,16 +51,7 @@ export async function ensureCustomer(
   }, { onConflict: "identity_key" }).select("id,display_name").single();
   if (error) throw error;
 
-  const customerId = data.id as string;
-  if (identity.normalizedPhone) {
-    await espelharNaProspeccao(
-      db,
-      customerId,
-      identity.normalizedPhone,
-      input.name ?? (existing?.display_name as string | null),
-    );
-  }
-  return customerId;
+  return data.id as string;
 }
 
 export function customerFromContact(
