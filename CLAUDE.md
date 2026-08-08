@@ -13,11 +13,17 @@
 - Sempre dizer qual ao pedir redeploy
 
 ## Coolify API
-- **URL**: `https://coolify.institutobelem.com/api/v1`
+- **URL**: `https://painelgeral.camposoberano.com.br/api/v1`
+  (o host `coolify.institutobelem.com` que constava aqui devolve `Unauthenticated`
+  para qualquer token — não é o Coolify deste projeto)
 - **Token**: ler de `$COOLIFY_TOKEN` (`.env` local, nunca commitar). Uso: `Authorization: Bearer $COOLIFY_TOKEN`
-- **Servidor UUID**: `g5oxpau2ffnvso50m3wuhwxq` (bridge/servidor)
-- **Painel UUID**: `wwkt5an839c410ceklpu1cns`
-- **Logs**: `GET /applications/{uuid}/logs?take=100`
+- **SERVIDOR UUID**: `m8qf6ru2x75gukzozpsrssrm` (`evohub-bridge` → cofre.camposoberano.com.br)
+- **PAINEL UUID**: `ue0tgzd5a30jrxyenzff7piv` (`evohub-dashboard` → painel.camposoberano.com.br)
+- **Logs**: `GET /applications/{uuid}/logs?lines=200`
+- Env **nova** é `POST /applications/{uuid}/envs`; `PATCH` só atualiza existente e
+  responde `Environment variable not found.` se a chave ainda não existe
+- `GET /applications/{uuid}/restart` recria o container e já pega env nova —
+  confirmar por `uptime_s` baixo em `/version`
 
 ## Convenções
 - Toda mensagem registrada no Chatwoot DEVE capturar `chatwoot_message_id` do response e gravar na tabela `messages` (previne duplicação pelo pull-loop)
