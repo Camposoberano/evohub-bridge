@@ -65,7 +65,11 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
-import { maintainFunnels } from "./shared/funnel-recovery.ts";
+import {
+  maintainFunnels,
+  resumeSequenceRebased,
+} from "./shared/funnel-recovery.ts";
+import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -741,6 +745,89 @@ function startMacroCommandLoop() {
   console.log("macro-command-poll loop ON (15s, filter API)");
 }
 
+// Trava do bot (`bot-off`) — terceira família de etiqueta, com regra própria.
+//
+// Diferente de cmd-* (consumida e apagada) e de pago/nao-compra (persistente, mas ação
+// única): esta é persistente E de mão dupla. A etiqueta É o estado, então o que importa
+// não é o evento de marcar, é a foto de quem está marcado agora — quem ganhou a etiqueta
+// desde o último tick trava, e quem perdeu destrava. Por isso não usa claimDelivery: não
+// existe "já processei", existe "o Chatwoot diz que hoje são estas".
+//
+// Destravar reprograma o funil (resumeSequenceRebased): as peças pausadas ficaram com
+// send_at no passado e voltariam todas de uma vez.
+// Kill-switch: BOT_MUTE_POLL_ENABLED=false.
+const BOT_MUTE_POLL_INTERVAL_MS = 20_000;
+const BOT_MUTE_FILTER_PAYLOAD = JSON.stringify({
+  payload: [{
+    attribute_key: "labels",
+    filter_operator: "equal_to",
+    values: [BOT_MUTE_LABEL],
+    query_operator: null,
+  }],
+});
+
+function startBotMuteLoop() {
+  if (optionalEnv("BOT_MUTE_POLL_ENABLED") === "false") return;
+  const acct = envAcct();
+  const baseUrl = acct.url.replace(/\/+$/, "");
+  const filterUrl =
+    `${baseUrl}/api/v1/accounts/${acct.accountId}/conversations/filter`;
+
+  const tick = async () => {
+    try {
+      const res = await fetch(filterUrl, {
+        method: "POST",
+        headers: {
+          "api_access_token": acct.token,
+          "Content-Type": "application/json",
+        },
+        body: BOT_MUTE_FILTER_PAYLOAD,
+      });
+      if (!res.ok) {
+        // Sem a foto do Chatwoot não dá pra distinguir "ninguém travado" de "não
+        // consegui perguntar" — reconciliar com lista vazia destravaria todo mundo.
+        console.warn("bot-mute-poll: filter", res.status);
+        return;
+      }
+      const json = await res.json();
+      const convs = (json.payload ?? []) as Array<Record<string, unknown>>;
+      const cwIds = convs.map((c) => Number(c.id)).filter(Number.isFinite);
+
+      const db = admin();
+      const { muted, unmuted } = await reconcileBotMute(db, cwIds);
+      if (!muted.length && !unmuted.length) return;
+      console.log(
+        "bot-mute-poll:",
+        JSON.stringify({ travadas: muted.length, destravadas: unmuted.length }),
+      );
+
+      for (const conversationId of unmuted) {
+        try {
+          const retomadas = await resumeSequenceRebased(db, conversationId);
+          if (retomadas > 0) {
+            await db.from("events").insert({
+              source: "funil",
+              event_type: "auto_resumed",
+              payload: {
+                conversation_id: conversationId,
+                reason: "bot-off removido",
+                resumed_messages: retomadas,
+              },
+            });
+          }
+        } catch (e) {
+          console.error("bot-mute-poll: retomada falhou", conversationId, e);
+        }
+      }
+    } catch (e) {
+      console.error("bot-mute-poll erro:", e);
+    }
+  };
+  setTimeout(tick, 25_000);
+  setInterval(tick, BOT_MUTE_POLL_INTERVAL_MS);
+  console.log(`bot-mute-poll loop ON (20s, label ${BOT_MUTE_LABEL})`);
+}
+
 // Etiquetas de resultado ("pago"/"nao-compra") — diferente do poll de cmd-* acima, essas
 // etiquetas são PERSISTENTES (o atendente marca e ela fica visível como status). Por isso
 // não removemos a etiqueta depois de rodar; a idempotência vem de um claim em `deliveries`
@@ -1037,6 +1124,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDataCleanupLoop();
   startMacroCommandLoop();
   startOutcomeLabelLoop();
+  startBotMuteLoop();
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
   startOperationalMonitorLoop();

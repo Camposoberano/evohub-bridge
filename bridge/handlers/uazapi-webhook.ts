@@ -8,6 +8,7 @@ import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets } from "../shared/redact.ts";
+import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import {
   isNutricaoIntent,
   isPlantioIntent,
@@ -170,6 +171,17 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     });
 
     if (msg.direction === "incoming") {
+      // Bot travado à mão (label bot-off): a mensagem já foi ingerida acima. Daqui pra
+      // baixo é resposta automática — qualificação, catálogo e intenção — e nada disso
+      // deve sair por cima do atendente que calou o bot.
+      if (
+        msg.from &&
+        await isBotMutedForContact(db, String(channel.id), msg.from)
+      ) {
+        console.log("bot-mute: entrada uazapi ignorada pelo bot,", msg.from);
+        continue;
+      }
+
       // Resposta livre no meio da qualificação do catálogo (região/hectares/plantio) tem
       // prioridade sobre a detecção de intenção — não é um clique, então não passou por
       // handleUazapiClick acima.

@@ -18,6 +18,7 @@ import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
 
@@ -158,19 +159,29 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (action === "resume") {
-    const { count: resumed } = await db.from("scheduled_messages").update({
-      status: "pending",
-    })
-      .eq("conversation_id", conv.id).eq("status", "paused")
-      .select("id", { count: "exact", head: true });
-    await db.from("sales_sequences").update({ status: "running" })
-      .eq("conversation_id", conv.id).eq("status", "paused");
+    // Reprograma em vez de só devolver pra 'pending': as peças pausadas ficaram com
+    // send_at no passado, e o pump considera vencida toda linha com send_at <= agora —
+    // um funil parado por dias despejaria o resto do roteiro no cliente em minutos.
+    // resumeSequenceRebased preserva os intervalos e reancora em agora+60s; é a mesma
+    // função que o auto-resume usa, pra não voltarem a divergir.
+    const resumed = await resumeSequenceRebased(db, String(conv.id));
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "manual_resumed",
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: cwConvId,
+        resumed_messages: resumed,
+      },
+    });
     await nota(
       cwConvId,
-      `▶️ *Funil retomado* — ${resumed ?? 0} mensagens reativadas.`,
+      resumed > 0
+        ? `▶️ *Funil retomado* — ${resumed} mensagens reativadas, reagendadas a partir de agora mantendo os intervalos originais.`
+        : "▶️ *Nada a retomar* — não há mensagem pausada nesta conversa. (Se o funil foi encerrado por *stop*, *pago* ou *não compra*, as mensagens foram canceladas e só um novo início traz de volta.)",
       acct,
     );
-    return json({ ok: true, action: "resume", resumed: resumed ?? 0 });
+    return json({ ok: true, action: "resume", resumed });
   }
 
   if (action === "status") {

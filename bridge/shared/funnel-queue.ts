@@ -3,6 +3,7 @@
 import { admin, claimDelivery } from "./supabase.ts";
 import { env, optionalEnv } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
+import { mutedConversationIds } from "./bot-mute.ts";
 
 type Json = Record<string, unknown>;
 
@@ -104,8 +105,10 @@ async function recordFailure(
 
 export async function pumpFunnelQueue(
   limit = 10,
-): Promise<{ found: number; sent: number; failed: number }> {
-  if (running) return { found: 0, sent: 0, failed: 0 };
+): Promise<
+  { found: number; sent: number; failed: number; held: number }
+> {
+  if (running) return { found: 0, sent: 0, failed: 0, held: 0 };
   running = true;
   try {
     const db = admin();
@@ -127,8 +130,8 @@ export async function pumpFunnelQueue(
     // hoje o padrão é continuar nutrindo quem disse não.
     const stopOnLost = optionalEnv("FUNNEL_STOP_ON_LOST") === "true";
     const stopOutcomes = stopOnLost ? ["won", "lost"] : ["won"];
-    const convIds = [
-      ...new Set(
+    const convIds: string[] = [
+      ...new Set<string>(
         (data ?? []).map((row: Json) => String(row.conversation_id ?? ""))
           .filter(Boolean),
       ),
@@ -139,10 +142,16 @@ export async function pumpFunnelQueue(
         .select("id,outcome").in("id", convIds).in("outcome", stopOutcomes);
       for (const c of (convs ?? []) as Json[]) closed.add(String(c.id));
     }
+    // Bot travado na conversa (label bot-off): a peça fica esperando, não é cancelada nem
+    // marcada como falha. Marcar 'failed' aqui recriaria o defeito que travou 16
+    // sequências por 24 dias — falha segura a conclusão do funil e o lead some dos dois
+    // sistemas. Ao destravar, resumeSequenceRebased reprograma o que ficou parado.
+    const muted = await mutedConversationIds(db, convIds);
 
     let sent = 0;
     let failed = 0;
     let cancelled = 0;
+    let held = 0;
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
       if (!id) continue;
@@ -151,6 +160,11 @@ export async function pumpFunnelQueue(
         await db.from("scheduled_messages")
           .update({ status: "cancelled" }).eq("id", id);
         cancelled++;
+        continue;
+      }
+
+      if (muted.has(String(row.conversation_id ?? ""))) {
+        held++;
         continue;
       }
 
@@ -214,7 +228,10 @@ export async function pumpFunnelQueue(
         "msg(s) de conversa ja fechada",
       );
     }
-    return { found: data?.length ?? 0, sent, failed };
+    if (held > 0) {
+      console.log("funnel-queue: seguradas", held, "msg(s) com bot travado");
+    }
+    return { found: data?.length ?? 0, sent, failed, held };
   } finally {
     running = false;
   }

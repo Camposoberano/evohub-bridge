@@ -20,6 +20,30 @@ export function isPrecoIntent(text: string): boolean {
   return PRECO_RE.test(t);
 }
 
+// DÚVIDA TÉCNICA — pergunta de quem está avaliando comprar, mas sobre COMO usar, não sobre
+// preço. Vocabulário tirado das mensagens reais do banco (08/08), onde essas perguntas
+// chegam digitadas e não casam com nenhum detector: "Qual melhor espaço entre linhas",
+// "É melhor plantar ele a lanço ou na linha", "Quantas sementes por hectare", "Meu plantio
+// é irrigado com mangueira de gotejo", "E pra quais animais esse mega sorgo serve??".
+//
+// PLANTIO_RE não cobre: ele exige "como plantar"/"plantio"/"manejo"/"adubação", e nenhuma
+// dessas frases tem essas palavras — passavam batido e o funil seguia falando de tonelada.
+//
+// Não responde nada ao cliente por enquanto: o conteúdo dessas respostas ainda não existe,
+// e responder errado sobre espaçamento é pior que não responder. O consumidor avisa o
+// atendente. Quando os textos existirem, é aqui que eles entram.
+const DUVIDA_TECNICA_RE =
+  /(\bespacamento\b|\bespaco\s+entre\s+linhas?\b|\bentre\s+linhas?\b|\ba\s+lanco\b|\bna\s+linha\b|\blanco\s+ou\s+linha\b|\bsementes?\s+por\s+hectare\b|\bquantas\s+sementes\b|\bdensidade\b|\bgotejo\b|\birriga\w*\b|\bmangueira\b|\bpra\s+quais\s+animais\b|\bquais\s+animais\b|\bserve\s+pra\s+(aves|peixes|suino|porco|galinha)\b|\b(aves|peixes|suinos?)\b)/;
+
+export function isDuvidaTecnicaIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim()) return false;
+  // Preço continua tendo prioridade: "quanto custa a semente por hectare" é pergunta de
+  // preço, e a tabela já é resposta pronta. Mesma precedência dos outros detectores.
+  if (PRECO_RE.test(t)) return false;
+  return DUVIDA_TECNICA_RE.test(t);
+}
+
 // Só dispara se a palavra "vídeo" (ou "video", "vídeos", "videos") aparecer na frase.
 const VIDEO_RE = /\bvideos?\b/;
 

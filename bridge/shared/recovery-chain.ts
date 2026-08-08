@@ -9,6 +9,7 @@
 // lembra, e espaçando depois pra não virar perseguição.
 import type { DbClient } from "./supabase.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
+import { mutedConversationIds } from "./bot-mute.ts";
 
 type Json = Record<string, unknown>;
 
@@ -212,6 +213,9 @@ export async function pumpRecoveryChain(
   const emAtendimento = new Set(
     ((saidaRecente ?? []) as Json[]).map((m) => String(m.conversation_id)),
   );
+  // Bot travado à mão vence qualquer regra de cadência: se o atendente calou o bot nessa
+  // conversa, template de recuperação é exatamente o que ele não quer que saia.
+  const muted = await mutedConversationIds(db, ids);
 
   const enviadasPorConversa = new Map<string, number[]>();
   const ultimaPorConversa = new Map<string, number>();
@@ -236,6 +240,7 @@ export async function pumpRecoveryChain(
     if (result.sent >= maxPorRodada) break;
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
+    if (muted.has(conversationId)) continue;
     const cwConvId = Number(sequence.chatwoot_conversation_id ?? 0);
     const funnelEndedAt = sequence.last_sent_at
       ? Date.parse(String(sequence.last_sent_at))

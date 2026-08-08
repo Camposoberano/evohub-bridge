@@ -1,6 +1,7 @@
 import type { DbClient } from "./supabase.ts";
 import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
+import { mutedConversationIds } from "./bot-mute.ts";
 
 type Json = Record<string, unknown>;
 
@@ -28,6 +29,53 @@ export function rebasePausedSchedule(
   return parsed.map((value) =>
     new Date(startAt + Math.max(0, value - first)).toISOString()
   );
+}
+
+/**
+ * Retoma a sequência pausada reprogramando o que sobrou.
+ *
+ * O `send_at` das pausadas ficou no passado enquanto o funil esteve parado. Voltar as
+ * linhas para `pending` sem tocar na data faz o pump considerar todas vencidas e despejar
+ * o resto do roteiro no cliente em poucos minutos — quanto mais tempo pausado, pior a
+ * rajada. `rebasePausedSchedule` reancora em `now + 60s` preservando os intervalos
+ * originais entre as peças.
+ *
+ * O auto-resume já fazia isso; o `resume` manual do funil-control não, e era o caminho que
+ * o atendente usa. Virou função compartilhada para os dois não divergirem de novo.
+ * O evento fica com o chamador: o motivo da retomada é diferente em cada caso.
+ */
+export async function resumeSequenceRebased(
+  db: DbClient,
+  conversationId: string,
+  funnel = "mega-sorgo",
+  now = Date.now(),
+): Promise<number> {
+  const { data: paused, error } = await db.from("scheduled_messages")
+    .select("id,send_at")
+    .eq("conversation_id", conversationId)
+    .eq("funnel", funnel)
+    .eq("status", "paused")
+    .order("send_at", { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  const rows = (paused ?? []) as Json[];
+  if (!rows.length) return 0;
+
+  const rebased = rebasePausedSchedule(
+    rows.map((row) => String(row.send_at)),
+    now + 60_000,
+  );
+  for (let index = 0; index < rows.length; index++) {
+    await db.from("scheduled_messages").update({
+      status: "pending",
+      send_at: rebased[index],
+    }).eq("id", rows[index].id);
+  }
+  await db.from("sales_sequences").update({ status: "running" })
+    .eq("conversation_id", conversationId)
+    .eq("funnel", funnel)
+    .eq("status", "paused");
+  return rows.length;
 }
 
 export function canAutoResume(input: {
@@ -115,6 +163,12 @@ export async function maintainFunnels(
   const catalogConversationIds = new Set(
     (catalogStates ?? []).map((item: Json) => String(item.conversation_id)),
   );
+  // Conversa com bot travado não retoma sozinha nem ganha follow-up: destravar é ato
+  // deliberado do atendente, e é o loop do bot-off que reprograma a fila ao destravar.
+  const muted = await mutedConversationIds(
+    db,
+    conversationIds.map((id: unknown) => String(id)),
+  );
   const latestPause = new Map<string, Json>();
   for (const event of (pauseEvents ?? []) as Json[]) {
     const payload = (event.payload as Json | undefined) ?? {};
@@ -125,6 +179,7 @@ export async function maintainFunnels(
   for (const sequence of sequences as Json[]) {
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
+    if (muted.has(conversationId)) continue;
     const { data: queue, error: queueError } = await db.from(
       "scheduled_messages",
     )

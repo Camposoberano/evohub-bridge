@@ -21,8 +21,10 @@ import {
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import {
   isComprovanteMsgType,
+  isDuvidaTecnicaIntent,
   isFechamentoIntent,
   isNutricaoIntent,
   isPlantioIntent,
@@ -302,6 +304,16 @@ async function handleWhatsApp(db: Db, p: Json) {
           // CTWA/free entry point: lead clicou em anúncio -> janela de 72h (origem='anuncio').
           referral: (m.referral as Json | undefined) ?? undefined,
         });
+
+        // Bot travado à mão (label bot-off no Chatwoot): a mensagem acima já foi gravada e
+        // espelhada — travar o bot é parar de FALAR, não parar de escutar. Daqui pra baixo
+        // é tudo resposta automática, então sai fora.
+        if (
+          await isBotMutedForContact(db, channel.id as string, from)
+        ) {
+          console.log("bot-mute: entrada ignorada pelo bot, conv de", from);
+          continue;
+        }
 
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
         // hora, em qualquer fase, sem esperar o roteiro chegar lá.
@@ -583,6 +595,30 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
+            } else if (isDuvidaTecnicaIntent(intentText)) {
+              // Pergunta técnica (espaçamento, densidade, irrigação, que animal come):
+              // não existe resposta pronta e chutar sobre plantio queima a confiança de
+              // quem entende de terra. Então o bot cala e chama gente — que é melhor que
+              // o que acontecia antes, que era a pergunta sumir e o roteiro seguir
+              // falando de tonelada.
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-duvida-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
+                await avisarDuvidaTecnica(
+                  db,
+                  channel as Json,
+                  from,
+                  transcricao ?? intentText,
+                  Boolean(transcricao),
+                  acct,
+                );
+              }
             }
           } catch (e) {
             console.error("intent erro:", e);
@@ -590,6 +626,59 @@ async function handleWhatsApp(db: Db, p: Json) {
         }
       }
     }
+  }
+}
+
+/**
+ * Dúvida técnica: pausa o roteiro, avisa e entrega a conversa pra um humano.
+ *
+ * Não manda nada pro cliente de propósito — o conteúdo dessas respostas ainda não existe,
+ * e resposta errada sobre espaçamento ou densidade de semente custa mais que o silêncio.
+ * O ganho aqui é a pergunta parar de sumir: hoje ela chega digitada, não casa com nenhum
+ * detector, e o funil segue para a próxima peça como se nada tivesse sido perguntado.
+ *
+ * Mesmo desenho do fluxo de fechamento logo acima (pausa + atribui + nota privada), que já
+ * é o caminho conhecido do atendente.
+ */
+async function avisarDuvidaTecnica(
+  db: Db,
+  channel: Json,
+  from: string,
+  pergunta: string,
+  veioDeAudio: boolean,
+  acct: CwAcct | undefined,
+): Promise<void> {
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (!contact) return;
+  const { data: conv } = await db.from("conversations")
+    .select("id,chatwoot_conversation_id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (!conv) return;
+
+  await autoPauseFunil(conv.id as string, "duvida-tecnica");
+
+  const cwId = conv.chatwoot_conversation_id as number | null;
+  if (!cwId) return;
+  const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+  if (assignee > 0) {
+    try {
+      await assignConversation(cwId, assignee, acct);
+    } catch (e) {
+      console.warn("duvida-tecnica: atribuição falhou:", String(e).slice(0, 120));
+    }
+  }
+  try {
+    await createConversationMessage(cwId, {
+      content: `🌱 *DÚVIDA TÉCNICA — precisa de resposta humana*\n\n${
+        veioDeAudio ? "🎙️ (áudio transcrito) " : ""
+      }"${pergunta.slice(0, 400)}"\n\nO funil foi pausado pra não atropelar a pergunta. Responda e retome com a macro *▶️ Retomar Funil*.`,
+      messageType: "outgoing",
+      private: true,
+    }, acct);
+  } catch (e) {
+    console.warn("duvida-tecnica: nota falhou:", String(e).slice(0, 120));
   }
 }
 
