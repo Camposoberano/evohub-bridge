@@ -9,6 +9,7 @@ const MAX_CONTACT_AGE_MS = 72 * 60 * 60_000;
 const MAX_AUTO_RESUME_INBOUND_AGE_MS = 6 * 60 * 60_000;
 const FOLLOW_UP_AFTER_SECONDS = 10 * 60 * 60;
 const FOLLOW_UP_FUNNEL = "mega-sorgo-followup";
+const FAILED_GRACE_MS = 24 * 60 * 60_000;
 
 export type FunnelMaintenanceResult = {
   scanned: number;
@@ -43,6 +44,26 @@ export function canAutoResume(input: {
     input.now - input.pauseAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastActivityAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastInboundAt <= MAX_AUTO_RESUME_INBOUND_AGE_MS;
+}
+
+/**
+ * Mensagem que ainda segura o funil aberto. `failed` conta só enquanto é recente: não
+ * existe retry automático — funnel-queue marca 'failed' e segue — então uma falha velha
+ * nunca sai sozinha da fila e a sequência nunca chega a `remaining.length === 0`. Como é
+ * a transição para `completed` que agenda o follow-up e libera o lead para a cadeia de
+ * recuperação, o lead ficava em limbo: sem funil, sem follow-up, sem recuperação. Em
+ * 08/08 eram 16 das 28 sequências `running` travadas assim, a mais antiga desde 15/07.
+ */
+export function stillBlocksCompletion(
+  row: { status?: unknown; send_at?: unknown; sent_at?: unknown },
+  now: number,
+): boolean {
+  const status = String(row.status ?? "");
+  if (status === "pending" || status === "paused") return true;
+  if (status !== "failed") return false;
+  // send_at primeiro: quem falhou nunca chegou a ter sent_at.
+  const at = Date.parse(String(row.send_at ?? row.sent_at ?? ""));
+  return !Number.isFinite(at) || now - at < FAILED_GRACE_MS;
 }
 
 export function silentFollowupAt(lastSentAt: number, now: number): number {
@@ -115,8 +136,11 @@ export async function maintainFunnels(
     if (queueError) throw queueError;
     const rows = (queue ?? []) as Json[];
     const sentRows = rows.filter((row) => row.status === "sent");
-    const remaining = rows.filter((row) =>
-      ["pending", "paused", "failed"].includes(String(row.status))
+    const remaining = rows.filter((row) => stillBlocksCompletion(row, now));
+    // Falhas velhas deixaram de segurar o funil, mas o lead não recebeu essas mensagens:
+    // registrar quantas para o evento não sugerir uma entrega completa.
+    const abandoned = rows.filter((row) =>
+      String(row.status) === "failed" && !stillBlocksCompletion(row, now)
     );
 
     if (sentRows.length > 0 && remaining.length === 0) {
@@ -135,6 +159,7 @@ export async function maintainFunnels(
           conversation_id: conversationId,
           chatwoot_conversation_id: sequence.chatwoot_conversation_id,
           sent_messages: sentRows.length,
+          abandoned_messages: abandoned.length,
           last_sent_at: new Date(lastSentAt).toISOString(),
         },
       });
