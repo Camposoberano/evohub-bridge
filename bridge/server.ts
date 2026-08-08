@@ -633,6 +633,10 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-recuperar-4": "recuperacao-4",
   "cmd-abrir-catalogo": "catalogo",
   "cmd-voltar-mega-sorgo": "catalogo-sair",
+  // Destrava do bot. Entra aqui, e não no loop do bot-off, porque é comando de uma vez
+  // (consumido e apagado) e não estado — quem guarda o estado é a etiqueta `bot-off`.
+  // A macro "Bot OFF" não precisa de entrada nenhuma: ela só põe a etiqueta de estado.
+  "bot-on": "bot-on",
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
 

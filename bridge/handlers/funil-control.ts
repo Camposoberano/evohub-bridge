@@ -19,6 +19,7 @@ import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
+import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
 
@@ -84,6 +85,52 @@ export async function handle(req: Request): Promise<Response> {
       acct,
     );
     return json({ ok: true, action: "pause", paused: paused ?? 0 });
+  }
+
+  // Trava/destrava do bot pelas macros. `bot-off` é etiqueta de ESTADO: a macro só
+  // precisa colocá-la, e o loop de reconciliação (server.ts) faz o resto em até 20s —
+  // não existe action pra isso aqui de propósito, senão haveria dois donos do mesmo
+  // estado. Já destravar precisa de código: macro do Chatwoot adiciona etiqueta, não
+  // remove. Então a macro "Bot ON" põe `bot-on`, e aqui a gente tira a `bot-off` — o
+  // macro-poll consome a `bot-on` depois, como faz com todo cmd-*.
+  if (action === "bot-on" || action === "destravar-bot") {
+    await db.from("conversations").update({ bot_muted_at: null })
+      .eq("id", conv.id);
+    try {
+      const atuais = await getConversationLabels(cwConvId, acct);
+      const limpas = atuais.filter((l) => l !== BOT_MUTE_LABEL);
+      if (limpas.length !== atuais.length) {
+        await setConversationLabels(cwConvId, limpas, acct);
+      }
+    } catch (e) {
+      // A etiqueta continuar lá faria o loop de 20s travar tudo de novo. Avisa alto.
+      console.error(
+        "bot-on: nao consegui remover a etiqueta",
+        BOT_MUTE_LABEL,
+        String(e).slice(0, 150),
+      );
+    }
+    const retomadas = await resumeSequenceRebased(db, String(conv.id));
+    if (retomadas > 0) {
+      await db.from("events").insert({
+        source: "funil",
+        event_type: "manual_resumed",
+        payload: {
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          reason: "bot-on",
+          resumed_messages: retomadas,
+        },
+      });
+    }
+    await nota(
+      cwConvId,
+      retomadas > 0
+        ? `🔊 *Bot religado* — ${retomadas} mensagens do funil reagendadas a partir de agora, mantendo os intervalos.`
+        : "🔊 *Bot religado* — nenhuma mensagem de funil pendente; o bot volta a responder normalmente.",
+      acct,
+    );
+    return json({ ok: true, action: "bot-on", resumed: retomadas });
   }
 
   if (action === "stop") {
@@ -408,7 +455,7 @@ export async function handle(req: Request): Promise<Response> {
 
   return json({
     error: "ação desconhecida: " + action +
-      " (use: funil, pause, stop, resume, status, catalogo, catalogo-sair, preco, video, plantio, nutricao, recuperacao-1..4)",
+      " (use: funil, pause, stop, resume, bot-on, status, catalogo, catalogo-sair, preco, video, plantio, nutricao, recuperacao-1..4)",
   }, 400);
 }
 
