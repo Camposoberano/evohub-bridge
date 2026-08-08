@@ -54,6 +54,54 @@ async function normalizeBusinessQueue(
   return shifted;
 }
 
+/**
+ * Guarda por que a mensagem não saiu. Sem isto o motivo se perdia: a linha virava
+ * 'failed' e o corpo da resposta era descartado — 71 mensagens ficaram assim desde
+ * 15/07 sem que desse pra dizer se foi janela da Meta, canal sem token ou 502 do
+ * Chatwoot, e não havia como decidir se valia retentar. Falha silenciosa também foi o
+ * que deixou 16 sequências travadas por 24 dias sem ninguém notar.
+ *
+ * Nunca propaga erro: instrumentação que derruba o envio é pior que a falta dela.
+ */
+async function recordFailure(
+  db: ReturnType<typeof admin>,
+  scheduledMessageId: string,
+  row: Json,
+  httpStatus: number,
+  body: Json,
+): Promise<void> {
+  const motivo = typeof body.blocked === "string"
+    ? `blocked:${body.blocked}`
+    : typeof body.error === "string"
+    ? body.error.slice(0, 300)
+    : JSON.stringify(body ?? {}).slice(0, 300);
+  console.error(
+    `funnel-queue: falha msg=${scheduledMessageId} conv=${
+      row.chatwoot_conversation_id ?? "?"
+    } dia=${row.day ?? "?"} http=${httpStatus} motivo=${motivo}`,
+  );
+  try {
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "message_failed",
+      payload: {
+        scheduled_message_id: scheduledMessageId,
+        conversation_id: row.conversation_id ?? null,
+        chatwoot_conversation_id: row.chatwoot_conversation_id ?? null,
+        funnel: row.funnel ?? "mega-sorgo",
+        day: row.day ?? null,
+        type: row.type ?? "text",
+        http_status: httpStatus,
+        // separado de `motivo` pra dar pra agrupar bloqueio por janela sem parsear texto
+        blocked: typeof body.blocked === "string" ? body.blocked : null,
+        motivo,
+      },
+    });
+  } catch (e) {
+    console.error("funnel-queue: nao consegui registrar a falha:", e);
+  }
+}
+
 export async function pumpFunnelQueue(
   limit = 10,
 ): Promise<{ found: number; sent: number; failed: number }> {
@@ -155,6 +203,7 @@ export async function pumpFunnelQueue(
           id,
         );
         await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await recordFailure(db, id, row, res.status, body);
         failed++;
       }
     }
