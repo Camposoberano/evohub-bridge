@@ -116,11 +116,46 @@ export function dueRecoveryVariation(input: RecoveryDecision): number | null {
   return null;
 }
 
+/**
+ * A conversa esgotou a recuperação e continua muda — pode virar `lost`?
+ *
+ * Existe porque, na prática, ninguém declara desistência. Medido em 11/08: das 871
+ * conversas, 831 estavam `open`, e a busca por recusa explícita ("não quero", "pare de
+ * mandar") devolveu dois casos — os dois falsos positivos ("Não quero atrapalhar" e um
+ * lead de *Pará de* Minas). O produtor não recusa: ele some. Esperar etiqueta de recusa é
+ * esperar um evento que não acontece, e a conversa fica `open` para sempre, contando como
+ * pipeline vivo e sujando qualquer medida de conversão.
+ *
+ * Só depois das QUATRO variações: quem recebeu duas ainda tem a história pela metade.
+ * E só depois de IDADE_MAXIMA_MS de silêncio — a mesma régua que já tira a conversa da
+ * recuperação, então não cria um conceito novo de "velho".
+ *
+ * Pura de propósito: decide o desfecho comercial de um lead, precisa ser testável sem banco.
+ */
+export function shouldMarkLostBySilence(input: {
+  now: number;
+  /** último sinal do lead, ou fim do funil se ele nunca respondeu */
+  ultimoSinal: number;
+  /** variações já enviadas para essa conversa */
+  sentVariations: number[];
+  outcome?: string | null;
+}): boolean {
+  // Já decidido por gente: não sobrescrever. `won` principalmente — marcar cliente como
+  // perdido some com ele do relatório de vendas.
+  if (isClosedOutcome(input.outcome)) return false;
+  const distintas = new Set(input.sentVariations.filter((v) => v >= 1));
+  if (distintas.size < RECOVERY_CHAIN_DAYS.length) return false;
+  const silencio = input.now - input.ultimoSinal;
+  return silencio > IDADE_MAXIMA_MS;
+}
+
 export type RecoveryChainResult = {
   scanned: number;
   due: number;
   sent: number;
   failed: number;
+  /** conversas encerradas como `lost` por silêncio nesta rodada */
+  encerradas: number;
 };
 
 /** Envia de fato. Injetado pra manter este módulo livre de import circular com
@@ -146,7 +181,7 @@ export async function pumpRecoveryChain(
   now = Date.now(),
   maxPorRodada = 5,
 ): Promise<RecoveryChainResult> {
-  const result = { scanned: 0, due: 0, sent: 0, failed: 0 };
+  const result = { scanned: 0, due: 0, sent: 0, failed: 0, encerradas: 0 };
   if (!withinRecoveryHours(now)) return result;
 
   // `paused` entra junto: funil que parou no meio e passou da janela nunca mais anda, e
@@ -234,6 +269,57 @@ export async function pumpRecoveryChain(
     if (Number.isFinite(at) && !ultimaPorConversa.has(id)) {
       ultimaPorConversa.set(id, at);
     }
+  }
+
+  // Encerra por silêncio quem já recebeu as quatro variações. Roda ANTES do laço de envio
+  // e fora do teto por rodada: marcar desfecho não manda mensagem, então não disputa o
+  // limite anti-rajada nem pode ficar de fora pelo `break`. Só consulta o inbound de quem
+  // já esgotou a cadeia — hoje são pouquíssimas conversas, então sai barato.
+  for (const sequence of sequences as Json[]) {
+    const id = String(sequence.conversation_id);
+    const enviadas = enviadasPorConversa.get(id) ?? [];
+    if (new Set(enviadas).size < RECOVERY_CHAIN_DAYS.length) continue;
+    if (isClosedOutcome(outcomeById.get(id) ?? null)) continue;
+
+    const fim = sequence.last_sent_at
+      ? Date.parse(String(sequence.last_sent_at))
+      : (fimPorFila.get(id) ?? NaN);
+    if (!Number.isFinite(fim)) continue;
+    const { data: ultimoIn } = await db.from("messages")
+      .select("sent_at")
+      .eq("conversation_id", id).eq("direction", "in")
+      .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+    const ultimoSinal = Math.max(
+      fim,
+      ultimoIn?.sent_at ? Date.parse(String(ultimoIn.sent_at)) : 0,
+    );
+
+    if (
+      !shouldMarkLostBySilence({
+        now,
+        ultimoSinal,
+        sentVariations: enviadas,
+        outcome: outcomeById.get(id) ?? null,
+      })
+    ) continue;
+
+    // outcome_source próprio: distingue de decisão humana e permite desfazer em bloco
+    // (`where outcome_source = 'auto-silencio'`) se a régua se mostrar errada.
+    await db.from("conversations").update({
+      outcome: "lost",
+      outcome_source: "auto-silencio",
+      outcome_set_at: new Date(now).toISOString(),
+    }).eq("id", id).eq("outcome", "open");
+    await db.from("events").insert({
+      source: "recovery",
+      event_type: "lost_por_silencio",
+      payload: {
+        conversation_id: id,
+        variacoes_enviadas: [...new Set(enviadas)].sort(),
+        silencio_dias: Math.floor((now - ultimoSinal) / DIA_MS),
+      },
+    });
+    result.encerradas++;
   }
 
   for (const sequence of sequences as Json[]) {

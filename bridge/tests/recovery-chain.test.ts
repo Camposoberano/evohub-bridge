@@ -4,6 +4,7 @@ import {
   dueRecoveryVariation,
   isAbandonedFunnel,
   RECOVERY_CHAIN_DAYS,
+  shouldMarkLostBySilence,
   withinRecoveryHours,
 } from "../shared/recovery-chain.ts";
 
@@ -154,4 +155,87 @@ Deno.test("so dispara em horario civilizado", () => {
   assertEquals(withinRecoveryHours(brt(19)), true);
   assertEquals(withinRecoveryHours(brt(20)), false);
   assertEquals(withinRecoveryHours(brt(23)), false);
+});
+
+// Ninguém declara desistência: em 11/08, das 871 conversas 831 estavam 'open' e a busca por
+// recusa explícita devolveu só dois falsos positivos ("Não quero atrapalhar" e um lead de
+// *Pará de* Minas). O produtor some em vez de dizer não — então 'lost' precisa vir do
+// silêncio, senão nunca vem.
+const AGORA = Date.parse("2026-09-15T12:00:00Z");
+const TODAS = [1, 2, 3, 4];
+
+function silencio(dias: number) {
+  return AGORA - dias * DIA;
+}
+
+Deno.test("encerra por silencio so depois das 4 variacoes e dos 30 dias", () => {
+  assertEquals(
+    shouldMarkLostBySilence({
+      now: AGORA,
+      ultimoSinal: silencio(31),
+      sentVariations: TODAS,
+      outcome: "open",
+    }),
+    true,
+  );
+});
+
+Deno.test("cadeia incompleta nao encerra, por mais velha que seja", () => {
+  // recebeu 2 de 4: a história está pela metade, encerrar seria desistir antes de tentar
+  assertEquals(
+    shouldMarkLostBySilence({
+      now: AGORA,
+      ultimoSinal: silencio(90),
+      sentVariations: [1, 2],
+      outcome: "open",
+    }),
+    false,
+  );
+  // repetição da mesma variação não conta como cadeia completa
+  assertEquals(
+    shouldMarkLostBySilence({
+      now: AGORA,
+      ultimoSinal: silencio(90),
+      sentVariations: [1, 1, 1, 1],
+      outcome: "open",
+    }),
+    false,
+  );
+});
+
+Deno.test("dentro dos 30 dias nao encerra — ainda pode responder", () => {
+  assertEquals(
+    shouldMarkLostBySilence({
+      now: AGORA,
+      ultimoSinal: silencio(29),
+      sentVariations: TODAS,
+      outcome: "open",
+    }),
+    false,
+  );
+});
+
+// A trava que mais importa: marcar cliente como perdido some com ele do relatório de vendas.
+Deno.test("nao sobrescreve desfecho decidido por gente", () => {
+  for (const outcome of ["won", "lost"]) {
+    assertEquals(
+      shouldMarkLostBySilence({
+        now: AGORA,
+        ultimoSinal: silencio(60),
+        sentVariations: TODAS,
+        outcome,
+      }),
+      false,
+    );
+  }
+  // 'open' é o default da coluna e significa conversa viva — esse sim pode encerrar
+  assertEquals(
+    shouldMarkLostBySilence({
+      now: AGORA,
+      ultimoSinal: silencio(60),
+      sentVariations: TODAS,
+      outcome: "open",
+    }),
+    true,
+  );
 });

@@ -1072,7 +1072,7 @@ function startFunnelRecoveryLoop() {
       if (
         result.eligible || result.enrolled || maintenance.completed ||
         maintenance.resumed || maintenance.followups || chain?.sent ||
-        chain?.failed
+        chain?.failed || chain?.encerradas
       ) {
         console.log(
           "funnel-recovery:",

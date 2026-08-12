@@ -439,6 +439,11 @@ async function handleWhatsApp(db: Db, p: Json) {
                     optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0",
                   );
                   const cwId = _cvf.chatwoot_conversation_id as number | null;
+                  // Etiqueta ANTES de atribuir e fora do if do assignee: a nota privada some
+                  // no meio da conversa e só aparece pra quem abre. A etiqueta é filtrável —
+                  // vira fila de "confirmar se virou venda". Sem ela, 26 conversas com sinal
+                  // de fechamento ficaram 'open' sem ninguém revisar (medido em 11/08).
+                  if (cwId) await marcarRevisarVenda(cwId, acct);
                   if (assignee > 0 && cwId) {
                     await assignConversation(cwId, assignee, acct);
                     await createConversationMessage(cwId, {
@@ -626,6 +631,41 @@ async function handleWhatsApp(db: Db, p: Json) {
         }
       }
     }
+  }
+}
+
+/** Etiqueta da fila de revisão de venda. Persistente: sai quando o humano decide. */
+export const REVISAR_VENDA_LABEL = "revisar-venda";
+
+/**
+ * Põe a conversa na fila de "confirmar se virou venda".
+ *
+ * Por que etiqueta e não só nota privada: a nota vira mais uma linha no meio da conversa e
+ * só é vista por quem abre aquela conversa. Etiqueta é filtrável — o Cícero abre a lista
+ * por `revisar-venda` e vê todas de uma vez. Sem isso, 26 conversas com sinal claro de
+ * fechamento (CEP, CPF, comprovante) ficaram `open` sem revisão — e conversa sem desfecho
+ * não aparece em relatório nenhum, então venda registrada e venda esquecida são
+ * indistinguíveis.
+ *
+ * Não decide a venda: `won` continua vindo da etiqueta `pago`, decisão humana. Marcar
+ * automaticamente cancelaria o funil de quem ainda está no meio da compra.
+ */
+async function marcarRevisarVenda(
+  cwConvId: number,
+  acct: CwAcct | undefined,
+): Promise<void> {
+  try {
+    const atuais = await getConversationLabels(cwConvId, acct);
+    if (atuais.includes(REVISAR_VENDA_LABEL)) return; // já está na fila
+    await setConversationLabels(
+      cwConvId,
+      [...atuais, REVISAR_VENDA_LABEL],
+      acct,
+    );
+  } catch (e) {
+    // Etiqueta é o canal de revisão, não o fechamento em si — falhar aqui não pode
+    // derrubar a pausa do funil nem a atribuição, que são o que protege a venda.
+    console.warn("revisar-venda: etiqueta falhou:", String(e).slice(0, 120));
   }
 }
 
