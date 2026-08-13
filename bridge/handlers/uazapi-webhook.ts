@@ -27,6 +27,7 @@ import {
   handleNutricaoClick,
   handlePlantioClick,
   handlePrecoClick,
+  resumeCampaign,
 } from "./hub-webhook.ts";
 import {
   handleCatalogClick,
@@ -180,6 +181,18 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       ) {
         console.log("bot-mute: entrada uazapi ignorada pelo bot,", msg.from);
         continue;
+      }
+
+      // Campanha gated: a resposta do lead libera a sequência. Precisa acontecer aqui
+      // também, e não só no webhook oficial — campanha disparada pela rota híbrida sai
+      // pelo uazapi, então é por aqui que a resposta chega. Sem isto o lead respondia ao
+      // disparo e a sequência não continuava.
+      if (msg.from) {
+        try {
+          await resumeCampaign(db, channel as Json, msg.from);
+        } catch (e) {
+          console.error("uazapi resumeCampaign erro:", e);
+        }
       }
 
       // Resposta livre no meio da qualificação do catálogo (região/hectares/plantio) tem

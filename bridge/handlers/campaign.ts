@@ -5,6 +5,13 @@
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
+import {
+  getDirectUazapiRoute,
+  getHybridRoute,
+  hybridSendMenu,
+  isHybridRecipient,
+} from "../shared/hybrid.ts";
+import type { HybridMenuButton } from "../shared/hybrid-menu.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type Campaign, numKey, readCampaigns, type Step, writeCampaigns } from "../shared/campaigns.ts";
 
@@ -160,6 +167,154 @@ export async function handle(req: Request): Promise<Response> {
         ? `sequencial, ${camp.delayMin}-${camp.delayMax}s entre envios`
         : `${SEND_CONCURRENCY} em paralelo, sem intervalo (passe delayMin/delayMax para dar ritmo)`,
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number, display_name: ch.display_name },
+    });
+  }
+
+  // Disparo INTERATIVO pela rota híbrida: imagem + texto + botões numa mensagem só, pelo
+  // uazapi. Diferente do `start`, que manda template aprovado e é limitado ao que a Meta
+  // deixa passar — aqui os botões são nativos e o conteúdo é livre.
+  //
+  // O template continua existindo como REDE: se a rota híbrida não estiver disponível ou o
+  // envio falhar, cai no oficial. Sem `template` no body, número sem rota é só pulado —
+  // melhor não falar do que falar por um caminho que o dono da conversa não escolheu.
+  //
+  // A resposta do lead volta pelo webhook do uazapi, que agora também chama resumeCampaign.
+  if (action === "start-interativo") {
+    const numbers = [
+      ...new Set(
+        ((body.numbers ?? []) as string[]).map(numKey).filter((d) =>
+          d.length >= 12
+        ),
+      ),
+    ];
+    const text = String(body.text ?? "").trim();
+    const buttons = (body.buttons ?? []) as HybridMenuButton[];
+    if (!text || !numbers.length) {
+      return json({ error: "text e numbers obrigatórios" }, 400);
+    }
+    if (numbers.length > MAX_POR_CHAMADA) {
+      return json({
+        error:
+          `${numbers.length} números numa chamada só; o teto é ${MAX_POR_CHAMADA}`,
+      }, 400);
+    }
+
+    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
+
+    // Instância explícita pula a exigência de coexistência (mesmo número no oficial e no
+    // uazapi) — é como se dispara por um número que só existe do lado não-oficial.
+    const instancia = body.instance as string | undefined;
+    const route = instancia
+      ? await getDirectUazapiRoute(ch.id, instancia)
+      : await getHybridRoute(ch.id, ch.phone_number_id, ch.phone_number ?? "");
+
+    const template = body.template as string | undefined;
+    const language = (body.language as string) ?? "pt_BR";
+    const imageUrl = body.imageUrl as string | undefined;
+    if (!route && !template) {
+      return json({
+        error:
+          "sem rota híbrida disponível e sem template de fallback — informe `instance` ou `template`",
+      }, 404);
+    }
+
+    const { data: secret } = await admin().from("channel_secrets")
+      .select("channel_token").eq("channel_id", ch.id).maybeSingle();
+    const token = secret?.channel_token as string | undefined;
+
+    const camp: Campaign = {
+      id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
+      name: (body.name as string) ?? "interativo",
+      template: template ?? "(interativo)",
+      language,
+      steps: (body.steps as Step[]) ?? [],
+      delayMin: Number(body.delayMin ?? 3),
+      delayMax: Number(body.delayMax ?? 8),
+      createdAt: new Date().toISOString(),
+    };
+    state.campaigns.push(camp);
+
+    const espera = () => {
+      const min = Math.max(0, camp.delayMin) * 1000;
+      const max = Math.max(min, camp.delayMax * 1000);
+      return new Promise<void>((r) =>
+        setTimeout(r, min + Math.random() * (max - min))
+      );
+    };
+
+    let porUazapi = 0, porTemplate = 0, failed = 0, pulados = 0;
+    const errors: string[] = [];
+    let primeiro = true;
+    for (const to of numbers) {
+      if (!primeiro) await espera();
+      primeiro = false;
+
+      let enviado = false;
+      if (route && isHybridRecipient(to)) {
+        const r = await hybridSendMenu(route, to, text, buttons, imageUrl);
+        if (r?.ok) {
+          porUazapi++;
+          enviado = true;
+        }
+      }
+      if (!enviado && template && token && ch.phone_number_id) {
+        const r = await sendMetaWithTimeout(
+          token,
+          `${ch.phone_number_id}/messages`,
+          {
+            messaging_product: "whatsapp",
+            to,
+            type: "template",
+            template: { name: template, language: { code: language } },
+          },
+        );
+        if (r.ok) {
+          porTemplate++;
+          enviado = true;
+        } else if (errors.length < 3) {
+          errors.push(
+            JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 120),
+          );
+        }
+      }
+
+      if (enviado) {
+        state.targets[to] = {
+          campaignId: camp.id,
+          status: "awaiting",
+          step: 0,
+          ts: new Date().toISOString(),
+        };
+      } else if (!route && !template) pulados++;
+      else failed++;
+    }
+
+    try {
+      await writeCampaigns(state);
+    } catch (e) {
+      return json({
+        error: String(e),
+        campaign: camp.id,
+        porUazapi,
+        porTemplate,
+        partial: true,
+      }, 500);
+    }
+    return json({
+      ok: true,
+      campaign: camp.id,
+      total: numbers.length,
+      porUazapi,
+      porTemplate,
+      failed,
+      pulados,
+      errors,
+      rota: route
+        ? `uazapi (${route.instance})${template ? " com template de rede" : ""}`
+        : "só template oficial — nenhuma rota híbrida disponível",
+      ritmo: `${camp.delayMin}-${camp.delayMax}s entre envios`,
+      channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
     });
   }
 

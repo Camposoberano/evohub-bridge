@@ -3039,7 +3039,11 @@ async function fetchSenderProfile(
 }
 
 // ── Campanha gated: resposta do cliente dispara a sequência (janela 24h aberta) ──
-async function resumeCampaign(db: Db, channel: Json, from: string) {
+//
+// Exportada porque a resposta pode chegar por qualquer canal: se a campanha saiu pela rota
+// híbrida (uazapi), o cliente responde no webhook do uazapi e não aqui. Enquanto isto só
+// era chamado no webhook oficial, o lead respondia e a sequência não continuava.
+export async function resumeCampaign(db: Db, channel: Json, from: string) {
   const key = numKey(from);
   const state = await readCampaigns();
   const t = state.targets[key];
