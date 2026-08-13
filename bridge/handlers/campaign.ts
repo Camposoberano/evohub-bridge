@@ -12,6 +12,14 @@ type Json = Record<string, unknown>;
 
 const SEND_CONCURRENCY = 5;
 const SEND_TIMEOUT_MS = 25_000;
+/**
+ * Teto por chamada. `start` é síncrono — a resposta só volta quando o último envio termina —
+ * então lista grande com ritmo humano não caberia no tempo de uma request. Mais importante:
+ * mandar milhares de templates frios de uma vez é o jeito mais rápido de perder o número.
+ * Lista maior deve ser fatiada em lotes, com o intervalo entre lotes decidido por quem
+ * dispara, olhando a nota de qualidade entre um e outro.
+ */
+const MAX_POR_CHAMADA = 200;
 
 type WaChannel = {
   id: string;
@@ -67,6 +75,14 @@ export async function handle(req: Request): Promise<Response> {
     const template = body.template as string;
     const language = (body.language as string) ?? "pt_BR";
     if (!template || numbers.length === 0) return json({ error: "template e numbers obrigatórios" }, 400);
+    if (numbers.length > MAX_POR_CHAMADA) {
+      return json({
+        error:
+          `${numbers.length} números numa chamada só; o teto é ${MAX_POR_CHAMADA}`,
+        motivo:
+          "start é síncrono e disparo frio precisa de ritmo — fatie em lotes e confira a nota de qualidade entre eles",
+      }, 400);
+    }
 
     const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
     if (!ch?.phone_number_id) {
@@ -97,8 +113,29 @@ export async function handle(req: Request): Promise<Response> {
     const metaPath = `${ch.phone_number_id}/messages`;
     const payload = { messaging_product: "whatsapp", type: "template", template: { name: template, language: { code: language }, components } };
 
+    // Ritmo. delayMin/delayMax já existiam no tipo e eram aceitos no body, mas só o caminho
+    // uazapi os usava (handlers/uazapi.ts) — no oficial a lista saía em rajada, 5 concorrentes
+    // sem pausa nenhuma. Intervalo ALEATÓRIO entre os dois: cadência exata é assinatura de
+    // robô, e é o padrão que a Meta pune antes mesmo de haver denúncia.
+    //
+    // Com delay, o envio vira sequencial: manter concorrência 5 faria o intervalo controlar
+    // cada worker isoladamente e o ritmo real seria 5× o pedido — exatamente o engano que o
+    // parâmetro deveria evitar.
+    const comRitmo = camp.delayMin > 0 || camp.delayMax > 0;
+    const concorrencia = comRitmo ? 1 : SEND_CONCURRENCY;
+    const espera = () => {
+      const min = Math.max(0, camp.delayMin) * 1000;
+      const max = Math.max(min, camp.delayMax * 1000);
+      return new Promise<void>((r) =>
+        setTimeout(r, min + Math.random() * (max - min))
+      );
+    };
+
     let sent = 0, failed = 0; const errors: string[] = [];
-    await mapPool(numbers, SEND_CONCURRENCY, async (to) => {
+    let primeiro = true;
+    await mapPool(numbers, concorrencia, async (to) => {
+      if (comRitmo && !primeiro) await espera();
+      primeiro = false;
       const r = await sendMetaWithTimeout(token, metaPath, { ...payload, to });
       if (r.ok) {
         sent++;
@@ -119,6 +156,9 @@ export async function handle(req: Request): Promise<Response> {
     }
     return json({
       ok: true, campaign: camp.id, sent, failed, total: numbers.length, awaiting: sent, errors,
+      ritmo: comRitmo
+        ? `sequencial, ${camp.delayMin}-${camp.delayMax}s entre envios`
+        : `${SEND_CONCURRENCY} em paralelo, sem intervalo (passe delayMin/delayMax para dar ritmo)`,
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number, display_name: ch.display_name },
     });
   }
