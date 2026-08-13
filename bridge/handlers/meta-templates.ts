@@ -18,10 +18,37 @@ export async function handle(req: Request): Promise<Response> {
   const token = optionalEnv("META_ACCESS_TOKEN");
   if (!token) return json({ error: "META_ACCESS_TOKEN ausente" }, 503);
 
-  // waba_id do canal whatsapp oficial
-  const { data: ch } = await admin().from("channels").select("waba_id").eq("type", "whatsapp").not("waba_id", "is", null).limit(1).maybeSingle();
-  const waba = ch?.waba_id as string | undefined;
-  if (!waba) return json({ error: "canal whatsapp sem waba_id" }, 404);
+  // WABA alvo. Template é POR WABA: um nome aprovado numa não existe na outra, e mandar o
+  // nome errado devolve "(#132001) Template name does not exist in the translation" — foi o
+  // erro de 03/08, com os templates criados na WABA errada. Sem `?waba=` isto pegava a
+  // primeira linha que o banco devolvesse, sem ordenação: com mais de um número oficial,
+  // listar e criar caíam num canal arbitrário.
+  //
+  // O id é validado contra os canais cadastrados em vez de repassado direto pra Graph —
+  // este endpoint tem o META_ACCESS_TOKEN, então aceitar WABA arbitrária de quem chama
+  // deixaria criar template em conta de terceiro.
+  const { data: canais } = await admin().from("channels")
+    .select("waba_id,phone_number,name")
+    .eq("type", "whatsapp").not("waba_id", "is", null);
+  const disponiveis = (canais ?? []) as Json[];
+  if (!disponiveis.length) {
+    return json({ error: "canal whatsapp sem waba_id" }, 404);
+  }
+  const pedido = new URL(req.url).searchParams.get("waba");
+  const escolhido = pedido
+    ? disponiveis.find((c) => String(c.waba_id) === pedido)
+    : disponiveis[0];
+  if (!escolhido) {
+    return json({
+      error: `waba ${pedido} não pertence a nenhum canal cadastrado`,
+      disponiveis: disponiveis.map((c) => ({
+        waba_id: c.waba_id,
+        phone_number: c.phone_number,
+        name: c.name,
+      })),
+    }, 404);
+  }
+  const waba = String(escolhido.waba_id);
 
   if (req.method === "POST") return create(req, token, waba);
 
@@ -37,7 +64,13 @@ export async function handle(req: Request): Promise<Response> {
     components: t.components,
   }));
   const approved = templates.filter((t) => t.status === "APPROVED");
-  return json({ total: templates.length, approved: approved.length, templates });
+  return json({
+    waba,
+    phone_number: escolhido.phone_number ?? null,
+    total: templates.length,
+    approved: approved.length,
+    templates,
+  });
 }
 
 // POST { name, language, category, body, buttons? } -> submete pra aprovação na Meta.
