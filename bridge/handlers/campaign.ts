@@ -12,6 +12,10 @@ import {
   isHybridRecipient,
 } from "../shared/hybrid.ts";
 import type { HybridMenuButton } from "../shared/hybrid-menu.ts";
+import { checarProntidao } from "../shared/hybrid-extra.ts";
+import { type Flow, validateFlow } from "../shared/flow.ts";
+import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
+import { saveFlowPosition } from "../shared/flow-state.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type Campaign, numKey, readCampaigns, type Step, writeCampaigns } from "../shared/campaigns.ts";
 
@@ -314,6 +318,127 @@ export async function handle(req: Request): Promise<Response> {
         ? `uazapi (${route.instance})${template ? " com template de rede" : ""}`
         : "só template oficial — nenhuma rota híbrida disponível",
       ritmo: `${camp.delayMin}-${camp.delayMax}s entre envios`,
+      channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
+    });
+  }
+
+  // Dispara um FLUXO conversacional: manda até a primeira pergunta e guarda onde parou.
+  // A partir daí quem conduz é o motor — a resposta do lead chega no webhook, que continua
+  // de onde ficou (shared/flow-inbound.ts).
+  //
+  // Diferente de `start` e `start-interativo`, que mandam uma mensagem e encerram.
+  if (action === "start-fluxo") {
+    const flow = body.flow as Flow | undefined;
+    const numbers = [
+      ...new Set(
+        ((body.numbers ?? []) as string[]).map(numKey).filter((d) =>
+          d.length >= 12
+        ),
+      ),
+    ];
+    if (!flow?.steps?.length || !numbers.length) {
+      return json({ error: "flow e numbers obrigatórios" }, 400);
+    }
+    if (numbers.length > MAX_POR_CHAMADA) {
+      return json({
+        error: `${numbers.length} números; o teto por chamada é ${MAX_POR_CHAMADA}`,
+      }, 400);
+    }
+
+    // Valida ANTES de falar com qualquer um: fluxo com ciclo sem pergunta mandaria mensagem
+    // sem parar, e um destino órfão deixaria o lead num beco. Melhor recusar aqui do que
+    // descobrir no meio da lista.
+    const problemas = validateFlow(flow);
+    if (problemas.length) {
+      return json({ error: "fluxo inválido", problemas }, 400);
+    }
+
+    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
+
+    const instancia = body.instance as string | undefined;
+    const route = instancia
+      ? await getDirectUazapiRoute(ch.id, instancia)
+      : await getHybridRoute(ch.id, ch.phone_number_id, ch.phone_number ?? "");
+
+    // Instância desconectada ou conta sem permissão de iniciar conversa derrubaria o
+    // disparo no meio, com parte da lista já queimada. Conferir custa duas chamadas.
+    if (route) {
+      const prontidao = await checarProntidao(route);
+      if (!prontidao.pronta) {
+        return json({
+          error: "instância não está pronta para disparar",
+          status: prontidao.status,
+          motivo: prontidao.motivo,
+          podeIniciarConversa: prontidao.podeIniciarConversa,
+        }, 409);
+      }
+    }
+
+    const { data: secret } = await admin().from("channel_secrets")
+      .select("channel_token").eq("channel_id", ch.id).maybeSingle();
+    const flowCh: FlowChannel = {
+      route,
+      token: secret?.channel_token as string | undefined,
+      phoneNumberId: ch.phone_number_id,
+    };
+    if (!flowCh.route && !(flowCh.token && flowCh.phoneNumberId)) {
+      return json({ error: "nenhuma rota de envio disponível para este canal" }, 404);
+    }
+
+    const camp: Campaign = {
+      id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
+      name: (body.name as string) ?? "fluxo",
+      template: "(fluxo)",
+      language: (body.language as string) ?? "pt_BR",
+      steps: [],
+      flow,
+      delayMin: Number(body.delayMin ?? 3),
+      delayMax: Number(body.delayMax ?? 8),
+      createdAt: new Date().toISOString(),
+    };
+    state.campaigns.push(camp);
+    // Grava a campanha ANTES de disparar: se o lead responder rápido, o webhook precisa
+    // achar o fluxo. Salvar depois abriria uma janela em que a resposta chega e não há
+    // campanha para consultar.
+    await writeCampaigns(state);
+
+    const espera = () => {
+      const min = Math.max(0, camp.delayMin) * 1000;
+      const max = Math.max(min, camp.delayMax * 1000);
+      return new Promise<void>((r) =>
+        setTimeout(r, min + Math.random() * (max - min))
+      );
+    };
+
+    let iniciados = 0, falhas = 0, emEspera = 0;
+    let primeiro = true;
+    for (const to of numbers) {
+      if (!primeiro) await espera();
+      primeiro = false;
+      try {
+        const r = await runFlow(flow, flowCh, to, null);
+        if (r.enviados > 0) iniciados++;
+        else falhas++;
+        if (r.position.stepId) emEspera++;
+        await saveFlowPosition(admin(), camp.id, to, r.position, {
+          channelId: ch.id,
+        });
+      } catch (e) {
+        falhas++;
+        console.error("start-fluxo:", to.slice(-4), String(e).slice(0, 150));
+      }
+    }
+
+    return json({
+      ok: true,
+      campaign: camp.id,
+      total: numbers.length,
+      iniciados,
+      falhas,
+      aguardandoResposta: emEspera,
+      rota: route ? `uazapi (${route.instance})` : "oficial (Meta)",
+      ritmo: `${camp.delayMin}-${camp.delayMax}s entre contatos`,
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
     });
   }
