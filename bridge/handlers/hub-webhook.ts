@@ -22,6 +22,7 @@ import {
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isComprovanteMsgType,
   isDuvidaTecnicaIntent,
@@ -313,6 +314,22 @@ async function handleWhatsApp(db: Db, p: Json) {
         ) {
           console.log("bot-mute: entrada ignorada pelo bot, conv de", from);
           continue;
+        }
+
+        // Lead no meio de um fluxo conversacional: a resposta dele é para a pergunta do
+        // fluxo, não para o bot de intenção. Consumir aqui evita duas mensagens ao mesmo
+        // tempo, vindas de lógicas diferentes.
+        try {
+          if (
+            await continueFlowOnReply(
+              db,
+              channel as Json,
+              from,
+              menuClick?.id ?? null,
+            )
+          ) continue;
+        } catch (e) {
+          console.error("flow-inbound erro:", e);
         }
 
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na

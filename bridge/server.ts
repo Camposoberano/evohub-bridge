@@ -70,6 +70,7 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
+import { pumpFlowTimeouts } from "./shared/flow-inbound.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -1090,6 +1091,28 @@ function startFunnelRecoveryLoop() {
   );
 }
 
+// Fluxos cuja espera venceu seguem sozinhos pelo caminho de timeout. 2 min é folgado: a
+// régua real é o `timeoutMin` de cada pergunta (tipicamente horas), e este loop só decide
+// quando olhar. Kill-switch: FLOW_TIMEOUT_ENABLED=false.
+const FLOW_TIMEOUT_INTERVAL_MS = 2 * 60_000;
+
+function startFlowTimeoutLoop() {
+  if (optionalEnv("FLOW_TIMEOUT_ENABLED") === "false") return;
+  const run = async () => {
+    try {
+      const r = await pumpFlowTimeouts(admin());
+      if (r.seguiram > 0) {
+        console.log("flow-timeout:", JSON.stringify(r));
+      }
+    } catch (e) {
+      console.error("flow-timeout loop erro:", e);
+    }
+  };
+  setTimeout(run, 90_000);
+  setInterval(run, FLOW_TIMEOUT_INTERVAL_MS);
+  console.log("flow-timeout loop ON (2min)");
+}
+
 function startOperationalMonitorLoop() {
   const run = async () => {
     try {
@@ -1131,6 +1154,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startBotMuteLoop();
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
+  startFlowTimeoutLoop();
   startOperationalMonitorLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);

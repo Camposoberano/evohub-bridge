@@ -9,6 +9,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isNutricaoIntent,
   isPlantioIntent,
@@ -181,6 +182,23 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       ) {
         console.log("bot-mute: entrada uazapi ignorada pelo bot,", msg.from);
         continue;
+      }
+
+      // Lead no meio de um fluxo conversacional responde à pergunta do fluxo, não ao bot
+      // de intenção. Vem antes de tudo e consome a mensagem.
+      if (msg.from) {
+        try {
+          if (
+            await continueFlowOnReply(
+              db,
+              channel as Json,
+              msg.from,
+              msg.menuClickId ?? null,
+            )
+          ) continue;
+        } catch (e) {
+          console.error("uazapi flow-inbound erro:", e);
+        }
       }
 
       // Campanha gated: a resposta do lead libera a sequência. Precisa acontecer aqui

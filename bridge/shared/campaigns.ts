@@ -1,6 +1,7 @@
 // Estado das campanhas gated (template oficial -> resposta abre janela -> sequência).
 // Guardado em JSON no Supabase Storage (volume baixo: ≤500/dia). Sem SQL/DDL.
 import { admin } from "./supabase.ts";
+import type { Flow } from "./flow.ts";
 
 const BUCKET = "soberano-config";
 const FILE = "campaigns.json";
@@ -17,6 +18,15 @@ export type Step = { type: string; text?: string; file?: string; waitMin?: numbe
 export type Campaign = {
   id: string; name: string; template: string; language: string;
   steps: Step[]; delayMin: number; delayMax: number; createdAt: string;
+  /**
+   * Fluxo conversacional (shared/flow.ts). Quando presente, substitui `steps`: em vez de
+   * mandar tudo de uma vez, o motor para na pergunta e a resposta decide o próximo passo.
+   *
+   * Opcional para não quebrar campanha já criada — sem `flow`, segue o caminho linear
+   * antigo. A posição de cada contato fica na tabela `flow_state`, não aqui: este arquivo é
+   * lido e regravado inteiro, e duas respostas simultâneas se atropelariam.
+   */
+  flow?: Flow;
 };
 export type Target = { campaignId: string; status: "awaiting" | "active" | "done"; step: number; ts: string };
 export type CampaignState = { campaigns: Campaign[]; targets: Record<string, Target> };
