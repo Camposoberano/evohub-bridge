@@ -234,7 +234,9 @@ export async function hybridSendMedia(
       type: mediaType === "document" ? "document" : mediaType,
       text: opts.caption || undefined,
     };
-    if (mediaType === "document") body.fileName = opts.fileName ?? "arquivo";
+    // `docName`, não `fileName`: é o nome do campo na uazapi (openapi-bundled.json,
+    // POST /send/media). Com o nome errado o documento chegava sem nome no WhatsApp.
+    if (mediaType === "document") body.docName = opts.fileName ?? "arquivo";
     const endpoint = "/send/media";
     if (opts.isVoice || mediaType === "audio") {
       body.type = "ptt";
