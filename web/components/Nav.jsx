@@ -34,7 +34,7 @@ const SUBNAV = [
   { match: ["/conversas"], label: "Atendimento", items: [["/conversas", "Conversas"], ["/contatos", "Clientes atendidos"]] },
   { match: ["/contatos", "/clientes"], label: "Clientes", items: [["/contatos", "Atendidos"], ["/clientes", "Prospecção"]] },
   { match: ["/analytics", "/relatorio"], label: "Métricas", items: [["/analytics", "Métricas"], ["/relatorio", "Diagnóstico"]] },
-  { match: ["/disparos", "/campanhas", "/funil"], label: "Envios", items: [["/disparos", "Disparos"], ["/funil", "Funil"], ["/campanhas", "Campanhas"]] },
+  { match: ["/disparos", "/campanhas", "/funil", "/fluxos"], label: "Envios", items: [["/disparos", "Disparos"], ["/fluxos", "Fluxos"], ["/funil", "Funil"], ["/campanhas", "Campanhas"]] },
   { match: ["/eventos", "/ferramentas", "/grupos", "/tecnologias"], label: "Operação", items: [["/eventos", "Eventos"], ["/ferramentas", "Ferramentas"], ["/grupos", "Grupos"], ["/tecnologias", "Tecnologias"]] },
 ];
 
