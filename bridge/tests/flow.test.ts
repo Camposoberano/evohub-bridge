@@ -54,10 +54,35 @@ Deno.test("texto livre cai no fallback em vez de travar", () => {
   assertEquals(resolveNext(pergunta, "id_que_nao_existe"), "humano");
 });
 
-Deno.test("fluxo sem saida termina em vez de repetir", () => {
+// O bug do primeiro teste real (14/08): quem clicou "Sim" recebeu a resposta do "Sim", a do
+// "Não" e o lembrete de timeout — três mensagens contraditórias juntas. `ok`, `ops` e
+// `lembrete` não tinham `next`, então o motor caía de um no outro pela ordem da lista.
+// Step que é destino de ramificação começa um RAMO: só se chega nele escolhendo.
+Deno.test("ramo nao vaza para o ramo seguinte", () => {
   const r = stepsUntilWait(FLUXO, "fala_leite");
-  assertEquals(r.enviar.map((s) => s.id), ["fala_leite", "fala_corte", "humano", "lembrete"]);
+  assertEquals(r.enviar.map((s) => s.id), ["fala_leite"]);
   assertEquals(r.fim, true);
+
+  const outro = stepsUntilWait(FLUXO, "fala_corte");
+  assertEquals(outro.enviar.map((s) => s.id), ["fala_corte"]);
+
+  // o destino do timeout também é ramo próprio
+  const timeout = stepsUntilWait(FLUXO, "lembrete");
+  assertEquals(timeout.enviar.map((s) => s.id), ["lembrete"]);
+});
+
+// Sequência normal (empilhar mensagens no editor) continua caindo de uma na outra: só o
+// alvo de ramificação interrompe.
+Deno.test("sequencia linear segue pela ordem da lista", () => {
+  const linear: Flow = {
+    steps: [
+      { id: "a", kind: "text", text: "primeira" },
+      { id: "b", kind: "text", text: "segunda" },
+      { id: "c", kind: "text", text: "terceira" },
+    ],
+  };
+  const r = stepsUntilWait(linear, "a");
+  assertEquals(r.enviar.map((s) => s.id), ["a", "b", "c"]);
 });
 
 Deno.test("fluxo bem montado nao acusa problema", () => {

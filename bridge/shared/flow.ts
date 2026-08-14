@@ -128,10 +128,36 @@ export function stepsUntilWait(
   return { enviar, pararEm: null, fim: true };
 }
 
-/** Sem `next` declarado, segue a ordem da lista — é o que o editor produz ao empilhar. */
+/**
+ * Steps que só se alcança por escolha: destino de `branches`, `fallbackNext` ou `onTimeout`.
+ * Cada um começa um RAMO.
+ */
+function alvosDeRamificacao(flow: Flow): Set<string> {
+  const alvos = new Set<string>();
+  for (const s of flow.steps) {
+    for (const d of Object.values(s.branches ?? {})) alvos.add(d);
+    if (s.fallbackNext) alvos.add(s.fallbackNext);
+    if (s.onTimeout) alvos.add(s.onTimeout);
+  }
+  return alvos;
+}
+
+/**
+ * Sem `next` declarado, segue a ordem da lista — é o que o editor produz ao empilhar
+ * mensagens numa sequência.
+ *
+ * MAS para antes de um step que é destino de ramificação: aquele é o começo de outro
+ * caminho, e só se chega lá escolhendo. Sem essa regra os ramos vazam um no outro — num
+ * fluxo `[oi, p, ok, ops, lembrete]`, quem clicasse "Sim" receberia `ok`, depois `ops` (a
+ * resposta do "Não") e ainda o `lembrete` do timeout. Aconteceu no primeiro teste real:
+ * três mensagens contraditórias de uma vez.
+ */
 function proximoNaOrdem(flow: Flow, id: string): string | null {
   const i = flow.steps.findIndex((s) => s.id === id);
-  return i >= 0 && i + 1 < flow.steps.length ? flow.steps[i + 1].id : null;
+  if (i < 0 || i + 1 >= flow.steps.length) return null;
+  const proximo = flow.steps[i + 1];
+  if (alvosDeRamificacao(flow).has(proximo.id)) return null;
+  return proximo.id;
 }
 
 export type FlowProblema = { stepId: string; problema: string };

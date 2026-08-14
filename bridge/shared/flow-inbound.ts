@@ -140,8 +140,21 @@ export async function continueFlowOnReply(
     return false;
   }
 
+  // Tira do estado de espera ANTES de enviar. Sem isto, cliques seguidos entram todos como
+  // válidos — `findWaitingFlow` só filtra por `waiting`, e o `done` só era gravado no fim,
+  // depois das mensagens saírem. No primeiro teste real quatro toques no botão viraram
+  // quatro execuções do mesmo ramo.
+  const passo = estado.step_id;
+  await saveFlowPosition(db, estado.campaign_id, from, {
+    stepId: passo,
+    done: true, // status sai de 'waiting'; a posição real é regravada logo abaixo
+  }, {
+    conversationId: estado.conversation_id,
+    channelId: String(channel.id),
+  });
+
   const ch = await flowChannelFor(db, channel);
-  const r = await advanceFlow(camp.flow, ch, from, estado.step_id, replyId);
+  const r = await advanceFlow(camp.flow, ch, from, passo, replyId);
   await saveFlowPosition(db, camp.id, from, r.position, {
     conversationId: estado.conversation_id,
     channelId: String(channel.id),
@@ -150,7 +163,7 @@ export async function continueFlowOnReply(
     "flow:",
     camp.id,
     from.slice(-4),
-    `${estado.step_id} -> ${r.position.stepId ?? "fim"}`,
+    `${passo} -> ${r.position.stepId ?? "fim"}`,
     `enviados=${r.enviados} falhas=${r.falhas}`,
   );
   return true;
