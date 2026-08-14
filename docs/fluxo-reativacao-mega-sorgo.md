@@ -123,16 +123,19 @@ Trocar as URLs de mídia pelas reais antes de usar.
       {
         "id": "dor_pasto",
         "kind": "text",
+        "next": "isca",
         "text": "Pois é, meu amigo. Ver o gado emagrecendo com o pasto pelado é o que mais dói.\n\nO Mega Sorgo resolve isso porque o senhor corta e ele rebrota — são até 3 colheitas com a mesma semente, e a raiz busca água fundo mesmo no ano seco."
       },
       {
         "id": "dor_custo",
         "kind": "text",
+        "next": "isca",
         "text": "Essa é a conta que não fecha mesmo. Ração comprada come o lucro todo.\n\nCom o Mega Sorgo o senhor faz a silagem na própria terra: gasta menos de 1 real por dia por cabeça, e ainda são até 3 colheitas com a mesma semente."
       },
       {
         "id": "dor_prevencao",
         "kind": "text",
+        "next": "isca",
         "text": "Que bom, meu amigo. Quem segurou uma seca sabe o valor de não depender de comprar trato.\n\nO Mega Sorgo é justamente pra garantir que a próxima também passe tranquila — silagem estocada, feita na sua terra."
       },
 
