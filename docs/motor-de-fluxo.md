@@ -80,6 +80,36 @@ defeito.
 `timeoutMin` sem `onTimeout` deixaria o lead esperando para sempre. Quem não responde é a
 maioria — o funil mede de 19% a 79% de resposta por fase.
 
+### O fluxo é dono da conversa — botão `menu_*` não funciona dentro dele
+
+`continueFlowOnReply` **consome** a mensagem para o bot de intenção não atropelar o fluxo.
+Isso também impede o `handleMenuClick` de rodar, então um botão com id `menu_preco` dentro
+de um fluxo **não entrega a tabela de preço** — o lead clica e não recebe nada.
+
+Quem tem que mandar o conteúdo é o próprio fluxo: o branch aponta para um step que envia a
+imagem ou o vídeo, e esse step declara `next` para voltar ao caminho principal.
+
+Apareceu no teste real como `isca -> fim enviados=0`: o lead pediu preço e recebeu silêncio.
+
+### Ritmo com `delaySeg`, não com `wait`
+
+`delaySeg` pausa antes de enviar o step. Sem isso o bloco inteiro sai colado — imagem, áudio
+e pergunta no mesmo segundo — e o lead não lê nenhuma. Valores de 6 a 14 segundos deram
+sequência natural nos testes.
+
+`kind: "wait"` **não está implementado**: ele encerra a execução e depende de agendamento
+externo que não existe. Usar `delaySeg`.
+
+### Duas respostas simultâneas: quem decide é o banco
+
+Gravar o estado antes de enviar resolve clique repetido com segundos de intervalo, mas não
+dois eventos que chegam juntos — ambos leem `waiting` antes de qualquer um gravar.
+`claimFlowStep` faz o `UPDATE ... WHERE status='waiting'`: só uma resposta casa a condição.
+
+O status intermediário `processing` cria um risco próprio — falha no meio deixaria o contato
+preso nele, invisível para o webhook e para o timeout. Por isso o erro devolve o passo para
+a espera antes de propagar.
+
 ---
 
 ## Como disparar
