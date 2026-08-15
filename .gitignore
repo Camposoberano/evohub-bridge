@@ -1,5 +1,9 @@
 .env
 .env.local
+# memória do Claude Code — mora fisicamente aqui na unidade E, mas NUNCA no git:
+# duas notas guardam credenciais literais (token antigo do Coolify, API keys de
+# EvoGO/EvoCRM) e este repositório é público.
+.memoria/
 node_modules/
 .next/
 dist/
