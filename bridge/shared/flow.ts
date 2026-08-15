@@ -39,6 +39,16 @@ export type FlowStep = {
   sections?: FlowSection[];
   /** kind=wait — pausa por tempo, sem esperar resposta */
   minutes?: number;
+  /**
+   * Pausa ANTES de enviar este step, em segundos. Na rota uazapi vira o campo `delay`, que
+   * mostra "digitando…" durante a espera — é o que faz a sequência parecer conversa em vez
+   * de rajada. Sem isso as peças saem coladas e o lead recebe tudo de uma vez.
+   *
+   * Diferente de `kind: "wait"`: aquele encerra a execução e depende de agendamento externo
+   * (hoje NÃO implementado — o fluxo para e ninguém retoma). Para segundos ou poucos
+   * minutos dentro do mesmo bloco, é este campo que se usa.
+   */
+  delaySeg?: number;
   /** próximo step quando não há ramificação */
   next?: string;
   /** id do botão/linha clicada → step de destino */

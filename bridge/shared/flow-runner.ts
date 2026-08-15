@@ -196,6 +196,13 @@ export async function runFlow(
   const { enviar, pararEm, fim } = stepsUntilWait(flow, inicio.id);
   let enviados = 0, falhas = 0;
   for (const step of enviar) {
+    // Ritmo entre as peças. Sem isso o bloco inteiro sai colado e o lead recebe imagem,
+    // áudio e pergunta no mesmo segundo — parece robô e some com a chance de ele ler cada
+    // uma. O primeiro step não espera: quem acabou de ser abordado não fica olhando tela
+    // vazia.
+    if (step.delaySeg && step !== enviar[0]) {
+      await new Promise((r) => setTimeout(r, step.delaySeg! * 1000));
+    }
     if (await enviarStep(ch, to, step)) enviados++;
     else falhas++;
   }
