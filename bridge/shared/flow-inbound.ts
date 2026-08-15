@@ -14,6 +14,7 @@ import {
 } from "./flow-runner.ts";
 import { stepById } from "./flow.ts";
 import {
+  claimFlowStep,
   findExpiredWaits,
   findWaitingFlow,
   saveFlowPosition,
@@ -140,31 +141,44 @@ export async function continueFlowOnReply(
     return false;
   }
 
-  // Tira do estado de espera ANTES de enviar. Sem isto, cliques seguidos entram todos como
-  // válidos — `findWaitingFlow` só filtra por `waiting`, e o `done` só era gravado no fim,
-  // depois das mensagens saírem. No primeiro teste real quatro toques no botão viraram
-  // quatro execuções do mesmo ramo.
+  // Reserva o passo antes de enviar qualquer coisa. Gravar o estado antes não bastava:
+  // evitava o clique repetido com segundos de intervalo, mas não dois eventos simultâneos —
+  // ambos liam `waiting` antes de qualquer um gravar, e o ramo saía duas vezes (visto no
+  // log: o mesmo `necessidade -> isca` processado em duplicata).
+  //
+  // Aqui quem decide é o banco: o UPDATE exige `status='waiting'`, então só uma resposta
+  // casa a condição. A que perder recebe zero linhas e sai sem enviar nada.
   const passo = estado.step_id;
-  await saveFlowPosition(db, estado.campaign_id, from, {
-    stepId: passo,
-    done: true, // status sai de 'waiting'; a posição real é regravada logo abaixo
-  }, {
-    conversationId: estado.conversation_id,
-    channelId: String(channel.id),
-  });
+  if (!await claimFlowStep(db, estado.campaign_id, from, passo)) {
+    console.log("flow: passo já reservado por outra resposta,", from.slice(-4), passo);
+    return true; // consome a mensagem: o fluxo está sendo tratado pela outra
+  }
 
-  const ch = await flowChannelFor(db, channel);
-  const r = await advanceFlow(camp.flow, ch, from, passo, replyId);
-  await saveFlowPosition(db, camp.id, from, r.position, {
+  const extra = {
     conversationId: estado.conversation_id,
     channelId: String(channel.id),
-  });
-  console.log(
-    "flow:",
-    camp.id,
-    from.slice(-4),
-    `${passo} -> ${r.position.stepId ?? "fim"}`,
-    `enviados=${r.enviados} falhas=${r.falhas}`,
-  );
+  };
+  try {
+    const ch = await flowChannelFor(db, channel);
+    const r = await advanceFlow(camp.flow, ch, from, passo, replyId);
+    await saveFlowPosition(db, camp.id, from, r.position, extra);
+    console.log(
+      "flow:",
+      camp.id,
+      from.slice(-4),
+      `${passo} -> ${r.position.stepId ?? "fim"}`,
+      `enviados=${r.enviados} falhas=${r.falhas}`,
+    );
+  } catch (e) {
+    // Sem isto o estado ficaria em `processing` para sempre: nem o webhook (que busca
+    // `waiting`) nem o loop de timeout voltariam nele, e o lead ficaria mudo no meio da
+    // conversa. Devolve para a espera, onde a próxima resposta ou o timeout o alcançam.
+    console.error("flow: falhou ao avançar, devolvendo à espera:", e);
+    await saveFlowPosition(db, camp.id, from, {
+      stepId: passo,
+      waitingSince: estado.waiting_since ?? new Date().toISOString(),
+    }, extra);
+    throw e;
+  }
   return true;
 }

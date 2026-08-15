@@ -46,6 +46,34 @@ export async function saveFlowPosition(
 }
 
 /**
+ * Tenta reservar o passo para processar: só uma resposta ganha.
+ *
+ * `saveFlowPosition` antes de enviar não bastou. Ele evita o clique repetido com segundos de
+ * intervalo, mas não dois eventos que chegam ao mesmo tempo: ambos leem `waiting` antes de
+ * qualquer um gravar, e o ramo roda duas vezes. Foi o que apareceu no log — o mesmo
+ * `necessidade -> isca` processado em duplicata.
+ *
+ * A trava é o próprio UPDATE: `status='waiting'` na condição faz o banco decidir. Quem
+ * atualizar a linha ganha; o segundo não casa a condição, recebe zero linhas e desiste.
+ */
+export async function claimFlowStep(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+  stepId: string,
+): Promise<boolean> {
+  const { data, error } = await db.from("campaign_flow_state")
+    .update({ status: "processing", updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("contact_key", contactKey(contact))
+    .eq("step_id", stepId)
+    .eq("status", "waiting")
+    .select("campaign_id");
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
  * Fluxo em que este contato está aguardando, se houver.
  *
  * Um contato pode ter passado por várias campanhas; só interessa a que ainda espera
