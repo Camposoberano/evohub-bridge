@@ -70,7 +70,22 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { flowChannelFor, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
+import {
+  campanhasComFila,
+  enviadosHoje,
+  marcarEnviado,
+  marcarFalha,
+  marcarPulado,
+  proximoDaFila,
+  reservarItem,
+  ultimoEnvioAt,
+} from "./shared/campaign-queue.ts";
+import { runFlow } from "./shared/flow-runner.ts";
+import { saveFlowPosition } from "./shared/flow-state.ts";
+import { mutedConversationIds } from "./shared/bot-mute.ts";
+import { readCampaigns } from "./shared/campaigns.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -1064,6 +1079,87 @@ async function runRecoveryChain() {
   );
 }
 
+// Fila de campanha — entrega UM contato por vez, no ritmo configurado.
+//
+// O loop roda de minuto em minuto, mas quem decide se manda é `podeEnviarAgora`: janela de
+// horário, teto do dia (que sobe pela rampa) e intervalo desde o último envio. Um contato por
+// tick no máximo — é o que espalha 200 mensagens por 14 horas em vez de despejá-las juntas.
+// Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
+const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
+
+function startCampaignQueueLoop() {
+  if (optionalEnv("CAMPAIGN_QUEUE_ENABLED") === "false") return;
+  const run = async () => {
+    try {
+      const db = admin();
+      const campanhas = await campanhasComFila(db);
+      if (!campanhas.length) return;
+
+      const state = await readCampaigns();
+      for (const campaignId of campanhas) {
+        const camp = state.campaigns.find((c) => c.id === campaignId);
+        if (!camp?.flow) continue;
+
+        const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
+        const decisao = podeEnviarAgora({
+          cfg,
+          inicioCampanha: Date.parse(camp.createdAt),
+          enviadosHoje: await enviadosHoje(db, campaignId),
+          ultimoEnvioAt: await ultimoEnvioAt(db, campaignId),
+          now: Date.now(),
+        });
+        if (!decisao.enviar) continue;
+
+        const item = await proximoDaFila(db, campaignId);
+        if (!item) continue;
+        // Reserva antes de enviar: dois ticks não pegam o mesmo contato.
+        if (!await reservarItem(db, item.id)) continue;
+
+        try {
+          const { data: canal } = await db.from("channels")
+            .select("id,phone_number,phone_number_id")
+            .eq("id", item.channel_id).maybeSingle();
+          if (!canal) {
+            await marcarPulado(db, item.id, "canal não encontrado");
+            continue;
+          }
+          // Bot travado à mão vale mais que qualquer campanha.
+          const muted = await mutedConversationIds(db, [item.contact_key]);
+          if (muted.size > 0) {
+            await marcarPulado(db, item.id, "bot-off");
+            continue;
+          }
+
+          const ch = await flowChannelFor(db, canal as Record<string, unknown>);
+          const r = await runFlow(camp.flow, ch, item.contact_key, null);
+          await saveFlowPosition(db, campaignId, item.contact_key, r.position, {
+            channelId: String(canal.id),
+          });
+          if (r.enviados > 0) {
+            await marcarEnviado(db, item.id);
+            console.log(
+              "campaign-queue:",
+              campaignId,
+              item.contact_key.slice(-4),
+              `enviados=${r.enviados} parou=${r.position.stepId ?? "fim"}`,
+            );
+          } else {
+            await marcarFalha(db, item, `nenhuma peça saiu (falhas=${r.falhas})`);
+          }
+        } catch (e) {
+          await marcarFalha(db, item, String(e));
+          console.error("campaign-queue erro:", item.contact_key.slice(-4), e);
+        }
+      }
+    } catch (e) {
+      console.error("campaign-queue loop erro:", e);
+    }
+  };
+  setTimeout(run, 120_000);
+  setInterval(run, CAMPAIGN_QUEUE_INTERVAL_MS);
+  console.log("campaign-queue loop ON (1min, ritmo por campanha)");
+}
+
 function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
@@ -1155,6 +1251,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
+  startCampaignQueueLoop();
   startOperationalMonitorLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);

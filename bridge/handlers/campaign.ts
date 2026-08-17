@@ -16,6 +16,8 @@ import { checarProntidao } from "../shared/hybrid-extra.ts";
 import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
+import { type PaceConfig, PACE_PADRAO } from "../shared/campaign-pace.ts";
+import { enfileirar, resumoDaFila } from "../shared/campaign-queue.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type Campaign, numKey, readCampaigns, type Step, writeCampaigns } from "../shared/campaigns.ts";
 
@@ -440,6 +442,66 @@ export async function handle(req: Request): Promise<Response> {
       rota: route ? `uazapi (${route.instance})` : "oficial (Meta)",
       ritmo: `${camp.delayMin}-${camp.delayMax}s entre contatos`,
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
+    });
+  }
+
+  // Enfileira em vez de disparar: o loop consome no ritmo da rampa (por padrão 50 no
+  // primeiro dia, +15 por dia, teto 200, das 8h às 22h). É o caminho para lista grande —
+  // `start-fluxo` é síncrono e não aguenta horas numa request.
+  if (action === "agendar-fluxo") {
+    const flow = body.flow as Flow | undefined;
+    const numbers = ((body.numbers ?? []) as string[]).map(numKey)
+      .filter((d) => d.length >= 12);
+    if (!flow?.steps?.length || !numbers.length) {
+      return json({ error: "flow e numbers obrigatórios" }, 400);
+    }
+    const problemas = validateFlow(flow);
+    if (problemas.length) return json({ error: "fluxo inválido", problemas }, 400);
+
+    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
+
+    const camp: Campaign = {
+      id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
+      name: (body.name as string) ?? "fluxo-agendado",
+      template: "(fluxo)",
+      language: (body.language as string) ?? "pt_BR",
+      steps: [],
+      flow,
+      pace: (body.pace as Partial<PaceConfig>) ?? undefined,
+      delayMin: 0,
+      delayMax: 0,
+      createdAt: new Date().toISOString(),
+    };
+    state.campaigns.push(camp);
+    // Grava a campanha antes de enfileirar: o loop roda a cada minuto e precisa achar o
+    // fluxo assim que o primeiro item aparecer na fila.
+    await writeCampaigns(state);
+
+    const enfileirados = await enfileirar(admin(), camp.id, numbers, ch.id);
+    const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
+    return json({
+      ok: true,
+      campaign: camp.id,
+      enfileirados,
+      ritmo: {
+        primeiro_dia: cfg.capInicial,
+        incremento_diario: cfg.capIncremento,
+        teto: cfg.capMaximo,
+        janela: `${cfg.horaInicio}h-${cfg.horaFim}h BRT`,
+      },
+      channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
+      aviso: "começa a sair no próximo tick do loop (1min), se dentro da janela",
+    });
+  }
+
+  // Acompanhar uma campanha agendada.
+  if (action === "fila") {
+    const campaignId = String(body.campaign ?? "").trim();
+    if (!campaignId) return json({ error: "campaign obrigatório" }, 400);
+    return json({
+      campaign: campaignId,
+      ...await resumoDaFila(admin(), campaignId),
     });
   }
 

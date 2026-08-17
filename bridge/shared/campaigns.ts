@@ -2,6 +2,7 @@
 // Guardado em JSON no Supabase Storage (volume baixo: ≤500/dia). Sem SQL/DDL.
 import { admin } from "./supabase.ts";
 import type { Flow } from "./flow.ts";
+import type { PaceConfig } from "./campaign-pace.ts";
 
 const BUCKET = "soberano-config";
 const FILE = "campaigns.json";
@@ -27,6 +28,14 @@ export type Campaign = {
    * lido e regravado inteiro, e duas respostas simultâneas se atropelariam.
    */
   flow?: Flow;
+  /**
+   * Ritmo do disparo agendado (shared/campaign-pace.ts). Ausente = `PACE_PADRAO`: 50 contatos
+   * no primeiro dia, subindo 15 por dia até 200, das 8h às 22h BRT.
+   *
+   * Só vale para campanha que passa pela fila (`campaign_queue`). `start-fluxo` direto ignora
+   * e envia na hora, que é o caminho de teste.
+   */
+  pace?: Partial<PaceConfig>;
 };
 export type Target = { campaignId: string; status: "awaiting" | "active" | "done"; step: number; ts: string };
 export type CampaignState = { campaigns: Campaign[]; targets: Record<string, Target> };
