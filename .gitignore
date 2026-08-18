@@ -7,7 +7,7 @@
 # arquivos de análise avulsa. Nascem com credencial dentro (connection string, token
 # colado pra rodar uma vez) e este repositório é público — um `git add .` distraído
 # publicaria. tmp_is0_postgres.sql e tmp_qu18_postgres.sql já tinham segredo em 15/08.
-scratch_*.ts
+scratch_*
 tmp_*.sql
 node_modules/
 .next/
