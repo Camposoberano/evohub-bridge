@@ -17,7 +17,13 @@ import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
 import { type PaceConfig, PACE_PADRAO } from "../shared/campaign-pace.ts";
-import { enfileirar, resumoDaFila } from "../shared/campaign-queue.ts";
+import {
+  cancelarCampanha,
+  enfileirar,
+  pausarCampanha,
+  resumoDaFila,
+  retomarCampanha,
+} from "../shared/campaign-queue.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type Campaign, numKey, readCampaigns, type Step, writeCampaigns } from "../shared/campaigns.ts";
 
@@ -492,6 +498,28 @@ export async function handle(req: Request): Promise<Response> {
       },
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
       aviso: "começa a sair no próximo tick do loop (1min), se dentro da janela",
+    });
+  }
+
+  // Controle da campanha agendada pelo painel. Só mexe em quem ainda NÃO recebeu — o que já
+  // saiu não tem volta, e o número de enviados precisa continuar confiável.
+  if (action === "pausar-campanha" || action === "retomar-campanha" || action === "cancelar-campanha") {
+    const campaignId = String(body.campaign ?? "").trim();
+    if (!campaignId) return json({ error: "campaign obrigatório" }, 400);
+
+    const afetados = action === "pausar-campanha"
+      ? await pausarCampanha(admin(), campaignId)
+      : action === "retomar-campanha"
+      ? await retomarCampanha(admin(), campaignId)
+      : await cancelarCampanha(admin(), campaignId);
+
+    console.log("campaign-queue:", action, campaignId, `${afetados} contato(s)`);
+    return json({
+      ok: true,
+      action,
+      campaign: campaignId,
+      afetados,
+      ...await resumoDaFila(admin(), campaignId),
     });
   }
 

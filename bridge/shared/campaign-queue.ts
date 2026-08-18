@@ -164,8 +164,68 @@ export async function campanhasComFila(db: DbClient): Promise<string[]> {
   return [...new Set(((data ?? []) as Json[]).map((r) => String(r.campaign_id)))];
 }
 
+/**
+ * Pausa: tira da fila sem perder o lugar.
+ *
+ * `paused` não estava previsto na migration, mas a coluna é `text` — e o `proximoDaFila`
+ * filtra por `pending`, então basta mudar o rótulo para o loop parar de pegar. Quem já saiu
+ * não volta atrás: pausar afeta só quem ainda não recebeu.
+ */
+export async function pausarCampanha(
+  db: DbClient,
+  campaignId: string,
+): Promise<number> {
+  const { data, error } = await db.from("campaign_queue")
+    .update({ status: "paused", updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .select("id");
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
+/**
+ * Retoma de onde parou. O teto do dia continua valendo — retomar não libera rajada para
+ * compensar o tempo parado, que seria justamente o comportamento que a rampa evita.
+ */
+export async function retomarCampanha(
+  db: DbClient,
+  campaignId: string,
+): Promise<number> {
+  const { data, error } = await db.from("campaign_queue")
+    .update({ status: "pending", updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("status", "paused")
+    .select("id");
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
+/**
+ * Cancela o que falta. Diferente de pausar: não há como desfazer pelo painel — o registro
+ * fica como `skipped` com o motivo, para a conta de quem recebeu continuar fechando.
+ */
+export async function cancelarCampanha(
+  db: DbClient,
+  campaignId: string,
+  motivo = "cancelada no painel",
+): Promise<number> {
+  const { data, error } = await db.from("campaign_queue")
+    .update({
+      status: "skipped",
+      last_error: motivo,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("campaign_id", campaignId)
+    .in("status", ["pending", "paused"])
+    .select("id");
+  if (error) throw error;
+  return (data ?? []).length;
+}
+
 export type ResumoFila = {
   pendentes: number;
+  pausados: number;
   enviados: number;
   falhas: number;
   pulados: number;
@@ -184,6 +244,7 @@ export async function resumoDaFila(
   const conta = (s: string) => linhas.filter((r) => r.status === s).length;
   return {
     pendentes: conta("pending"),
+    pausados: conta("paused"),
     enviados: conta("sent"),
     falhas: conta("failed"),
     pulados: conta("skipped"),

@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase, BRIDGE_URL } from "@/lib/supabase";
 import Nav from "@/components/Nav";
 
 // Rampa padrão do disparo agendado (espelha shared/campaign-pace.ts). Serve só para mostrar
@@ -121,10 +121,38 @@ export default function Acompanhamento() {
   useEffect(() => { if (pronto) carregarCampanhas(); }, [pronto, carregarCampanhas]);
   useEffect(() => { if (pronto && campanhaId) carregarDados(); }, [pronto, campanhaId, carregarDados]);
 
+  // Pausar/retomar/cancelar. Só afeta quem ainda NÃO recebeu — o que já saiu não volta.
+  const [agindo, setAgindo] = useState("");
+  const [aviso, setAviso] = useState(null);
+
+  async function controlar(action, confirmacao) {
+    if (confirmacao && !window.confirm(confirmacao)) return;
+    setAgindo(action);
+    setAviso(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${BRIDGE_URL}/campaign`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ action, campaign: campanhaId }),
+      });
+      const r = await res.json();
+      setAviso(r.error
+        ? { tipo: "erro", texto: r.error }
+        : { tipo: "ok", texto: `${r.afetados} contato(s) — restam ${r.pendentes} na fila, ${r.pausados} pausados` });
+      await carregarDados();
+    } catch (e) {
+      setAviso({ tipo: "erro", texto: String(e) });
+    } finally {
+      setAgindo("");
+    }
+  }
+
   const m = useMemo(() => {
     const total = fila.length;
     const enviados = fila.filter((r) => r.status === "sent");
     const pendentes = fila.filter((r) => r.status === "pending").length;
+    const pausados = fila.filter((r) => r.status === "paused").length;
     const falhas = fila.filter((r) => r.status === "failed");
     const pulados = fila.filter((r) => r.status === "skipped");
 
@@ -157,7 +185,7 @@ export default function Acompanhamento() {
     const restamDias = teto > 0 ? Math.ceil(pendentes / teto) : 0;
 
     return {
-      total, enviados: enviados.length, pendentes,
+      total, enviados: enviados.length, pendentes, pausados,
       falhas: falhas.length, pulados: pulados.length,
       responderam: responderam.length, aguardando: aguardando.length,
       porStep, hoje, teto, tempoMedio, restamDias,
@@ -204,6 +232,40 @@ export default function Acompanhamento() {
 
         {campanhas.length > 0 && (
           <>
+            <div className="card" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".07em" }}>
+                Controle
+              </span>
+              <button className="btn-ghost mini" disabled={!!agindo || !m.pendentes}
+                onClick={() => controlar("pausar-campanha")}>
+                {agindo === "pausar-campanha" ? "…" : `⏸ Pausar (${m.pendentes})`}
+              </button>
+              <button className="btn-ghost mini" disabled={!!agindo || !m.pausados}
+                onClick={() => controlar("retomar-campanha")}>
+                {agindo === "retomar-campanha" ? "…" : `▶️ Retomar (${m.pausados})`}
+              </button>
+              <button className="btn-ghost mini" disabled={!!agindo || (!m.pendentes && !m.pausados)}
+                style={{ color: "var(--red)", borderColor: "rgba(251,93,118,.4)" }}
+                onClick={() => controlar("cancelar-campanha",
+                  `Cancelar o restante da campanha?\n\n${m.pendentes + m.pausados} contato(s) NÃO vão receber.\nIsso não pode ser desfeito pelo painel.`)}>
+                {agindo === "cancelar-campanha" ? "…" : "✖ Cancelar o resto"}
+              </button>
+              <span style={{ fontSize: 12, color: "var(--text-faint)", marginLeft: "auto" }}>
+                afeta só quem ainda não recebeu
+              </span>
+            </div>
+
+            {aviso && (
+              <div style={{
+                padding: "10px 14px", borderRadius: 10, marginBottom: 14, fontSize: 13,
+                background: aviso.tipo === "erro" ? "rgba(251,93,118,.1)" : "rgba(47,209,129,.1)",
+                border: `1px solid ${aviso.tipo === "erro" ? "rgba(251,93,118,.3)" : "rgba(47,209,129,.3)"}`,
+                color: aviso.tipo === "erro" ? "var(--red)" : "var(--green)",
+              }}>
+                {aviso.texto}
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 12, marginBottom: 18 }}>
               <Indicador titulo="Progresso" valor={`${pct(m.enviados, m.total)}%`}
                 sub={`${m.enviados} de ${m.total} contatos`} cor="var(--mint)" />
@@ -233,6 +295,7 @@ export default function Acompanhamento() {
                 </div>
                 <Barra label="Enviados" valor={m.enviados} total={m.total} cor="var(--green)" />
                 <Barra label="Na fila" valor={m.pendentes} total={m.total} cor="var(--mint)" />
+                {m.pausados > 0 && <Barra label="Pausados" valor={m.pausados} total={m.total} cor="var(--amber)" />}
                 <Barra label="Pulados" valor={m.pulados} total={m.total} cor="var(--text-faint)" />
                 <Barra label="Falharam" valor={m.falhas} total={m.total} cor="var(--red)" />
               </div>
