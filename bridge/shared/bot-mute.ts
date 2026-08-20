@@ -11,6 +11,16 @@
 // gravada e espelhada no Chatwoot — silenciar o bot não é parar de escutar o cliente.
 import type { DbClient } from "./supabase.ts";
 
+const POSTGREST_ID_BATCH_SIZE = 40;
+
+function batches<T>(items: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    result.push(items.slice(index, index + size));
+  }
+  return result;
+}
+
 /** Label no Chatwoot que trava o bot. Persistente: some só quando o atendente remove. */
 export const BOT_MUTE_LABEL = "bot-off";
 
@@ -30,12 +40,22 @@ export async function mutedConversationIds(
 ): Promise<Set<string>> {
   const ids = [...new Set(conversationIds.filter(Boolean))];
   if (!ids.length) return new Set();
-  const { data, error } = await db.from("conversations")
-    .select("id")
-    .in("id", ids)
-    .not("bot_muted_at", "is", null);
-  if (error) throw error;
-  return new Set(((data ?? []) as { id: unknown }[]).map((r) => String(r.id)));
+  const responses = await Promise.all(
+    batches(ids, POSTGREST_ID_BATCH_SIZE).map((batch) =>
+      db.from("conversations")
+        .select("id")
+        .in("id", batch)
+        .not("bot_muted_at", "is", null)
+    ),
+  );
+  const muted = new Set<string>();
+  for (const response of responses) {
+    if (response.error) throw response.error;
+    for (const row of (response.data ?? []) as { id: unknown }[]) {
+      muted.add(String(row.id));
+    }
+  }
+  return muted;
 }
 
 /**
