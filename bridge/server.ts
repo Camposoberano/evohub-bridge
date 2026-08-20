@@ -84,7 +84,7 @@ import {
 } from "./shared/campaign-queue.ts";
 import { runFlow } from "./shared/flow-runner.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
-import { mutedConversationIds } from "./shared/bot-mute.ts";
+import { isBotMutedForContact } from "./shared/bot-mute.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
 
 const CORS: Record<string, string> = {
@@ -1123,9 +1123,17 @@ function startCampaignQueueLoop() {
             await marcarPulado(db, item.id, "canal não encontrado");
             continue;
           }
-          // Bot travado à mão vale mais que qualquer campanha.
-          const muted = await mutedConversationIds(db, [item.contact_key]);
-          if (muted.size > 0) {
+          // Bot travado à mão vale mais que qualquer campanha. item.contact_key é o
+          // TELEFONE (external_contact_id), não um id de conversa. Passá-lo a
+          // mutedConversationIds, que faz `.in("id", ...)` contra o uuid da conversa, fazia
+          // o Postgres rejeitar o número como uuid (22P02) e lançar erro para TODO contato —
+          // derrubava a campanha inteira antes de enviar. Resolve pelo par (canal, contato).
+          const muted = await isBotMutedForContact(
+            db,
+            String(canal.id),
+            item.contact_key,
+          );
+          if (muted) {
             await marcarPulado(db, item.id, "bot-off");
             continue;
           }
@@ -1144,10 +1152,19 @@ function startCampaignQueueLoop() {
               `enviados=${r.enviados} parou=${r.position.stepId ?? "fim"}`,
             );
           } else {
-            await marcarFalha(db, item, `nenhuma peça saiu (falhas=${r.falhas})`);
+            await marcarFalha(
+              db,
+              item,
+              `nenhuma peça saiu (falhas=${r.falhas})`,
+            );
           }
         } catch (e) {
-          await marcarFalha(db, item, String(e));
+          // Erro do PostgREST/Supabase é objeto simples, não Error: String(e) virava
+          // "[object Object]" e escondia a causa. Guarda a mensagem real em last_error.
+          const msg = e instanceof Error
+            ? e.message
+            : (e && typeof e === "object" ? JSON.stringify(e) : String(e));
+          await marcarFalha(db, item, msg);
           console.error("campaign-queue erro:", item.contact_key.slice(-4), e);
         }
       }
