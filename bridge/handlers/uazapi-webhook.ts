@@ -549,12 +549,26 @@ async function parseUazapiMessage(
     );
   }
   const from = fromRaw ? fromRaw.replace(/@.*$/, "") : undefined;
+  // Nome do LEAD, nunca o nosso.
+  //
+  // `senderName` e quem ASSINA a mensagem. No eco da nossa propria saida (fromMe) isso vem
+  // como o nome do nosso perfil — "Campo Soberano" — e gravar esse valor sobrescrevia o
+  // nome do produtor no contato. Medido em 20/08: 668 de 1024 contatos com o nome da
+  // empresa, e so nos canais WhatsApp (Facebook/Instagram entram por sync-facebook.ts e
+  // ficaram intactos).
+  //
+  // O `chat` do payload traz o nome do OUTRO LADO nos dois sentidos, entao vem primeiro.
+  // `senderName` fica como ultimo recurso e so quando a mensagem e do lead.
+  const chatInfo = getJson(context, "chat") ?? getJson(message, "chat");
   const name = firstString(
-    getString(message, "name"),
-    getString(message, "senderName"),
-    getString(getJson(message, "sender"), "name"),
-    getString(context, "name"),
-    getString(getJson(context, "sender"), "name"),
+    getString(chatInfo, "wa_name"),
+    getString(chatInfo, "name"),
+    getString(chatInfo, "lead_name"),
+    fromMe ? undefined : getString(message, "name"),
+    fromMe ? undefined : getString(message, "senderName"),
+    fromMe ? undefined : getString(getJson(message, "sender"), "name"),
+    fromMe ? undefined : getString(context, "name"),
+    fromMe ? undefined : getString(getJson(context, "sender"), "name"),
   );
   const metaMessageId = firstString(
     getString(message, "id"),

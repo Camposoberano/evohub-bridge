@@ -8,7 +8,11 @@ import {
   sourceSnapshot,
   syncInboundCliente,
 } from "./lead-profile.ts";
-import { isUnmappedMsgType, type MsgType, normalizeMsgType } from "./msg-type.ts";
+import {
+  isUnmappedMsgType,
+  type MsgType,
+  normalizeMsgType,
+} from "./msg-type.ts";
 import {
   type ChatwootAttachment,
   createConversation,
@@ -166,7 +170,11 @@ export async function ingestInbound(
     const { error: updateError } = await db.from("contacts")
       .update({
         customer_id: customerId,
-        name: msg.name || contact.name,
+        // Eco da nossa saida nao renomeia o contato: quem assina a mensagem ali somos nos,
+        // nao o lead. Mesma guarda que `syncInboundCliente` ja tinha algumas linhas acima —
+        // e por ela ter faltado aqui que `clientes.wa_name` manteve o nome certo enquanto
+        // `contacts.name` virou "Campo Soberano" em 668 linhas.
+        name: (msg.outgoing ? null : msg.name) || contact.name,
         phone,
         attributes: sourceId
           ? { ...leadAttributes, source_id: sourceId }
