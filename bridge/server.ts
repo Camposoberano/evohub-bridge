@@ -83,6 +83,7 @@ import {
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
 import { runFlow } from "./shared/flow-runner.ts";
+import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
@@ -1139,7 +1140,19 @@ function startCampaignQueueLoop() {
           }
 
           const ch = await flowChannelFor(db, canal as Record<string, unknown>);
-          const r = await runFlow(camp.flow, ch, item.contact_key, null);
+          const r = await runFlow(
+            camp.flow,
+            ch,
+            item.contact_key,
+            null,
+            Date.now(),
+            gravadorDeFluxo(
+              db,
+              canal as Record<string, unknown>,
+              item.contact_key,
+              await accountForChannel(String(canal.id)),
+            ),
+          );
           await saveFlowPosition(db, campaignId, item.contact_key, r.position, {
             channelId: String(canal.id),
           });

@@ -54,6 +54,20 @@ export type RunResult = {
 };
 
 /**
+ * Chamado depois de cada peça que SAIU, para o chamador registrar a mensagem.
+ *
+ * Existe porque o fluxo envia direto pela rota híbrida, sem passar por `/send-outbound`, e o
+ * webhook do uazapi descarta o eco de mensagem enviada pela API (`wasSentByApi`). Resultado
+ * medido em 20/08: das ~10 peças de um fluxo, o banco guardava 1 — o atendente via a resposta
+ * do lead sem a pergunta que a gerou, como se ele falasse sozinho.
+ *
+ * Fica como callback, e não como escrita aqui dentro, para este módulo continuar sem banco e
+ * testável com um canal falso — mesma divisão que separa `flow.ts` (decide) de `flow-runner`
+ * (envia).
+ */
+export type OnStepSent = (step: FlowStep) => Promise<void>;
+
+/**
  * Envia um step. Devolve true se saiu por qualquer rota.
  *
  * Um step que falha nas duas rotas não interrompe o fluxo: interromper deixaria o lead
@@ -185,10 +199,9 @@ export async function runFlow(
   to: string,
   fromStepId: string | null,
   now = Date.now(),
+  onSent?: OnStepSent,
 ): Promise<RunResult> {
-  const inicio = fromStepId
-    ? stepById(flow, fromStepId)
-    : primeiroStep(flow);
+  const inicio = fromStepId ? stepById(flow, fromStepId) : primeiroStep(flow);
   if (!inicio) {
     return { enviados: 0, falhas: 0, position: { stepId: null, done: true } };
   }
@@ -203,8 +216,18 @@ export async function runFlow(
     if (step.delaySeg && step !== enviar[0]) {
       await new Promise((r) => setTimeout(r, step.delaySeg! * 1000));
     }
-    if (await enviarStep(ch, to, step)) enviados++;
-    else falhas++;
+    if (await enviarStep(ch, to, step)) {
+      enviados++;
+      // Registrar não pode derrubar o fluxo: a mensagem já chegou ao lead, e abortar aqui
+      // deixaria a conversa pela metade por causa de um problema de bookkeeping.
+      if (onSent) {
+        try {
+          await onSent(step);
+        } catch (e) {
+          console.error(`flow: falha ao registrar step ${step.id}:`, e);
+        }
+      }
+    } else falhas++;
   }
 
   if (pararEm?.kind === "wait") {
@@ -212,7 +235,10 @@ export async function runFlow(
       enviados,
       falhas,
       aguardarMinutos: pararEm.minutes ?? 0,
-      position: { stepId: pararEm.id, waitingSince: new Date(now).toISOString() },
+      position: {
+        stepId: pararEm.id,
+        waitingSince: new Date(now).toISOString(),
+      },
     };
   }
   if (fim || !pararEm) {
@@ -241,6 +267,7 @@ export async function advanceFlow(
   currentStepId: string,
   replyId: string | null,
   now = Date.now(),
+  onSent?: OnStepSent,
 ): Promise<RunResult> {
   const atual = stepById(flow, currentStepId);
   if (!atual) {
@@ -250,7 +277,7 @@ export async function advanceFlow(
   if (!proximo) {
     return { enviados: 0, falhas: 0, position: { stepId: null, done: true } };
   }
-  return await runFlow(flow, ch, to, proximo, now);
+  return await runFlow(flow, ch, to, proximo, now, onSent);
 }
 
 /**

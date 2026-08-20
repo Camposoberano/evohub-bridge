@@ -15,8 +15,9 @@ import type { HybridMenuButton } from "../shared/hybrid-menu.ts";
 import { checarProntidao } from "../shared/hybrid-extra.ts";
 import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
+import { gravadorDeFluxo } from "../shared/flow-record.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
-import { type PaceConfig, PACE_PADRAO } from "../shared/campaign-pace.ts";
+import { PACE_PADRAO, type PaceConfig } from "../shared/campaign-pace.ts";
 import {
   cancelarCampanha,
   enfileirar,
@@ -25,7 +26,13 @@ import {
   retomarCampanha,
 } from "../shared/campaign-queue.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { type Campaign, numKey, readCampaigns, type Step, writeCampaigns } from "../shared/campaigns.ts";
+import {
+  type Campaign,
+  numKey,
+  readCampaigns,
+  type Step,
+  writeCampaigns,
+} from "../shared/campaigns.ts";
 
 type Json = Record<string, unknown>;
 
@@ -49,7 +56,9 @@ type WaChannel = {
   status: string;
 };
 
-async function resolveWhatsAppChannel(channelId?: string): Promise<WaChannel | null> {
+async function resolveWhatsAppChannel(
+  channelId?: string,
+): Promise<WaChannel | null> {
   const db = admin();
   const cols = "id,name,phone_number_id,phone_number,display_name,status";
   if (channelId) {
@@ -58,7 +67,11 @@ async function resolveWhatsAppChannel(channelId?: string): Promise<WaChannel | n
     return ch?.phone_number_id ? ch as WaChannel : null;
   }
   const { data: active } = await db.from("channels").select(cols)
-    .eq("type", "whatsapp").eq("status", "active").not("phone_number_id", "is", null)
+    .eq("type", "whatsapp").eq("status", "active").not(
+      "phone_number_id",
+      "is",
+      null,
+    )
     .order("connected_at", { ascending: false }).limit(1).maybeSingle();
   if (active) return active as WaChannel;
   const { data: any } = await db.from("channels").select(cols)
@@ -70,30 +83,50 @@ async function resolveWhatsAppChannel(channelId?: string): Promise<WaChannel | n
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
-    global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },
+    global: {
+      headers: { Authorization: req.headers.get("Authorization") ?? "" },
+    },
     auth: { persistSession: false },
   });
-  if (!(await uc.auth.getUser()).data?.user) return json({ error: "unauthorized" }, 401);
+  if (!(await uc.auth.getUser()).data?.user) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   const body = await req.json().catch(() => ({})) as Json;
   const action = body.action as string;
   const state = await readCampaigns();
 
   if (action === "status") {
-    const counts: Record<string, { awaiting: number; active: number; done: number }> = {};
+    const counts: Record<
+      string,
+      { awaiting: number; active: number; done: number }
+    > = {};
     for (const t of Object.values(state.targets)) {
-      counts[t.campaignId] = counts[t.campaignId] ?? { awaiting: 0, active: 0, done: 0 };
+      counts[t.campaignId] = counts[t.campaignId] ??
+        { awaiting: 0, active: 0, done: 0 };
       counts[t.campaignId][t.status]++;
     }
     const official = await resolveWhatsAppChannel();
-    return json({ campaigns: state.campaigns, counts, officialChannel: official });
+    return json({
+      campaigns: state.campaigns,
+      counts,
+      officialChannel: official,
+    });
   }
 
   if (action === "start") {
-    const numbers = [...new Set(((body.numbers ?? []) as string[]).map(numKey).filter((d) => d.length >= 12))];
+    const numbers = [
+      ...new Set(
+        ((body.numbers ?? []) as string[]).map(numKey).filter((d) =>
+          d.length >= 12
+        ),
+      ),
+    ];
     const template = body.template as string;
     const language = (body.language as string) ?? "pt_BR";
-    if (!template || numbers.length === 0) return json({ error: "template e numbers obrigatórios" }, 400);
+    if (!template || numbers.length === 0) {
+      return json({ error: "template e numbers obrigatórios" }, 400);
+    }
     if (numbers.length > MAX_POR_CHAMADA) {
       return json({
         error:
@@ -103,20 +136,29 @@ export async function handle(req: Request): Promise<Response> {
       }, 400);
     }
 
-    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    const ch = await resolveWhatsAppChannel(
+      body.channel_id as string | undefined,
+    );
     if (!ch?.phone_number_id) {
-      return json({ error: "nenhum canal WhatsApp oficial ativo com phone_number_id — conecte em /conexoes" }, 404);
+      return json({
+        error:
+          "nenhum canal WhatsApp oficial ativo com phone_number_id — conecte em /conexoes",
+      }, 404);
     }
-    const { data: secret } = await admin().from("channel_secrets").select("channel_token").eq("channel_id", ch.id).maybeSingle();
+    const { data: secret } = await admin().from("channel_secrets").select(
+      "channel_token",
+    ).eq("channel_id", ch.id).maybeSingle();
     const token = secret?.channel_token as string | undefined;
     if (!token) return json({ error: "canal sem token" }, 404);
 
     const camp: Campaign = {
       id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
       name: (body.name as string) ?? template,
-      template, language,
+      template,
+      language,
       steps: (body.steps as Step[]) ?? [],
-      delayMin: Number(body.delayMin ?? 1), delayMax: Number(body.delayMax ?? 3),
+      delayMin: Number(body.delayMin ?? 1),
+      delayMax: Number(body.delayMax ?? 3),
       createdAt: new Date().toISOString(),
     };
     state.campaigns.push(camp);
@@ -126,11 +168,18 @@ export async function handle(req: Request): Promise<Response> {
     const hm = body.headerMedia as Json | undefined; // { format:"image"|"video"|"document", link }
     if (hm?.link && hm?.format) {
       const fmt = String(hm.format).toLowerCase();
-      components = [{ type: "header", parameters: [{ type: fmt, [fmt]: { link: hm.link } }] }, ...components];
+      components = [{
+        type: "header",
+        parameters: [{ type: fmt, [fmt]: { link: hm.link } }],
+      }, ...components];
     }
 
     const metaPath = `${ch.phone_number_id}/messages`;
-    const payload = { messaging_product: "whatsapp", type: "template", template: { name: template, language: { code: language }, components } };
+    const payload = {
+      messaging_product: "whatsapp",
+      type: "template",
+      template: { name: template, language: { code: language }, components },
+    };
 
     // Ritmo. delayMin/delayMax já existiam no tipo e eram aceitos no body, mas só o caminho
     // uazapi os usava (handlers/uazapi.ts) — no oficial a lista saía em rajada, 5 concorrentes
@@ -150,7 +199,8 @@ export async function handle(req: Request): Promise<Response> {
       );
     };
 
-    let sent = 0, failed = 0; const errors: string[] = [];
+    let sent = 0, failed = 0;
+    const errors: string[] = [];
     let primeiro = true;
     await mapPool(numbers, concorrencia, async (to) => {
       if (comRitmo && !primeiro) await espera();
@@ -158,12 +208,19 @@ export async function handle(req: Request): Promise<Response> {
       const r = await sendMetaWithTimeout(token, metaPath, { ...payload, to });
       if (r.ok) {
         sent++;
-        state.targets[to] = { campaignId: camp.id, status: "awaiting", step: 0, ts: new Date().toISOString() };
+        state.targets[to] = {
+          campaignId: camp.id,
+          status: "awaiting",
+          step: 0,
+          ts: new Date().toISOString(),
+        };
       } else {
         failed++;
         if (errors.length < 3) {
           const detail = (r.data as Json)?.error ?? r.data;
-          errors.push(r.timedOut ? "timeout" : JSON.stringify(detail).slice(0, 120));
+          errors.push(
+            r.timedOut ? "timeout" : JSON.stringify(detail).slice(0, 120),
+          );
         }
       }
     });
@@ -171,14 +228,31 @@ export async function handle(req: Request): Promise<Response> {
     try {
       await writeCampaigns(state);
     } catch (e) {
-      return json({ error: String(e), campaign: camp.id, sent, failed, partial: true }, 500);
+      return json({
+        error: String(e),
+        campaign: camp.id,
+        sent,
+        failed,
+        partial: true,
+      }, 500);
     }
     return json({
-      ok: true, campaign: camp.id, sent, failed, total: numbers.length, awaiting: sent, errors,
+      ok: true,
+      campaign: camp.id,
+      sent,
+      failed,
+      total: numbers.length,
+      awaiting: sent,
+      errors,
       ritmo: comRitmo
         ? `sequencial, ${camp.delayMin}-${camp.delayMax}s entre envios`
         : `${SEND_CONCURRENCY} em paralelo, sem intervalo (passe delayMin/delayMax para dar ritmo)`,
-      channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number, display_name: ch.display_name },
+      channel: {
+        id: ch.id,
+        name: ch.name,
+        phone_number: ch.phone_number,
+        display_name: ch.display_name,
+      },
     });
   }
 
@@ -211,7 +285,9 @@ export async function handle(req: Request): Promise<Response> {
       }, 400);
     }
 
-    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    const ch = await resolveWhatsAppChannel(
+      body.channel_id as string | undefined,
+    );
     if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
 
     // Instância explícita pula a exigência de coexistência (mesmo número no oficial e no
@@ -349,7 +425,8 @@ export async function handle(req: Request): Promise<Response> {
     }
     if (numbers.length > MAX_POR_CHAMADA) {
       return json({
-        error: `${numbers.length} números; o teto por chamada é ${MAX_POR_CHAMADA}`,
+        error:
+          `${numbers.length} números; o teto por chamada é ${MAX_POR_CHAMADA}`,
       }, 400);
     }
 
@@ -361,7 +438,9 @@ export async function handle(req: Request): Promise<Response> {
       return json({ error: "fluxo inválido", problemas }, 400);
     }
 
-    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    const ch = await resolveWhatsAppChannel(
+      body.channel_id as string | undefined,
+    );
     if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
 
     const instancia = body.instance as string | undefined;
@@ -391,7 +470,10 @@ export async function handle(req: Request): Promise<Response> {
       phoneNumberId: ch.phone_number_id,
     };
     if (!flowCh.route && !(flowCh.token && flowCh.phoneNumberId)) {
-      return json({ error: "nenhuma rota de envio disponível para este canal" }, 404);
+      return json(
+        { error: "nenhuma rota de envio disponível para este canal" },
+        404,
+      );
     }
 
     const camp: Campaign = {
@@ -425,7 +507,18 @@ export async function handle(req: Request): Promise<Response> {
       if (!primeiro) await espera();
       primeiro = false;
       try {
-        const r = await runFlow(flow, flowCh, to, null);
+        const r = await runFlow(
+          flow,
+          flowCh,
+          to,
+          null,
+          Date.now(),
+          gravadorDeFluxo(
+            admin(),
+            ch as unknown as Record<string, unknown>,
+            to,
+          ),
+        );
         if (r.enviados > 0) iniciados++;
         else falhas++;
         if (r.position.stepId) emEspera++;
@@ -462,9 +555,13 @@ export async function handle(req: Request): Promise<Response> {
       return json({ error: "flow e numbers obrigatórios" }, 400);
     }
     const problemas = validateFlow(flow);
-    if (problemas.length) return json({ error: "fluxo inválido", problemas }, 400);
+    if (problemas.length) {
+      return json({ error: "fluxo inválido", problemas }, 400);
+    }
 
-    const ch = await resolveWhatsAppChannel(body.channel_id as string | undefined);
+    const ch = await resolveWhatsAppChannel(
+      body.channel_id as string | undefined,
+    );
     if (!ch) return json({ error: "canal WhatsApp não encontrado" }, 404);
 
     const camp: Campaign = {
@@ -497,13 +594,17 @@ export async function handle(req: Request): Promise<Response> {
         janela: `${cfg.horaInicio}h-${cfg.horaFim}h BRT`,
       },
       channel: { id: ch.id, name: ch.name, phone_number: ch.phone_number },
-      aviso: "começa a sair no próximo tick do loop (1min), se dentro da janela",
+      aviso:
+        "começa a sair no próximo tick do loop (1min), se dentro da janela",
     });
   }
 
   // Controle da campanha agendada pelo painel. Só mexe em quem ainda NÃO recebeu — o que já
   // saiu não tem volta, e o número de enviados precisa continuar confiável.
-  if (action === "pausar-campanha" || action === "retomar-campanha" || action === "cancelar-campanha") {
+  if (
+    action === "pausar-campanha" || action === "retomar-campanha" ||
+    action === "cancelar-campanha"
+  ) {
     const campaignId = String(body.campaign ?? "").trim();
     if (!campaignId) return json({ error: "campaign obrigatório" }, 400);
 
@@ -513,7 +614,12 @@ export async function handle(req: Request): Promise<Response> {
       ? await retomarCampanha(admin(), campaignId)
       : await cancelarCampanha(admin(), campaignId);
 
-    console.log("campaign-queue:", action, campaignId, `${afetados} contato(s)`);
+    console.log(
+      "campaign-queue:",
+      action,
+      campaignId,
+      `${afetados} contato(s)`,
+    );
     return json({
       ok: true,
       action,
@@ -542,8 +648,19 @@ async function sendMetaWithTimeout(
   body: unknown,
 ): Promise<{ ok: boolean; status: number; data: unknown; timedOut?: boolean }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<{ ok: false; status: 0; data: { error: string }; timedOut: true }>((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, status: 0, data: { error: "timeout" }, timedOut: true }), SEND_TIMEOUT_MS);
+  const timeout = new Promise<
+    { ok: false; status: 0; data: { error: string }; timedOut: true }
+  >((resolve) => {
+    timer = setTimeout(
+      () =>
+        resolve({
+          ok: false,
+          status: 0,
+          data: { error: "timeout" },
+          timedOut: true,
+        }),
+      SEND_TIMEOUT_MS,
+    );
   });
   try {
     return await Promise.race([sendMeta(channelToken, path, body), timeout]);
@@ -552,17 +669,27 @@ async function sendMetaWithTimeout(
   }
 }
 
-async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {
+async function mapPool<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   const queue = [...items];
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (queue.length > 0) {
-      const item = queue.shift()!;
-      await fn(item);
-    }
-  });
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (queue.length > 0) {
+        const item = queue.shift()!;
+        await fn(item);
+      }
+    },
+  );
   await Promise.all(workers);
 }
 
 function json(obj: unknown, status = 200): Response {
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }

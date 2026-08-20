@@ -13,6 +13,7 @@ import {
   runFlow,
 } from "./flow-runner.ts";
 import { stepById } from "./flow.ts";
+import { gravadorDeFluxo } from "./flow-record.ts";
 import {
   claimFlowStep,
   findExpiredWaits,
@@ -85,7 +86,14 @@ export async function pumpFlowTimeouts(
       const ch = await flowChannelFor(db, canal as Json);
       // segue direto pro destino do timeout, sem passar por resolveNext: o lead não
       // respondeu, então não há resposta para ramificar
-      const r = await runFlow(camp.flow, ch, p.contact_key, step.onTimeout, now);
+      const r = await runFlow(
+        camp.flow,
+        ch,
+        p.contact_key,
+        step.onTimeout,
+        now,
+        gravadorDeFluxo(db, canal as Json, p.contact_key),
+      );
       await saveFlowPosition(db, camp.id, p.contact_key, r.position, {
         conversationId: p.conversation_id,
         channelId: String(canal.id),
@@ -150,7 +158,11 @@ export async function continueFlowOnReply(
   // casa a condição. A que perder recebe zero linhas e sai sem enviar nada.
   const passo = estado.step_id;
   if (!await claimFlowStep(db, estado.campaign_id, from, passo)) {
-    console.log("flow: passo já reservado por outra resposta,", from.slice(-4), passo);
+    console.log(
+      "flow: passo já reservado por outra resposta,",
+      from.slice(-4),
+      passo,
+    );
     return true; // consome a mensagem: o fluxo está sendo tratado pela outra
   }
 
@@ -160,7 +172,15 @@ export async function continueFlowOnReply(
   };
   try {
     const ch = await flowChannelFor(db, channel);
-    const r = await advanceFlow(camp.flow, ch, from, passo, replyId);
+    const r = await advanceFlow(
+      camp.flow,
+      ch,
+      from,
+      passo,
+      replyId,
+      Date.now(),
+      gravadorDeFluxo(db, channel, from),
+    );
     await saveFlowPosition(db, camp.id, from, r.position, extra);
     console.log(
       "flow:",
