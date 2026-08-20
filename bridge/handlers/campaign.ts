@@ -17,10 +17,16 @@ import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
 import { gravadorDeFluxo } from "../shared/flow-record.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
-import { PACE_PADRAO, type PaceConfig } from "../shared/campaign-pace.ts";
+import {
+  capDoDia,
+  dentroDaJanela,
+  PACE_PADRAO,
+  type PaceConfig,
+} from "../shared/campaign-pace.ts";
 import {
   cancelarCampanha,
   enfileirar,
+  enviadosHoje,
   pausarCampanha,
   resumoDaFila,
   retomarCampanha,
@@ -107,9 +113,30 @@ export async function handle(req: Request): Promise<Response> {
       counts[t.campaignId][t.status]++;
     }
     const official = await resolveWhatsAppChannel();
+    const now = Date.now();
+    const pace: Record<string, Json | null> = {};
+    for (const campaign of state.campaigns) {
+      const cfg = { ...PACE_PADRAO, ...(campaign.pace ?? {}) } as PaceConfig;
+      const sentToday = await enviadosHoje(admin(), campaign.id, now);
+      const capToday = capDoDia(cfg, Date.parse(campaign.createdAt), now);
+      const windowOpen = dentroDaJanela(cfg, now);
+      pace[campaign.id] = {
+        sentToday,
+        capToday,
+        remainingToday: Math.max(0, capToday - sentToday),
+        window: `${cfg.horaInicio}h-${cfg.horaFim}h BRT`,
+        windowOpen,
+        reason: !windowOpen
+          ? "fora-da-janela"
+          : sentToday >= capToday
+          ? "teto-do-dia"
+          : "liberada",
+      };
+    }
     return json({
       campaigns: state.campaigns,
       counts,
+      pace,
       officialChannel: official,
     });
   }

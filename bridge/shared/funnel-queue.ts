@@ -9,6 +9,44 @@ type Json = Record<string, unknown>;
 
 let running = false;
 const BRT_OFFSET_MINUTES = 180;
+const WINDOW_HOLD_FLAG = "__awaiting_meta_window";
+
+/** Reabre somente peças retidas pela janela Meta após nova entrada do cliente. */
+export async function resumeWindowHeldMessages(
+  db: ReturnType<typeof admin>,
+  conversationId: string,
+  now = Date.now(),
+): Promise<number> {
+  const { data, error } = await db.from("scheduled_messages")
+    .select("id,payload")
+    .eq("conversation_id", conversationId)
+    .eq("status", "paused")
+    .limit(500);
+  if (error) throw error;
+  let resumed = 0;
+  for (const row of (data ?? []) as Json[]) {
+    const payload = row.payload && typeof row.payload === "object"
+      ? row.payload as Json
+      : {};
+    if (payload[WINDOW_HOLD_FLAG] !== true) continue;
+    const nextPayload = { ...payload };
+    delete nextPayload[WINDOW_HOLD_FLAG];
+    await db.from("scheduled_messages").update({
+      status: "pending",
+      send_at: new Date(now + 60_000).toISOString(),
+      payload: nextPayload,
+    }).eq("id", row.id);
+    resumed++;
+  }
+  if (resumed) {
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "window_held_resumed",
+      payload: { conversation_id: conversationId, resumed_messages: resumed },
+    });
+  }
+  return resumed;
+}
 
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
@@ -211,6 +249,30 @@ export async function pumpFunnelQueue(
           .eq("funnel", row.funnel ?? "mega-sorgo")
           .in("status", ["running", "paused"]);
         sent++;
+      } else if (
+        body.awaiting_window === true ||
+        body.blocked === "janela-fechada" ||
+        body.blocked === "rota-hibrida-indisponivel-e-janela-fechada"
+      ) {
+        await db.from("scheduled_messages").update({
+          status: "paused",
+          payload: { ...payload, [WINDOW_HOLD_FLAG]: true },
+        }).eq("id", id);
+        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await db.from("events").insert({
+          source: "funil",
+          event_type: "message_held_window",
+          payload: {
+            scheduled_message_id: id,
+            conversation_id: row.conversation_id ?? null,
+            chatwoot_conversation_id: row.chatwoot_conversation_id ?? null,
+            funnel: row.funnel ?? "mega-sorgo",
+            day: row.day ?? null,
+            type: row.type ?? "text",
+            janela: body.janela ?? null,
+          },
+        });
+        held++;
       } else {
         await db.from("scheduled_messages").update({ status: "failed" }).eq(
           "id",
