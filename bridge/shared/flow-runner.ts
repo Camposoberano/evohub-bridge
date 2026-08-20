@@ -224,7 +224,12 @@ export async function runFlow(
         try {
           await onSent(step);
         } catch (e) {
-          console.error(`flow: falha ao registrar step ${step.id}:`, e);
+          // Mensagem real do erro, não o objeto: em 20/08 o canal vinha sem
+          // `chatwoot_inbox_identifier` (o SELECT trazia só 3 colunas), `ingestInbound`
+          // lançava, e a falha sumiu num log ilegível — o fluxo seguia parecendo saudável
+          // enquanto nada era gravado.
+          const msg = e instanceof Error ? e.message : JSON.stringify(e);
+          console.error(`flow: NAO registrou step ${step.id}: ${msg}`);
         }
       }
     } else falhas++;

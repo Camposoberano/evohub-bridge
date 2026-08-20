@@ -1118,7 +1118,9 @@ function startCampaignQueueLoop() {
 
         try {
           const { data: canal } = await db.from("channels")
-            .select("id,phone_number,phone_number_id")
+            .select(
+              "id,type,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier",
+            )
             .eq("id", item.channel_id).maybeSingle();
           if (!canal) {
             await marcarPulado(db, item.id, "canal não encontrado");
