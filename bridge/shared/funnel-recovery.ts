@@ -11,7 +11,7 @@ const MAX_AUTO_RESUME_INBOUND_AGE_MS = 6 * 60 * 60_000;
 const FOLLOW_UP_AFTER_SECONDS = 10 * 60 * 60;
 const FOLLOW_UP_FUNNEL = "mega-sorgo-followup";
 const FAILED_GRACE_MS = 24 * 60 * 60_000;
-const POSTGREST_ID_BATCH_SIZE = 40;
+const POSTGREST_ID_BATCH_SIZE = 10;
 
 function batches<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];

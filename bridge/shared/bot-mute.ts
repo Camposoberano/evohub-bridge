@@ -11,7 +11,7 @@
 // gravada e espelhada no Chatwoot — silenciar o bot não é parar de escutar o cliente.
 import type { DbClient } from "./supabase.ts";
 
-const POSTGREST_ID_BATCH_SIZE = 40;
+const POSTGREST_ID_BATCH_SIZE = 10;
 
 function batches<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];
