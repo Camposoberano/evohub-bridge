@@ -123,7 +123,11 @@ export async function ingestInbound(
     channelId: channel.id as string,
     externalId: msg.from,
     phone,
-    name: msg.name,
+    // Mesma guarda do contato logo abaixo e do `syncInboundCliente`: eco da nossa saida nao
+    // renomeia ninguem. Sem isto, `customers.display_name` foi corrompido junto — 679 linhas
+    // com o nome da empresa, medidas em 20/08. `ensureCustomer` preserva o nome atual quando
+    // recebe undefined.
+    name: msg.outgoing ? undefined : msg.name,
     avatarUrl: msg.avatarUrl,
     attributes: leadAttributes,
   });
