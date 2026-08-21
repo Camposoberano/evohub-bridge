@@ -11,15 +11,6 @@ const MAX_AUTO_RESUME_INBOUND_AGE_MS = 6 * 60 * 60_000;
 const FOLLOW_UP_AFTER_SECONDS = 10 * 60 * 60;
 const FOLLOW_UP_FUNNEL = "mega-sorgo-followup";
 const FAILED_GRACE_MS = 24 * 60 * 60_000;
-const POSTGREST_ID_BATCH_SIZE = 10;
-
-function batches<T>(items: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    result.push(items.slice(index, index + size));
-  }
-  return result;
-}
 
 export type FunnelMaintenanceResult = {
   scanned: number;
@@ -143,14 +134,16 @@ export async function maintainFunnels(
   if (error) throw error;
   if (!sequences?.length) return result;
 
-  const conversationIds = sequences.map((item: Json) => String(item.conversation_id))
-    .filter(Boolean);
-  const idBatches = batches(conversationIds, POSTGREST_ID_BATCH_SIZE);
+  const conversationIds = sequences.map((item: Json) => item.conversation_id);
   const since = new Date(now - 48 * 60 * 60_000).toISOString();
-  const [conversationBatches, pauseEventsResult, catalogStateBatches] = await Promise.all([
-    Promise.all(idBatches.map((ids) => db.from("conversations")
+  const [
+    { data: conversations },
+    { data: pauseEvents },
+    { data: catalogStates, error: catalogStateError },
+  ] = await Promise.all([
+    db.from("conversations")
       .select("id,channel_id,outcome")
-      .in("id", ids))),
+      .in("id", conversationIds),
     db.from("events")
       .select("event_type,received_at,payload")
       .eq("source", "funil")
@@ -158,18 +151,12 @@ export async function maintainFunnels(
       .gte("received_at", since)
       .order("received_at", { ascending: false })
       .limit(2_000),
-    Promise.all(idBatches.map((ids) => db.from("catalog_nav_state")
+    db.from("catalog_nav_state")
       .select("conversation_id")
-      .in("conversation_id", ids)
-      .eq("journey", "catalogo"))),
+      .in("conversation_id", conversationIds)
+      .eq("journey", "catalogo"),
   ]);
-  for (const response of [...conversationBatches, ...catalogStateBatches]) {
-    if (response.error) throw response.error;
-  }
-  if (pauseEventsResult.error) throw pauseEventsResult.error;
-  const conversations = conversationBatches.flatMap((response) => response.data ?? []);
-  const pauseEvents = pauseEventsResult.data;
-  const catalogStates = catalogStateBatches.flatMap((response) => response.data ?? []);
+  if (catalogStateError) throw catalogStateError;
   const conversationMap = new Map(
     (conversations ?? []).map((item: Json) => [String(item.id), item]),
   );

@@ -1041,7 +1041,12 @@ function startChannelSyncLoop() {
 }
 
 function startFunnelQueueLoop() {
+  // Mesma trava do campaign-queue: tick de 30s mandando até 10 peças com mídia passa do
+  // intervalo com folga, e rodadas sobrepostas dobram o ritmo do funil.
+  let rodando = false;
   const run = async () => {
+    if (rodando) return;
+    rodando = true;
     try {
       const result = await pumpFunnelQueue(10);
       if (result.found) {
@@ -1049,6 +1054,8 @@ function startFunnelQueueLoop() {
       }
     } catch (e) {
       console.error("funnel-queue-pump erro:", e);
+    } finally {
+      rodando = false;
     }
   };
   setTimeout(run, 20_000);
@@ -1090,7 +1097,18 @@ const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
 
 function startCampaignQueueLoop() {
   if (optionalEnv("CAMPAIGN_QUEUE_ENABLED") === "false") return;
+  // Trava de reentrância. `setInterval` dispara de 60 em 60s SEM esperar a rodada anterior
+  // terminar, e uma rodada que manda vídeo de 14 MB com as pausas do fluxo passa disso com
+  // folga. Duas rodadas simultâneas liam `enviadosHoje` e `ultimoEnvioAt` antes de qualquer
+  // uma gravar, as duas decidiam "pode enviar", e o ritmo virava rajada.
+  //
+  // Medido em 20/08: três envios em 25s (19:57:47, :55, 20:58:12) e o teto do dia estourado
+  // em 82/80. `reservarItem` não cobre isso — ele impede dois ticks pegarem o MESMO contato,
+  // não dois ticks pegarem contatos diferentes ao mesmo tempo.
+  let rodando = false;
   const run = async () => {
+    if (rodando) return;
+    rodando = true;
     try {
       const db = admin();
       const campanhas = await campanhasComFila(db);
@@ -1185,6 +1203,8 @@ function startCampaignQueueLoop() {
       }
     } catch (e) {
       console.error("campaign-queue loop erro:", e);
+    } finally {
+      rodando = false;
     }
   };
   setTimeout(run, 120_000);
@@ -1226,7 +1246,12 @@ const FLOW_TIMEOUT_INTERVAL_MS = 2 * 60_000;
 
 function startFlowTimeoutLoop() {
   if (optionalEnv("FLOW_TIMEOUT_ENABLED") === "false") return;
+  // Trava de reentrância: este loop também envia (segue o fluxo de quem não respondeu), e
+  // sobreposição faria o lead receber a continuação duas vezes.
+  let rodando = false;
   const run = async () => {
+    if (rodando) return;
+    rodando = true;
     try {
       const r = await pumpFlowTimeouts(admin());
       if (r.seguiram > 0) {
@@ -1234,6 +1259,8 @@ function startFlowTimeoutLoop() {
       }
     } catch (e) {
       console.error("flow-timeout loop erro:", e);
+    } finally {
+      rodando = false;
     }
   };
   setTimeout(run, 90_000);

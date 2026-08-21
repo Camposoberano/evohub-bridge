@@ -1,7 +1,7 @@
 // window — estado da janela de mensagem livre da Meta por conversa.
 // 24h da última msg do CLIENTE; 72h quando a conversa veio de anúncio CTWA/free entry point
 // (conversations.origem = 'anuncio'). Só vale pra canal OFICIAL (phone_number_id) — canais
-// Facebook e Instagram privados também aplicam a janela; canais não-Meta não entram aqui.
+// não-oficiais (ryzeapi/uazapi) não têm janela.
 import type { DbClient } from "./supabase.ts";
 
 type Json = Record<string, unknown>;
@@ -17,9 +17,7 @@ export type WindowState = {
 };
 
 export async function windowState(db: DbClient, conv: Json, channel: Json): Promise<WindowState> {
-  const metaChannel = Boolean(channel.phone_number_id) ||
-    channel.type === "facebook" || channel.type === "instagram";
-  if (!metaChannel) return { aberta: true, tipo: "sem-janela", expiraEm: null, restanteMs: null };
+  if (!channel.phone_number_id) return { aberta: true, tipo: "sem-janela", expiraEm: null, restanteMs: null };
 
   const { data: lastIn } = await db.from("messages").select("sent_at")
     .eq("conversation_id", conv.id).eq("direction", "in")

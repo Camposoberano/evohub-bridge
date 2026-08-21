@@ -187,11 +187,11 @@ export default function Campanhas() {
         <div className="section-title" style={{ marginTop: 28 }}>Campanhas (status)</div>
         <div className="table-wrap">
           <table className="table">
-            <thead><tr><th>Campanha</th><th>Template</th><th>Ritmo hoje</th><th>Aguardando</th><th>Respondeu/ativo</th><th>Concluído</th></tr></thead>
+            <thead><tr><th>Campanha</th><th>Template</th><th>Aguardando</th><th>Respondeu/ativo</th><th>Concluído</th></tr></thead>
             <tbody>
-              {status.campaigns.length === 0 ? <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma campanha</td></tr> :
-                status.campaigns.map((c) => { const k = status.counts[c.id] || {}; const p = status.pace?.[c.id]; return (
-                  <tr key={c.id}><td>{c.name}</td><td>{c.template} [{c.language}]</td><td>{p ? <><strong>{p.sentToday}/{p.capToday}</strong><br /><span style={{ color: "var(--text-dim)", fontSize: 11 }}>{p.remainingToday} restantes · {p.reason === "liberada" ? "liberada" : p.reason === "teto-do-dia" ? "teto do dia" : "fora da janela"}</span></> : "—"}</td><td>{k.awaiting || 0}</td><td>{k.active || 0}</td><td>{k.done || 0}</td></tr>
+              {status.campaigns.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma campanha</td></tr> :
+                status.campaigns.map((c) => { const k = status.counts[c.id] || {}; return (
+                  <tr key={c.id}><td>{c.name}</td><td>{c.template} [{c.language}]</td><td>{k.awaiting || 0}</td><td>{k.active || 0}</td><td>{k.done || 0}</td></tr>
                 ); })}
             </tbody>
           </table>

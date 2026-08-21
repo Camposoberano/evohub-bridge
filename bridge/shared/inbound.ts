@@ -24,7 +24,6 @@ import {
   resolveInboxIdentifier,
   setConversationLabels,
 } from "./chatwoot.ts";
-import { resumeWindowHeldMessages } from "./funnel-queue.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -340,16 +339,6 @@ export async function ingestInbound(
       return { inserted: false, reason: "duplicate" };
     }
     throw messageError;
-  }
-
-  // Nova mensagem reabre a janela Meta e libera apenas peças retidas por esse motivo;
-  // pausas manuais continuam pausadas.
-  if (!msg.outgoing) {
-    try {
-      await resumeWindowHeldMessages(db, String(conv.id));
-    } catch (e) {
-      console.warn("resume de mensagens retidas pela janela falhou:", String(e).slice(0, 160));
-    }
   }
 
   // Decisão 01/07: resposta/clique do cliente NÃO trava o funil. O Cícero recebe a resposta

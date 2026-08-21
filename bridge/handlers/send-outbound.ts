@@ -122,8 +122,7 @@ export async function handle(req: Request): Promise<Response> {
   // GATE de janela (Meta): funil/n8n mandando mensagem livre com janela fechada = rejeição
   // silenciosa e custo perdido. Bloqueia e deixa NOTA PRIVADA na conversa (1x/dia por conversa,
   // pra retry do cron não virar spam de nota).
-  const isMetaSocial = channel.type === "facebook" || channel.type === "instagram";
-  if ((isWhatsapp && !hybrid) || isMetaSocial) {
+  if (isWhatsapp && !hybrid) {
     const win = await windowState(db, conv as Json, channel as Json);
     if (!win.aberta) {
       const dia = new Date().toISOString().slice(0, 10);
@@ -147,12 +146,7 @@ export async function handle(req: Request): Promise<Response> {
         event_type: "send_blocked_window",
         payload: { conv: cwConvId, type, janela: win.tipo },
       }).then(() => {}, () => {});
-      return json({
-        ok: false,
-        blocked: "janela-fechada",
-        awaiting_window: true,
-        janela: win.tipo,
-      });
+      return json({ ok: false, blocked: "janela-fechada", janela: win.tipo });
     }
   }
 
