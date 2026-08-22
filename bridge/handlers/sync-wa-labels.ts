@@ -94,7 +94,7 @@ export async function handle(req: Request): Promise<Response> {
       if (names.length === 0) continue;
 
       const { data: contact } = await db.from("contacts")
-        .select("id").eq("channel_id", channelId)
+        .select("id,attributes").eq("channel_id", channelId)
         .eq("external_contact_id", phone).maybeSingle();
       if (!contact) continue;
 
@@ -117,6 +117,8 @@ export async function handle(req: Request): Promise<Response> {
 
       const derived = deriveOutcome(next);
       const manual = row.outcome_source === "dashboard";
+      const blocked = (contact.attributes as Record<string, unknown> | null)
+        ?.blocked === true;
       if (derived && !manual && row.outcome !== derived) {
         patch.outcome = derived;
         patch.outcome_source = "whatsapp-label";
@@ -124,7 +126,9 @@ export async function handle(req: Request): Promise<Response> {
         outcomeSet++;
       }
 
-      if (derived === "lost" && row.outcome !== "lost") {
+      // Também corrige contatos legados cujo outcome já era `lost` antes do
+      // bloqueio durável existir. Depois de bloqueado, não repete a operação.
+      if (derived === "lost" && (!blocked || row.outcome !== "lost")) {
         try {
           await stopContactAutomation(db, channelId, phone, "whatsapp-label");
         } catch (e) {
