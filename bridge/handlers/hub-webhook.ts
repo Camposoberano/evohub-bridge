@@ -22,6 +22,8 @@ import {
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { isNegativeIntent } from "../shared/negative-intent.ts";
+import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isComprovanteMsgType,
@@ -305,6 +307,21 @@ async function handleWhatsApp(db: Db, p: Json) {
           // CTWA/free entry point: lead clicou em anúncio -> janela de 72h (origem='anuncio').
           referral: (m.referral as Json | undefined) ?? undefined,
         });
+
+        if (isNegativeIntent(content)) {
+          try {
+            const result = await stopContactAutomation(
+              db,
+              String(channel.id),
+              from,
+              "explicit-reply",
+            );
+            console.log("hub: contato bloqueado por desinteresse", JSON.stringify(result));
+          } catch (e) {
+            console.error("hub: falha ao encerrar desinteresse", e);
+          }
+          continue;
+        }
 
         // Bot travado à mão (label bot-off no Chatwoot): a mensagem acima já foi gravada e
         // espelhada — travar o bot é parar de FALAR, não parar de escutar. Daqui pra baixo

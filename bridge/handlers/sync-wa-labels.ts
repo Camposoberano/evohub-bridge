@@ -20,6 +20,7 @@ import {
   splitByOrigin,
   WA_PREFIX,
 } from "../shared/outcome-labels.ts";
+import { stopContactAutomation } from "../shared/stop-contact.ts";
 
 type Chat = {
   wa_chatid?: string;
@@ -121,6 +122,16 @@ export async function handle(req: Request): Promise<Response> {
         patch.outcome_source = "whatsapp-label";
         patch.outcome_set_at = new Date().toISOString();
         outcomeSet++;
+      }
+
+      if (derived === "lost" && row.outcome !== "lost") {
+        try {
+          await stopContactAutomation(db, channelId, phone, "whatsapp-label");
+        } catch (e) {
+          errors.push(
+            `${inst.name}/${phone}: stop ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
       }
 
       if (Object.keys(patch).length === 0) continue;

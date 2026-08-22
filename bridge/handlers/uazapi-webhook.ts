@@ -9,6 +9,8 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { isNegativeIntent } from "../shared/negative-intent.ts";
+import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isNutricaoIntent,
@@ -173,6 +175,21 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     });
 
     if (msg.direction === "incoming") {
+      if (isNegativeIntent(msg.content)) {
+        try {
+          const result = await stopContactAutomation(
+            db,
+            String(channel.id),
+            msg.from,
+            "explicit-reply",
+          );
+          console.log("uazapi: contato bloqueado por desinteresse", JSON.stringify(result));
+        } catch (e) {
+          console.error("uazapi: falha ao encerrar desinteresse", e);
+        }
+        continue;
+      }
+
       // Bot travado à mão (label bot-off): a mensagem já foi ingerida acima. Daqui pra
       // baixo é resposta automática — qualificação, catálogo e intenção — e nada disso
       // deve sair por cima do atendente que calou o bot.
