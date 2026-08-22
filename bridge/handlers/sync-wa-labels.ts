@@ -20,7 +20,7 @@ import {
   splitByOrigin,
   WA_PREFIX,
 } from "../shared/outcome-labels.ts";
-import { stopContactAutomation } from "../shared/stop-contact.ts";
+import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
 
 type Chat = {
   wa_chatid?: string;
@@ -134,6 +134,16 @@ export async function handle(req: Request): Promise<Response> {
         } catch (e) {
           errors.push(
             `${inst.name}/${phone}: stop ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+      if (derived === "won" &&
+        !(contact.attributes as Record<string, unknown> | null)?.automation_excluded) {
+        try {
+          await excludePaidContact(db, channelId, phone);
+        } catch (e) {
+          errors.push(
+            `${inst.name}/${phone}: paid ${e instanceof Error ? e.message : String(e)}`,
           );
         }
       }

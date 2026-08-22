@@ -290,6 +290,7 @@ const version = {
     "first-response-trigger",
     "message-funnel-link",
     "outcome-label-pago-nao-compra",
+    "completion-labels-by-funnel",
     "funil-fase5-logistica-e-pacote-2kg",
     "recovery-chain-1-2-4-7",
     "recovery-chain-funil-abandonado",

@@ -11,7 +11,10 @@ import {
   addBusinessSeconds,
   clampBusinessTime,
 } from "../shared/business-time.ts";
-import { isContactBlocked } from "../shared/lead-block.ts";
+import {
+  isContactBlocked,
+  isContactExcludedFromAutomation,
+} from "../shared/lead-block.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -354,7 +357,9 @@ export async function handle(req: Request): Promise<Response> {
   // Contato marcado com a etiqueta "nao-compra" (bridge/handlers/funil-control.ts,
   // ação marcar-nao-compra) nunca mais entra no funil -- nem auto-enroll, nem clique manual
   // "iniciar funil", nem recuperação, porque os três caminhos convergem nesta função.
-  if (isContactBlocked(conv.contacts)) {
+  const allowPaid = body.allow_paid === true || body.allow_paid === "true";
+  if (isContactBlocked(conv.contacts) ||
+    (!allowPaid && isContactExcludedFromAutomation(conv.contacts))) {
     return json({ ok: false, blocked: "contato-bloqueado" }, 422);
   }
 

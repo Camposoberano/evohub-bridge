@@ -13,6 +13,14 @@ export function isContactBlocked(contact: Json | null | undefined): boolean {
   return attrs.blocked === true;
 }
 
+/** Exclui automações normais; clientes pagos podem entrar em uma campanha explícita. */
+export function isContactExcludedFromAutomation(
+  contact: Json | null | undefined,
+): boolean {
+  const attrs = (contact?.attributes ?? {}) as Json;
+  return attrs.blocked === true || attrs.automation_excluded === true;
+}
+
 export async function blockContact(
   db: Db,
   contactId: string,
