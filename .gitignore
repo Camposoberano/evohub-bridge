@@ -13,6 +13,7 @@ node_modules/
 .next/
 dist/
 *.log
+ops/backups/
 .DS_Store
 supabase/.branches/
 supabase/.temp/
