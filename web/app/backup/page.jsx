@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Nav from "@/components/Nav";
+import { BRIDGE_URL } from "@/lib/supabase";
 
 const VERSION = {
   branch: "master",
@@ -32,7 +33,28 @@ function Badge({ tone, children }) {
 
 export default function BackupPage() {
   const [copied, setCopied] = useState(false);
+  const [bridge, setBridge] = useState({ state: "checking", build: "—", checkedAt: null });
   const command = "pwsh -File .\\ops\\backup-evohub.ps1";
+
+  async function verificarBridge() {
+    const checkedAt = new Date().toISOString();
+    try {
+      const [health, version] = await Promise.all([
+        fetch(`${BRIDGE_URL}/health`, { cache: "no-store" }),
+        fetch(`${BRIDGE_URL}/version`, { cache: "no-store" }),
+      ]);
+      const body = await version.json().catch(() => ({}));
+      setBridge({
+        state: health.ok ? "online" : "degraded",
+        build: body.build || "build não informado",
+        checkedAt,
+      });
+    } catch {
+      setBridge({ state: "offline", build: "indisponível", checkedAt });
+    }
+  }
+
+  useEffect(() => { verificarBridge(); }, []);
 
   async function copiar() {
     try {
@@ -90,6 +112,15 @@ export default function BackupPage() {
             <div className="backup-note">O dump completo depende de <code>SUPABASE_DB_URL</code> configurada no ambiente seguro.</div>
           </section>
         </div>
+
+        <section className="backup-section">
+          <div className="section-heading-row"><div><div className="section-title">Preflight</div><h2 className="backup-card-title">Estado do ambiente atual</h2></div><button className="btn-ghost mini" onClick={verificarBridge}>Verificar agora</button></div>
+          <div className="backup-runtime">
+            <div className={`backup-runtime-state backup-runtime-${bridge.state}`}><span className="pulse-dot" />{bridge.state === "checking" ? "Verificando" : bridge.state === "online" ? "Bridge online" : bridge.state === "degraded" ? "Bridge com alerta" : "Bridge indisponível"}</div>
+            <div><span>Build ativo</span><strong>{bridge.build}</strong></div>
+            <div><span>Última leitura</span><strong>{bridge.checkedAt ? new Date(bridge.checkedAt).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—"}</strong></div>
+          </div>
+        </section>
 
         <section className="backup-section">
           <div className="section-heading-row"><div><div className="section-title">Roteiro</div><h2 className="backup-card-title">Checklist de preparação</h2></div><span className="backup-muted">6 itens</span></div>
