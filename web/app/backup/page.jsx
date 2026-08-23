@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Nav from "@/components/Nav";
-import { BRIDGE_URL } from "@/lib/supabase";
 
 const VERSION = {
   branch: "master",
@@ -39,13 +38,10 @@ export default function BackupPage() {
   async function verificarBridge() {
     const checkedAt = new Date().toISOString();
     try {
-      const [health, version] = await Promise.all([
-        fetch(`${BRIDGE_URL}/health`, { cache: "no-store" }),
-        fetch(`${BRIDGE_URL}/version`, { cache: "no-store" }),
-      ]);
-      const body = await version.json().catch(() => ({}));
+      const response = await fetch("/api/bridge-status", { cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
       setBridge({
-        state: health.ok ? "online" : "degraded",
+        state: response.ok && body.ok ? "online" : "degraded",
         build: body.build || "build não informado",
         checkedAt,
       });
