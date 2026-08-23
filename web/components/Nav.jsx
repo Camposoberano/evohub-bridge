@@ -16,6 +16,7 @@ const I = {
   grupos: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M23 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8",
   eventos: "M22 12h-4l-3 9L9 3l-3 9H2",
   tecnologias: "M12 2 4 5v6c0 5 3.4 7.8 8 10 4.6-2.2 8-5 8-10V5l-8-3Z",
+  backup: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5",
   refresh: "M20 11a8 8 0 1 0 2 5.3M20 4v7h-7",
   top: "m18 15-6-6-6 6",
 };
@@ -35,7 +36,7 @@ const SUBNAV = [
   { match: ["/contatos", "/clientes"], label: "Clientes", items: [["/contatos", "Atendidos"], ["/clientes", "Prospecção"]] },
   { match: ["/analytics", "/relatorio"], label: "Métricas", items: [["/analytics", "Métricas"], ["/relatorio", "Diagnóstico"]] },
   { match: ["/disparos", "/campanhas", "/funil", "/fluxos", "/acompanhamento"], label: "Envios", items: [["/disparos", "Disparos"], ["/fluxos", "Fluxos"], ["/acompanhamento", "Acompanhamento"], ["/funil", "Funil"], ["/campanhas", "Campanhas"]] },
-  { match: ["/eventos", "/ferramentas", "/grupos", "/tecnologias"], label: "Operação", items: [["/eventos", "Eventos"], ["/ferramentas", "Ferramentas"], ["/grupos", "Grupos"], ["/tecnologias", "Tecnologias"]] },
+  { match: ["/eventos", "/ferramentas", "/grupos", "/tecnologias", "/backup"], label: "Operação", items: [["/eventos", "Eventos"], ["/backup", "Backup & Clonagem"], ["/ferramentas", "Ferramentas"], ["/grupos", "Grupos"], ["/tecnologias", "Tecnologias"]] },
 ];
 
 function Ico({ d }) {
