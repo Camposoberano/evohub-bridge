@@ -37,12 +37,14 @@ const TEMPLATES_BY_WABA: Record<string, Record<number, string>> = {
     3: "tirar_duvida", // "ficou alguma dúvida" [Como plantar|Ver preço|Não tenho interesse]
     4: "bem_vindo", // última tentativa, com nome do Cícero [Lembro sim|Tenho duvidas|Qual preço]
   },
-  // canal "6836" — 100191609666845. Só tem um template aprovado; repete nas 4 variações.
+  // canal "6836" — 100191609666845. Variante "primeiro contato" (não assume conversa
+  // anterior) — aprovados em 25/08. Botões de 2-3 casam com VIDEO_RE/PLANTIO_RE/PRECO_RE
+  // igual ao 5895; o 1 (apresentacao_sul) qualifica leite/corte antes de rotear.
   "100191609666845": {
-    1: "boa_noite",
-    2: "boa_noite",
-    3: "boa_noite",
-    4: "boa_noite",
+    1: "apresentacao_sul", // "trabalho com a semente do Mega Sorgo" [Leite|Corte|Ver preço]
+    2: "convite_videos_sul", // "gravamos uns videos na lavoura" [Quero ver os vídeos|Ver preço|Não tenho interesse]
+    3: "duvida_tecnica_sul", // "espacamento, sementes por hectare" [Como plantar|Ver preço|Não tenho interesse]
+    4: "ultima_chamada_sul", // última tentativa [Ainda tenho interesse|Qual o preço|Não tenho interesse]
   },
 };
 
