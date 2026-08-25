@@ -87,6 +87,7 @@ import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
+import { runDeclineGuard } from "./shared/decline-guard.ts";
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -1213,6 +1214,27 @@ function startCampaignQueueLoop() {
   console.log("campaign-queue loop ON (1min, ritmo por campanha)");
 }
 
+const DECLINE_GUARD_INTERVAL_MS = 5 * 60_000;
+
+// Marca outcome=lost pra quem clica um botão de recusa explícito num fluxo de campanha —
+// sem isso, a próxima campanha (e a que vier depois dela) precisaria repetir a varredura
+// manual de exclusão feita pra sul-grupo-b-6836. Ver shared/decline-guard.ts.
+function startDeclineGuardLoop() {
+  const run = async () => {
+    try {
+      const result = await runDeclineGuard(admin());
+      if (result.marked) {
+        console.log("decline-guard:", JSON.stringify(result));
+      }
+    } catch (e) {
+      console.error("decline-guard loop erro:", e);
+    }
+  };
+  setTimeout(run, 90_000);
+  setInterval(run, DECLINE_GUARD_INTERVAL_MS);
+  console.log("decline-guard loop ON (5min)");
+}
+
 function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
@@ -1307,6 +1329,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDataCleanupLoop();
   startMacroCommandLoop();
   startOutcomeLabelLoop();
+  startDeclineGuardLoop();
   startBotMuteLoop();
   startFunnelQueueLoop();
   startFunnelRecoveryLoop();
