@@ -35,7 +35,7 @@ Deno.test("as 4 variacoes do 5895 usam templates distintos", () => {
 
 Deno.test("template e resolvido por WABA, nao global", () => {
   assertEquals(templateFor(WABA_5895, 1), "retomada_conversa");
-  assertEquals(templateFor(WABA_6836, 1), "boa_noite");
+  assertEquals(templateFor(WABA_6836, 1), "apresentacao_sul");
   assertEquals(templateFor("108121798773503", 1), null); // WABA de outra conta
   assertEquals(templateFor(null, 1), null);
   assertEquals(templateFor(undefined, 1), null);

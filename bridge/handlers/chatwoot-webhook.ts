@@ -9,11 +9,11 @@ import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
-import { instPost, tokenForInstance } from "../shared/ryzeapi.ts";
 import { windowState } from "../shared/window.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
+  getDirectUazapiRoute,
   getHybridRoute,
   hybridSendMedia,
   hybridSendText,
@@ -184,15 +184,17 @@ export async function handleOutgoing(db: Db, p: Json) {
     return;
   }
 
-  // canal ryzeapi (whatsapp não-oficial): sem phone_number_id e com external_id (nome da instância).
-  const isRyze = channel.type === "whatsapp" && Boolean(channel.external_id) &&
-    !channel.phone_number_id;
+  // canal uazapi puro (whatsapp não-oficial, sem par Meta): sem phone_number_id e com
+  // external_id = nome da instância uazapi. Migrado de RyzeAPI em 27/08 -- a conta RyzeAPI
+  // não é mais usada, todo canal nessa forma agora envia pela uazapi (shared/hybrid.ts).
+  const isUazapiOnly = channel.type === "whatsapp" &&
+    Boolean(channel.external_id) && !channel.phone_number_id;
 
-  // channel_token só existe pra canais OFICIAIS (Meta). Canal ryzeapi não tem linha em
+  // channel_token só existe pra canais OFICIAIS (Meta). Canal uazapi puro não tem linha em
   // channel_secrets -> .single() estoura (0 linhas) e secret!.channel_token dava TypeError,
-  // matando o envio ANTES do branch ryzeapi (e deixando o claim cw-out-<id> travado).
+  // matando o envio ANTES do branch (e deixando o claim cw-out-<id> travado).
   let token = "";
-  if (!isRyze) {
+  if (!isUazapiOnly) {
     const { data: secret } = await db.from("channel_secrets").select(
       "channel_token",
     ).eq("channel_id", channel.id).single();
@@ -204,13 +206,14 @@ export async function handleOutgoing(db: Db, p: Json) {
   let msgType = "text";
   let mediaUrl: string | null = null;
   let isSocialDirectMessage = false;
-  if (isRyze) {
-    // canal ryzeapi (whatsapp não-oficial): a ponte nativa deles não entrega SAÍDA de forma
-    // confiável (bug achado testando, igual a entrada) -- manda direto pela API deles.
+  if (isUazapiOnly) {
+    // canal uazapi puro: sem canal oficial Meta pra rotear, manda direto pela instância
+    // uazapi do próprio canal (mesmo cliente/rota usado no híbrido, sem fallback pra
+    // sendMeta porque não existe canal oficial aqui pra cair de volta).
     const instance = channel.external_id as string;
-    const rzToken = await tokenForInstance(instance);
-    if (!rzToken) {
-      console.warn("ryzeapi: instância não encontrada", instance);
+    const route = await getDirectUazapiRoute(channel.id as string, instance);
+    if (!route) {
+      console.warn("uazapi: instância não encontrada/conectada", instance);
       return;
     }
     if (attachments.length > 0) {
@@ -231,31 +234,24 @@ export async function handleOutgoing(db: Db, p: Json) {
           res = {
             ok: false,
             status: 502,
-            data: { error: { message: `Falha ao preparar mídia para Ryze: ${String(error)}` } },
+            data: { error: { message: `Falha ao preparar mídia: ${String(error)}` } },
           };
           continue;
         }
-        res = await instPost(
-          `/message/media/${encodeURIComponent(instance)}`,
-          rzToken,
-          {
-            number: to,
-            mediaType: msgType,
-            mediaUrl,
-            message: content || undefined,
-            fileName: msgType === "document"
-              ? ((att.fallback_title as string) ?? "arquivo")
-              : undefined,
-            isVoice: msgType === "audio",
-          },
-        );
+        const mediaRes = await hybridSendMedia(route, to, mediaUrl, msgType, {
+          caption: content || undefined,
+          fileName: msgType === "document" ? fileName : undefined,
+          isVoice: msgType === "audio",
+        });
+        res = mediaRes
+          ? { ok: mediaRes.ok, status: mediaRes.status, data: mediaRes.data }
+          : { ok: false, status: 502, data: { error: "uazapi: envio de mídia falhou" } };
       }
     } else {
-      res = await instPost(
-        `/message/text/${encodeURIComponent(instance)}`,
-        rzToken,
-        { number: to, message: content },
-      );
+      const textRes = await hybridSendText(route, to, content);
+      res = textRes
+        ? { ok: textRes.ok, status: textRes.status, data: textRes.data }
+        : { ok: false, status: 502, data: { error: "uazapi: envio de texto falhou" } };
       msgType = "text";
     }
   } else if (channel.type === "whatsapp") {
