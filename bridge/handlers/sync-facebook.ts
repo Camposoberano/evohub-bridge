@@ -241,8 +241,12 @@ async function syncInbound(
     // sem garantia de trazer a URL. Pedindo os campos na mão o retorno fica determinístico.
     const attachmentFields =
       "attachments{id,name,mime_type,size,file_url,image_data,video_data,audio_data}";
+    // Reel/post compartilhado no direct do Instagram não vem em `message` nem em
+    // `attachments`: vem em `shares`, e sem pedir esse campo a mensagem chegava vazia e
+    // virava "unknown"/"[anexo]". Medido 29/08: 100% das entradas do sorgo brasileiro e
+    // 14 de 85 do Atendimento IG são shares.
     const messagesPath =
-      `${conversation.id}/messages?fields=id,from,to,message,created_time,${attachmentFields}&limit=${opts.messageLimit}`;
+      `${conversation.id}/messages?fields=id,from,to,message,created_time,shares{link},${attachmentFields}&limit=${opts.messageLimit}`;
     const msgRes = await getMeta(secret.channel_token as string, messagesPath);
     if (!msgRes.ok) {
       throw new Error(
@@ -293,8 +297,7 @@ async function syncInbound(
               secret.channel_token as string,
             );
             const msgType = inboundMsgType(message, attachments);
-            const content = (message.message as string | undefined)?.trim() ||
-              fallbackContent(msgType);
+            const content = conteudoDeEntrada(message, msgType);
             const repair = await repairInboundMedia(
               db,
               existingMessage.id as string,
@@ -318,8 +321,7 @@ async function syncInbound(
         secret.channel_token as string,
       );
       const msgType = inboundMsgType(message, attachments);
-      const content = (message.message as string | undefined)?.trim() ||
-        fallbackContent(msgType);
+      const content = conteudoDeEntrada(message, msgType);
       let profile = profileCache.get(contactId);
       if (!profile && !isFromPage) {
         profile = await fetchSocialProfile(
@@ -762,12 +764,38 @@ function extractAttachments(message: Json): Json[] {
   return Array.isArray(data) ? data as Json[] : [];
 }
 
+export function extractShareLinks(message: Json): string[] {
+  const shares = message.shares as Json | undefined;
+  const data = shares?.data;
+  if (!Array.isArray(data)) return [];
+  return (data as Json[])
+    .map((item) => stringValue(item.link))
+    .filter((link): link is string => Boolean(link));
+}
+
+// Compartilhamento é, na prática, um link: guardar como texto deixa o atendente clicar e dá
+// ao bot algo pra ler. Criar um msg_type "share" exigiria migration do enum do Postgres.
+export function conteudoDeEntrada(message: Json, msgType: string): string {
+  const texto = (message.message as string | undefined)?.trim();
+  if (texto) return texto;
+  const links = extractShareLinks(message);
+  if (links.length === 1) return `🔗 Compartilhou: ${links[0]}`;
+  if (links.length > 1) {
+    return [`🔗 Compartilhou ${links.length} itens:`, ...links].join("\n");
+  }
+  return fallbackContent(msgType);
+}
+
 function inboundMsgType(
   message: Json,
   attachments: InboundAttachment[],
 ): string {
   const text = (message.message as string | undefined)?.trim();
   if (text && attachments.length === 0) return "text";
+  // share sem texto e sem anexo: o conteúdo vira o link, então o tipo é texto
+  if (!text && attachments.length === 0 && extractShareLinks(message).length) {
+    return "text";
+  }
 
   const firstAttachment = attachments[0];
   if (firstAttachment) return msgTypeFromMime(firstAttachment.contentType);

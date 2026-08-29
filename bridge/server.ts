@@ -309,8 +309,9 @@ const version = {
     "social-attachment-subfields",
     "media-relay-retry-404",
     "ig-attachment-hub-auth",
+    "ig-share-link-inbound",
   ],
-  build: "2026-08-29-ig-attachment-auth",
+  build: "2026-08-29-ig-shares",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
