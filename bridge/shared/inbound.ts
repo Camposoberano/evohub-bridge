@@ -1,6 +1,6 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
-import { claimDelivery, type DbClient } from "./supabase.ts";
+import { claimDelivery, type DbClient, releaseDelivery } from "./supabase.ts";
 import { optionalEnv } from "./env.ts";
 import { ensureCustomer } from "./customer.ts";
 import {
@@ -38,42 +38,58 @@ export type InboundAttachment = ChatwootAttachment & {
   sourceUrl?: string;
 };
 
+export type IngestInboundMessage = {
+  from: string;
+  name?: string;
+  metaMessageId?: string;
+  msgType: string;
+  content: string;
+  sentAt?: string;
+  attachments?: InboundAttachment[];
+  outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
+  skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
+  acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
+  referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
+  avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
+};
+
 export async function ingestInbound(
   db: DbClient,
   channel: Json,
-  msg: {
-    from: string;
-    name?: string;
-    metaMessageId?: string;
-    msgType: string;
-    content: string;
-    sentAt?: string;
-    attachments?: InboundAttachment[];
-    outgoing?: boolean; // echo: mensagem enviada pelo aparelho (coexistência) -> entra como saída
-    skipChatwoot?: boolean; // canal nativo: não posta no Chatwoot (evita duplicata), só persiste no banco
-    acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
-    referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
-    avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
-  },
+  msg: IngestInboundMessage,
+): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
+  // O claim é tirado ANTES do trabalho (é ele que impede a corrida entre dois ingests do
+  // mesmo wamid). Se o trabalho falhar, o claim TEM que voltar: sem isso a retentativa do
+  // webhook bate no claim, recebe "duplicate" e a mensagem do cliente some pra sempre.
+  // Medido em 29/08: 73 mensagens perdidas em 24h, 59 delas mídia, por falha transitória
+  // (Chatwoot 502 e download de mídia 404) depois do claim.
+  const claimKey = msg.metaMessageId
+    ? `wa-${channel.id}-${msg.metaMessageId}`
+    : await fallbackInboundDeliveryKey(channel, msg);
+  const claimSource = msg.metaMessageId ? "wa" : "wa-fallback";
+  if (!(await claimDelivery(db, claimKey, claimSource))) {
+    return {
+      inserted: false,
+      reason: msg.metaMessageId ? "duplicate" : "duplicate-fallback",
+    };
+  }
+  try {
+    return await ingestInboundClaimed(db, channel, msg);
+  } catch (error) {
+    await releaseDelivery(db, claimKey).catch((e) =>
+      console.error("inbound: falha ao liberar claim", claimKey, e)
+    );
+    throw error;
+  }
+}
+
+async function ingestInboundClaimed(
+  db: DbClient,
+  channel: Json,
+  msg: IngestInboundMessage,
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
-  if (msg.metaMessageId) {
-    // Claim ATÔMICO por (canal, wamid): impede a corrida (2 ingests concorrentes do mesmo
-    // wamid) de inserir 2 linhas. Cross-canal (mesmo wamid em 2 números) é OK -> chave inclui canal.
-    if (
-      !(await claimDelivery(db, `wa-${channel.id}-${msg.metaMessageId}`, "wa"))
-    ) {
-      return { inserted: false, reason: "duplicate" };
-    }
-  } else {
-    // Alguns provedores não-oficiais enviam retry/eco sem id estável. Sem essa guarda, cada
-    // retry vira uma nova mensagem "incoming" no Chatwoot e pode formar loop pelo webhook.
-    const fallbackKey = await fallbackInboundDeliveryKey(channel, msg);
-    if (!(await claimDelivery(db, fallbackKey, "wa-fallback"))) {
-      return { inserted: false, reason: "duplicate-fallback" };
-    }
-  }
 
   const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
   const inboxId = await resolveInboxIdentifier(
@@ -277,7 +293,14 @@ export async function ingestInbound(
     }
   }
 
+  // Áudio/imagem sem legenda chegam com content vazio. Postar string vazia no Chatwoot é
+  // rejeitado e derrubava a ingestão inteira — 46 áudios perdidos em 24h (medido 29/08).
+  // O rótulo do tipo mantém a mensagem visível e preserva a entrada que abre a janela.
+  const conteudoParaChatwoot = msg.content.trim() ||
+    (attachments.length > 0 ? "" : rotuloDoTipo(msg.msgType));
+
   let cwMsg: (Record<string, unknown> & { id?: number }) | null = null;
+  try {
   if (skip) {
     // nativo: não posta no Chatwoot. Entrada já chega na caixa nativa pelo repasse do EVO Hub.
     cwMsg = null;
@@ -286,7 +309,7 @@ export async function ingestInbound(
     cwMsg = await createConversationMessage(
       conv.chatwoot_conversation_id as number,
       {
-        content: msg.content,
+        content: conteudoParaChatwoot,
         messageType: "outgoing",
         attachments,
       },
@@ -296,7 +319,7 @@ export async function ingestInbound(
     cwMsg = await createConversationMessage(
       conv.chatwoot_conversation_id as number,
       {
-        content: msg.content,
+        content: conteudoParaChatwoot,
         messageType: "incoming",
         attachments,
       },
@@ -307,9 +330,31 @@ export async function ingestInbound(
       inboxId,
       sourceId!,
       conv.chatwoot_conversation_id as number,
-      msg.content,
+      conteudoParaChatwoot,
       acct,
     );
+  }
+  } catch (error) {
+    // Chatwoot fora do ar (502 em rajada é recorrente aqui) não pode custar a mensagem:
+    // persistimos no banco assim mesmo. É o banco que alimenta janela, funil e relatório;
+    // o registro no Chatwoot fica pendente e vira evento pra reconciliação.
+    console.error(
+      "inbound: registro no Chatwoot falhou, persistindo só no banco:",
+      String(error).slice(0, 200),
+    );
+    await db.from("events").insert({
+      source: "inbound",
+      event_type: "chatwoot_post_failed",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: conv.chatwoot_conversation_id ?? null,
+        meta_message_id: msg.metaMessageId ?? null,
+        msg_type: msg.msgType,
+        erro: String(error).slice(0, 300),
+      },
+    }).then(() => {}, () => {});
+    cwMsg = null;
   }
   const chatwootMediaUrl = cwMsg
     ? firstAttachmentUrl(cwMsg)
@@ -395,6 +440,17 @@ export async function ingestInbound(
   }
 
   return { inserted: true, message_id: insertedMessage.id as string };
+}
+
+// Rótulo curto pra mensagem sem texto — o mesmo vocabulário já usado nas notas do funil.
+function rotuloDoTipo(msgType: string): string {
+  const t = normalizeMsgType(msgType);
+  if (t === "audio") return "[áudio]";
+  if (t === "image") return "[imagem]";
+  if (t === "video") return "[vídeo]";
+  if (t === "document") return "[documento]";
+  if (t === "sticker") return "[figurinha]";
+  return "[mensagem sem texto]";
 }
 
 export async function repairInboundMedia(

@@ -161,18 +161,38 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       }
     }
 
-    await ingestInbound(db, channel as Json, {
-      from: msg.from,
-      name: msg.name,
-      metaMessageId: msg.metaMessageId,
-      msgType: msg.msgType,
-      content: msg.content,
-      attachments: msg.attachments,
-      sentAt: msg.sentAt,
-      outgoing: msg.direction === "outgoing",
-      acct,
-      referral: msg.referral,
-    });
+    // Uma mensagem quebrada não pode derrubar o resto do lote. O claim já foi devolvido
+    // pelo ingestInbound, então a retentativa do webhook volta a ser possível; o evento
+    // existe pra essa perda aparecer em vez de sumir no log do container.
+    try {
+      await ingestInbound(db, channel as Json, {
+        from: msg.from,
+        name: msg.name,
+        metaMessageId: msg.metaMessageId,
+        msgType: msg.msgType,
+        content: msg.content,
+        attachments: msg.attachments,
+        sentAt: msg.sentAt,
+        outgoing: msg.direction === "outgoing",
+        acct,
+        referral: msg.referral,
+      });
+    } catch (e) {
+      console.error("uazapi-webhook: ingest falhou", msg.metaMessageId, e);
+      await db.from("events").insert({
+        source: "uazapi",
+        event_type: "inbound_ingest_failed",
+        channel_id: channel.id,
+        payload: {
+          meta_message_id: msg.metaMessageId ?? null,
+          from: msg.from,
+          msg_type: msg.msgType,
+          direction: msg.direction,
+          erro: e instanceof Error ? e.message : String(e),
+        },
+      }).then(() => {}, () => {});
+      continue;
+    }
 
     if (msg.direction === "incoming") {
       if (isNegativeIntent(msg.content)) {

@@ -299,8 +299,10 @@ const version = {
     "social-window-gate-24h",
     "meta-window-403-subcode-2534022",
     "social-token-health-alarm",
+    "inbound-claim-release-on-error",
+    "inbound-survives-chatwoot-failure",
   ],
-  build: "2026-08-29-social-window-gate",
+  build: "2026-08-29-inbound-no-loss",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
