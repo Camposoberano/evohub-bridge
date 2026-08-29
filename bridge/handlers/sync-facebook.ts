@@ -290,6 +290,7 @@ async function syncInbound(
             const attachments = await downloadAttachments(
               metaAttachments,
               result,
+              secret.channel_token as string,
             );
             const msgType = inboundMsgType(message, attachments);
             const content = (message.message as string | undefined)?.trim() ||
@@ -311,7 +312,11 @@ async function syncInbound(
       }
 
       const metaAttachments = extractAttachments(message);
-      const attachments = await downloadAttachments(metaAttachments, result);
+      const attachments = await downloadAttachments(
+        metaAttachments,
+        result,
+        secret.channel_token as string,
+      );
       const msgType = inboundMsgType(message, attachments);
       const content = (message.message as string | undefined)?.trim() ||
         fallbackContent(msgType);
@@ -665,6 +670,7 @@ function chatwootCreatedAtMs(value: unknown): number | null {
 async function downloadAttachments(
   metaAttachments: Json[],
   result: { media_found: number; media_attached: number; media_failed: number },
+  channelToken?: string,
 ): Promise<InboundAttachment[]> {
   const attachments: InboundAttachment[] = [];
   for (const metaAttachment of metaAttachments) {
@@ -673,7 +679,7 @@ async function downloadAttachments(
     if (!attachmentUrl(metaAttachment)) continue;
     result.media_found++;
     try {
-      const downloaded = await downloadAttachment(metaAttachment);
+      const downloaded = await downloadAttachment(metaAttachment, channelToken);
       if (downloaded) {
         attachments.push(downloaded);
         result.media_attached++;
@@ -693,8 +699,28 @@ async function downloadAttachments(
   return attachments;
 }
 
+// Anexo do Instagram não vem da CDN da Meta: a URL aponta pro próprio gateway (api.evohub.ai)
+// e exige `Authorization: Bearer <channel_token>`. Sem o header a resposta é 401 — era a causa
+// dos 5 media_failed que sobraram depois de filtrar os cartões (medido 29/08).
+// O token SÓ vai para o host do Hub: mandá-lo para uma CDN de terceiro seria vazar credencial.
+export function anexoUsaTokenDoCanal(sourceUrl: string, hubUrl: string): boolean {
+  try {
+    return new URL(sourceUrl).host === new URL(hubUrl).host;
+  } catch {
+    return false;
+  }
+}
+
+function cabecalhoDoAnexo(sourceUrl: string, channelToken?: string): HeadersInit {
+  if (!channelToken) return {};
+  return anexoUsaTokenDoCanal(sourceUrl, env("EVOLUTION_HUB_URL"))
+    ? { Authorization: `Bearer ${channelToken}` }
+    : {};
+}
+
 async function downloadAttachment(
   metaAttachment: Json,
+  channelToken?: string,
 ): Promise<InboundAttachment | null> {
   const sourceUrl = attachmentUrl(metaAttachment);
   if (!sourceUrl) return null;
@@ -704,7 +730,9 @@ async function downloadAttachment(
     throw new Error("Meta attachment exceeds size limit");
   }
 
-  const res = await fetch(sourceUrl);
+  const res = await fetch(sourceUrl, {
+    headers: cabecalhoDoAnexo(sourceUrl, channelToken),
+  });
   if (!res.ok) throw new Error(`Meta attachment download ${res.status}`);
 
   const length = Number(res.headers.get("content-length") ?? 0);

@@ -308,8 +308,9 @@ const version = {
     "inbound-survives-chatwoot-failure",
     "social-attachment-subfields",
     "media-relay-retry-404",
+    "ig-attachment-hub-auth",
   ],
-  build: "2026-08-29-media-fixes",
+  build: "2026-08-29-ig-attachment-auth",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
