@@ -13,6 +13,12 @@ import { handleOutgoing } from "./chatwoot-webhook.ts";
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
+type SyncCandidate = {
+  chatwootMessageId: number;
+  message: Json;
+  retryingFailedMessage: boolean;
+};
+
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) {
     return json({ error: "method not allowed" }, 405);
@@ -34,6 +40,7 @@ export async function handle(req: Request): Promise<Response> {
     channels: channels?.length ?? 0,
     conversations_scanned: 0,
     outgoing_found: 0,
+    already_known: 0,
     dispatched: 0,
     skipped: 0,
     errors: [] as string[],
@@ -71,31 +78,48 @@ export async function handle(req: Request): Promise<Response> {
         continue;
       }
 
-      for (const m of messages) {
-        if (!isOutgoing(m) || m.private === true) continue;
-        const created = createdAtMs(m.created_at);
-        if (created && created < cutoffMs) continue;
-        const cwMsgId = m.id as number | undefined;
+      const candidates = recentOutgoingCandidates(messages, cutoffMs);
+      if (!candidates.length) continue;
+      totals.outgoing_found += candidates.length;
+
+      // Uma consulta por conversa substitui uma consulta por mensagem. Em uma janela de
+      // recuperação com muitas peças recentes, isso evita multiplicar o volume no PostgREST.
+      const { data: existingRows, error: existingError } = await db
+        .from("messages")
+        .select("chatwoot_message_id,status")
+        .in(
+          "chatwoot_message_id",
+          candidates.map((candidate) => candidate.chatwootMessageId),
+        );
+      if (existingError) {
+        totals.errors.push(`conv ${cwConvId}: ${existingError.message}`);
+        continue;
+      }
+      const existingByMessageId = new Map<number, string | null>();
+      for (const row of existingRows ?? []) {
+        const id = Number(row.chatwoot_message_id);
+        if (Number.isFinite(id)) {
+          existingByMessageId.set(id, (row.status as string | null) ?? null);
+        }
+      }
+
+      for (const candidate of candidates) {
+        const cwMsgId = candidate.chatwootMessageId;
+        const m = candidate.message;
         const content = (m.content as string | undefined) ?? "";
         const attachments = (m.attachments as Json[] | undefined) ?? [];
-        const chatwootFailed = m.status === "failed";
-        if (!cwMsgId || (!content && attachments.length === 0)) continue;
-        totals.outgoing_found++;
-
-        // dedup leve: já registrada na nossa base -> handleOutgoing também pularia (anti-echo),
-        // mas evita a chamada e o delay defensivo de 600ms à toa.
-        const { data: exist } = await db.from("messages").select("id,status")
-          .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
+        const existingStatus = existingByMessageId.get(cwMsgId);
         // O status do Chatwoot pode continuar "failed" mesmo depois de um retry aceito
         // pelo provedor. O registro local "sent" é a confirmação do bridge e deve encerrar
         // novas tentativas; caso contrário a mesma mensagem sai a cada ciclo de 20s.
-        if (exist && exist.status !== "failed") {
+        if (existingStatus !== undefined && existingStatus !== "failed") {
+          totals.already_known++;
           totals.skipped++;
           continue;
         }
         // Uma mensagem falha recebe no maximo uma nova tentativa automatica. A claim
         // separada e duravel impede que o polling repita a mesma midia vencida a cada ciclo.
-        if (exist?.status === "failed" || chatwootFailed) {
+        if (existingStatus === "failed" || candidate.retryingFailedMessage) {
           const retryClaimed = await claimRetry(db, cwMsgId);
           if (!retryClaimed) {
             totals.skipped++;
@@ -135,6 +159,33 @@ export async function handle(req: Request): Promise<Response> {
     }).then(() => {}, () => {});
   }
   return json(totals);
+}
+
+export function recentOutgoingCandidates(
+  messages: Json[],
+  cutoffMs: number,
+): SyncCandidate[] {
+  const byId = new Map<number, SyncCandidate>();
+  for (const message of messages) {
+    if (!isOutgoing(message) || message.private === true) continue;
+    const created = createdAtMs(message.created_at);
+    if (created && created < cutoffMs) continue;
+    const chatwootMessageId = Number(message.id);
+    const content = (message.content as string | undefined) ?? "";
+    const attachments = (message.attachments as Json[] | undefined) ?? [];
+    if (
+      !Number.isFinite(chatwootMessageId) ||
+      (!content && attachments.length === 0)
+    ) {
+      continue;
+    }
+    byId.set(chatwootMessageId, {
+      chatwootMessageId,
+      message,
+      retryingFailedMessage: message.status === "failed",
+    });
+  }
+  return [...byId.values()];
 }
 
 async function claimRetry(db: Db, cwMsgId: number): Promise<boolean> {

@@ -39,6 +39,11 @@ import { handle as clientes } from "./handlers/clientes.ts";
 import { handle as syncFacebook } from "./handlers/sync-facebook.ts";
 import { handle as syncComments } from "./handlers/sync-comments.ts";
 import { handle as syncChatwootOut } from "./handlers/sync-chatwoot-out.ts";
+import {
+  readSyncOutState,
+  syncOutSinceMinutes,
+  writeSyncOutState,
+} from "./shared/sync-out-state.ts";
 import { handle as labelWindow } from "./handlers/label-window.ts";
 import { handle as syncLabels } from "./handlers/sync-labels.ts";
 import { handle as syncWaLabels } from "./handlers/sync-wa-labels.ts";
@@ -373,35 +378,101 @@ function startCommentsLoop() {
 }
 
 // Saída do WhatsApp por PULL — fallback pro webhook do Chatwoot quando ele para de
-// disparar (Sidekiq travado / webhook pausado por downtime). Varre conversas WhatsApp e
-// entrega as msgs de saída pendentes. Idempotente (claim cw-out-<id> impede duplicar com
-// o webhook). Curto (5s) pra latência baixa do atendimento.
-const SYNC_OUT_INTERVAL_MS = 5_000;
+// disparar (Sidekiq travado / webhook pausado por downtime). O webhook continua sendo a
+// via imediata; o pull normal usa janela curta para não reler meia hora de conversas a cada
+// poucos segundos. Na partida e depois de erro, uma rodada recupera os mesmos 30min que o
+// comportamento anterior cobria.
+const SYNC_OUT_INTERVAL_MS = boundedEnvInt(
+  "SYNC_OUT_POLL_INTERVAL_MS",
+  30_000,
+  5_000,
+  5 * 60_000,
+);
+const SYNC_OUT_STEADY_SINCE_MINUTES = boundedEnvInt(
+  "SYNC_OUT_STEADY_SINCE_MINUTES",
+  2,
+  1,
+  30,
+);
+const SYNC_OUT_STARTUP_SINCE_MINUTES = boundedEnvInt(
+  "SYNC_OUT_STARTUP_SINCE_MINUTES",
+  30,
+  1,
+  1440,
+);
 function startChatwootOutLoop() {
   if (optionalEnv("SYNC_OUT_ENABLED") === "false") {
     console.log("sync-chatwoot-out loop OFF (SYNC_OUT_ENABLED=false)");
     return;
   }
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  const url = `http://internal/sync-chatwoot-out?token=${
-    encodeURIComponent(token)
-  }&since_minutes=30`;
   let running = false;
-  setInterval(async () => {
+  let forceRecovery = false;
+  let lastSuccessfulAt: string | null = null;
+  const run = async () => {
     if (running) return;
     running = true;
+    const sinceMinutes = forceRecovery
+      ? SYNC_OUT_STARTUP_SINCE_MINUTES
+      : syncOutSinceMinutes(
+        lastSuccessfulAt,
+        SYNC_OUT_STEADY_SINCE_MINUTES,
+        SYNC_OUT_STARTUP_SINCE_MINUTES,
+      );
+    const mode = sinceMinutes > SYNC_OUT_STEADY_SINCE_MINUTES
+      ? "recovery"
+      : "steady";
     try {
+      const url = `http://internal/sync-chatwoot-out?token=${
+        encodeURIComponent(token)
+      }&since_minutes=${sinceMinutes}`;
       const res = await syncChatwootOut(new Request(url));
       const body = await res.json();
+      if (res.ok) {
+        lastSuccessfulAt = new Date().toISOString();
+        forceRecovery = false;
+        writeSyncOutState(lastSuccessfulAt).catch((error) =>
+          console.error("sync-chatwoot-out state erro:", error)
+        );
+      } else {
+        forceRecovery = true;
+      }
       if (body.dispatched > 0 || body.errors?.length) {
-        console.log("sync-chatwoot-out (auto):", JSON.stringify(body));
+        console.log(
+          "sync-chatwoot-out (auto):",
+          JSON.stringify({ ...body, mode }),
+        );
       }
     } catch (e) {
+      forceRecovery = true;
       console.error("sync-chatwoot-out (auto) erro:", e);
     } finally {
       running = false;
     }
-  }, SYNC_OUT_INTERVAL_MS);
+  };
+  readSyncOutState().then((state) => {
+    lastSuccessfulAt = state.lastSuccessfulAt ?? null;
+    void run();
+  }).catch(() => {
+    void run();
+  });
+  setInterval(run, SYNC_OUT_INTERVAL_MS);
+  console.log(
+    `sync-chatwoot-out loop ON (${SYNC_OUT_INTERVAL_MS}ms, ` +
+      `steady=${SYNC_OUT_STEADY_SINCE_MINUTES}min, ` +
+      `recovery=${SYNC_OUT_STARTUP_SINCE_MINUTES}min)`,
+  );
+}
+
+function boundedEnvInt(
+  key: string,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const value = Number(optionalEnv(key) ?? fallback);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 // Etiqueta de janela 24h por conversa (WA/FB/IG) — sem isso o atendente não sabe na tela
