@@ -61,6 +61,22 @@ Para audios, o escopo seguro passa a ser:
   (por exemplo, lista de IDs gerada no momento do disparo);
 - nunca incluir mensagens `incoming`, privadas, com mais de um anexo ou com atributos adicionais.
 
+### Registro do piloto de audio - 29/08/2026
+
+Com autorizacao operacional explicita para tratar os candidatos tecnicos como audio de campanha,
+foi executado um unico piloto de 25 mensagens. A selecao preservou a primeira copia de cada
+arquivo e incluiu somente mensagens `outgoing`, publicas, de usuario, sem `source_id`, sem
+atributos adicionais e com exatamente um anexo.
+
+- 25 mensagens removidas pelo endpoint oficial do Chatwoot;
+- 0 falhas; aproximadamente 17,6 MB de anexos removidos;
+- Chatwoot, Sidekiq, Postgres e bridge permaneceram saudaveis;
+- 769 candidatas tecnicas, aproximadamente 470 MB, permanecem sem alteracao.
+
+Nesta versao do Chatwoot, a API de mensagens exige o `display_id` da conversa, e nao o ID
+interno armazenado na tabela. O relatorio tecnico do lote esta protegido na VPS. Nenhum lote
+adicional sera executado sem nova autorizacao apos a observacao do piloto.
+
 ## Solucao escolhida
 
 ### 1. Prevencao no bridge
