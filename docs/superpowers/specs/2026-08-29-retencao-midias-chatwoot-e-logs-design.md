@@ -77,6 +77,17 @@ Nesta versao do Chatwoot, a API de mensagens exige o `display_id` da conversa, e
 interno armazenado na tabela. O relatorio tecnico do lote esta protegido na VPS. Nenhum lote
 adicional sera executado sem nova autorizacao apos a observacao do piloto.
 
+### Fechamento da limpeza autorizada - 29/08/2026
+
+Depois da homologacao do piloto, a operacao foi concluida em lotes de no maximo 100 mensagens.
+Foram removidas 793 copias repetidas, aproximadamente 486 MB de anexos, sempre pelo endpoint
+oficial do Chatwoot. Um audio repetido de 256 kB permaneceu preservado por possuir atributos
+adicionais e, portanto, estar fora do escopo autorizado.
+
+Um reinicio do bridge interrompeu automaticamente um lote intermediario; a rotina nao continuou
+enquanto o novo container nao foi verificado como saudavel. A contagem final do escopo limpo e
+zero. Chatwoot, Sidekiq e Postgres permaneceram saudaveis durante toda a operacao.
+
 ## Solucao escolhida
 
 ### 1. Prevencao no bridge
