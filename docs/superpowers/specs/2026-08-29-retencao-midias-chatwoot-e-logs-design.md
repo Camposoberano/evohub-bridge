@@ -1,0 +1,107 @@
+# Retencao de midias do Chatwoot e logs do Supabase
+
+**Data:** 29/08/2026  
+**Status:** aprovado para planejamento e implementacao controlada
+
+## Contexto e objetivo
+
+A VPS tem capacidade de disco limitada. A auditoria de 29/08 encontrou dois consumos independentes:
+
+- `chatwoot-media`: aproximadamente 22 GB; videos ocupam cerca de 19 GB.
+- `_analytics` do Supabase/Logflare: aproximadamente 66 GB em uma unica tabela de eventos tecnicos.
+
+Dos videos do Chatwoot, cerca de 17 GB pertencem a mensagens de saida da empresa; videos recebidos dos clientes somam aproximadamente 206 MB. Os videos de campanha ja existem em origem controlada e publica no bucket `soberano-out`; as copias no Chatwoot nao sao necessarias para a operacao.
+
+O objetivo e impedir novas copias de campanha, remover com seguranca as copias historicas da empresa e conter o crescimento de logs tecnicos, sem apagar midias de clientes, sem SQL direto no banco de producao e sem interromper atendimento ou campanhas.
+
+## Causa raiz confirmada
+
+1. O bridge envia a campanha ao provedor e registra uma mensagem textual no Chatwoot.
+2. O provedor devolve um eco da propria saida com o anexo original.
+3. A ingestao trata esse eco como uma nova mensagem de saida e publica o anexo no Chatwoot.
+4. O Active Storage grava outra copia no bucket `chatwoot-media`.
+
+Portanto, a correcao preventiva deve reconhecer o eco de uma mensagem ja registrada pelo bridge antes de criar anexo no Chatwoot.
+
+## Escopo aprovado
+
+Incluido:
+
+- videos de saida da empresa em conversas do Chatwoot;
+- videos de campanha antigos, independentemente da idade;
+- bloqueio de novas duplicacoes do mesmo fluxo;
+- relatorio de previa e de execucao por lote;
+- diagnostico e plano separado para os logs `_analytics` do Supabase.
+
+Excluido:
+
+- videos, imagens, audios ou documentos enviados por clientes;
+- exclusao direta de objetos do bucket `chatwoot-media`;
+- SQL direto para alterar mensagens, anexos ou tabelas internas;
+- alteracao de funis, canais, campanhas ou dados comerciais;
+- desativacao imediata de Analytics/Vector sem validacao explicita do impacto no Studio.
+
+## Solucao escolhida
+
+### 1. Prevencao no bridge
+
+Antes de `ingestInbound` publicar uma mensagem de saida com anexo no Chatwoot, o bridge deve procurar uma mensagem local ja registrada para o mesmo canal e `meta_message_id`. Quando ela existir como saida do bridge, o eco apenas atualiza metadados necessarios e encerra o processamento. Nenhum arquivo sera reenviado ao Chatwoot.
+
+Mensagens de saida digitadas manualmente no aparelho e sem correspondente local permanecem no comportamento atual. O ajuste tambem deve manter a protecao anti-duplicidade ja existente para texto.
+
+### 2. Limpeza historica pelo contrato oficial do Chatwoot
+
+Criar uma rotina administrativa de previa e execucao que:
+
+1. Lista mensagens candidatas via API autenticada do Chatwoot.
+2. Seleciona somente mensagens `outgoing`, publicas, com anexo cujo MIME comeca por `video/`.
+3. Exclui a **mensagem e seus anexos** pelo endpoint oficial do Chatwoot. Esse contrato remove o Active Storage associado e evita referencias quebradas no bucket.
+4. Registra somente dados tecnicos de auditoria: momento, lote, total de mensagens, bytes estimados, sucesso, falha e motivo. Nomes, telefones, conteudos e URLs de clientes nao entram no log.
+
+Como apagar a mensagem oficial remove tambem seu cartao da conversa, nao sera feita exclusao bruta de objetos no Storage. O registro local do bridge pode continuar como auditoria comercial, sem midia armazenada pelo Chatwoot.
+
+### 3. Execucao em etapas
+
+1. **Previa:** produzir contagem, espaco estimado, distribuicao por canal e lista tecnica interna de candidatos; nao altera dados.
+2. **Piloto:** apagar no maximo 25 mensagens candidatas, fora de horario de campanha; conferir saude do Chatwoot, entrega de mensagens e espaco liberado.
+3. **Lotes:** executar em blocos pequenos e idempotentes, com pausa automatica ao primeiro erro repetido ou degradacao do Chatwoot.
+4. **Fechamento:** emitir relatorio com selecionadas, removidas, ignoradas, falhas, bytes liberados e verificacao de que nenhuma mensagem `incoming` foi atingida.
+
+Cada etapa mutavel exige autorizacao operacional explicita antes de rodar em producao.
+
+## Logs do Supabase
+
+O crescimento de `_analytics` e independente das conversas: a tabela principal de Logflare cresceu de cerca de 55 GB para 66 GB em seis dias. Analytics/Vector e opcional na instalacao self-hosted; banco, Auth, Storage e Realtime continuam funcionando sem ele.
+
+Fase posterior, separada da limpeza de midias:
+
+1. Capturar uma previa do compose e das necessidades reais do Logs Explorer.
+2. Escolher explicitamente entre manter logs com retencao externa/observabilidade dedicada ou desativar Analytics/Vector local.
+3. Testar a configuracao fora do horario comercial e confirmar que Studio, Storage, Auth, Realtime e Bridge seguem saudaveis.
+4. Somente depois definir a remocao controlada do historico antigo conforme o caminho escolhido.
+
+Nao sera executado `DELETE` direto nas tabelas `_analytics`.
+
+## Seguranca e rollback
+
+- A rotina usa token administrativo ja configurado, nunca exposto em codigo, logs ou documentacao.
+- O backup validado de 23/08 permanece preservado fora da VPS.
+- Nenhuma exclusao ocorre sem modo `confirm` e identificador de lote.
+- Falhas isoladas ficam registradas e nao sao repetidas cegamente.
+- A prevencao de duplicacao tem feature flag para retorno imediato ao comportamento anterior caso a homologacao detecte perda de mensagens manuais.
+- A limpeza historica e irreversivel para os anexos removidos; por isso existe previa, piloto e lote limitado.
+
+## Criterios de aceite
+
+1. Um video de campanha enviado pelo bridge nao cria nova copia em `chatwoot-media` quando chega o eco do provedor.
+2. Um video recebido de cliente continua aparecendo e armazenado normalmente.
+3. Um video manual de atendente continua sendo entregue e registrado conforme o fluxo atual.
+4. A previa nao altera mensagens, anexos ou Storage.
+5. O piloto remove somente mensagens de video `outgoing` e o espaco liberado e mensuravel.
+6. Chatwoot, bridge, Supabase DB, Storage, Auth, Realtime e campanhas permanecem saudaveis apos cada lote.
+7. O relatorio final nao contem dados pessoais ou conteudo de conversas.
+
+## Referencias tecnicas
+
+- Chatwoot API: `DELETE /api/v1/accounts/{account_id}/conversations/{conversation_id}/messages/{message_id}` remove a mensagem e seus anexos.
+- Supabase self-hosted: Analytics/Logflare e Vector sao componentes opcionais; a decisao sobre eles sera tratada como mudanca de infraestrutura independente.
