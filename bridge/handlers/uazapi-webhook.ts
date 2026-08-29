@@ -210,6 +210,15 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         continue;
       }
 
+      // Número NOSSO falando com número NOSSO: alerta operacional, teste entre instâncias,
+      // repasse interno. A mensagem é ingerida (fica no histórico), mas nada de automação —
+      // sem isso o alerta que cai no 11910 aciona o bot de intenção, que responde pro 5895,
+      // que ingere de volta: laço entre dois números da casa.
+      if (msg.from && await isNumeroDaCasa(db, msg.from)) {
+        console.log("entrada de número interno: automação ignorada,", msg.from);
+        continue;
+      }
+
       // Bot travado à mão (label bot-off): a mensagem já foi ingerida acima. Daqui pra
       // baixo é resposta automática — qualificação, catálogo e intenção — e nada disso
       // deve sair por cima do atendente que calou o bot.
@@ -443,6 +452,33 @@ async function handleUazapiIntent(
 
   await handleMenuClick(db, channel, from, intent.menu, acct);
   console.log("uazapi-webhook: intent disparado", intent.name, from);
+}
+
+// Cache curto: a lista de números próprios muda quando alguém cadastra canal, não a cada
+// mensagem.
+let numerosDaCasa: Set<string> | null = null;
+let numerosDaCasaEm = 0;
+
+export function normalizarNumero(valor: string): string {
+  return String(valor ?? "").replace(/\D/g, "");
+}
+
+export async function isNumeroDaCasa(
+  db: ReturnType<typeof admin>,
+  numero: string,
+): Promise<boolean> {
+  const alvo = normalizarNumero(numero);
+  if (!alvo) return false;
+  if (!numerosDaCasa || Date.now() - numerosDaCasaEm > 60_000) {
+    const { data } = await db.from("channels").select("phone_number");
+    numerosDaCasa = new Set(
+      (data ?? [])
+        .map((c: Json) => normalizarNumero(String(c.phone_number ?? "")))
+        .filter((n: string) => n.length >= 10),
+    );
+    numerosDaCasaEm = Date.now();
+  }
+  return numerosDaCasa.has(alvo);
 }
 
 async function findChannelForInstance(

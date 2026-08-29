@@ -312,8 +312,9 @@ const version = {
     "ig-share-link-inbound",
     "operational-alert-delivery",
     "monitor-token-silence-inbound-loss",
+    "internal-number-no-automation",
   ],
-  build: "2026-08-29-alerta-silencio-proporcional",
+  build: "2026-08-29-alerta-numero-interno",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
