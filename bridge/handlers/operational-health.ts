@@ -14,6 +14,9 @@ import {
 
 type Json = Record<string, unknown>;
 
+// Motivos que marcam desligamento deliberado do canal, escritos à mão em channels.last_error.
+export const DESLIGAMENTO_INTENCIONAL = /preservado e suspenso|duplicad/i;
+
 async function authenticated(req: Request): Promise<boolean> {
   const client = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
     global: {
@@ -115,11 +118,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const disconnectedChannels = channels.filter((item) =>
     item.status !== "active" && item.status !== "connected"
   );
+  // Canal desligado COM motivo declarado é decisão, não incidente: vira warning (que não é
+  // entregue) em vez de crítico. Sem isso o "Atendimento FB", desativado de propósito por ser
+  // duplicata do Mega Sorgo, mandaria alerta de hora em hora para sempre.
   const knownSuspended =
     disconnectedChannels.filter((item) =>
-      String(item.last_error ?? "").toLowerCase().includes(
-        "preservado e suspenso",
-      )
+      DESLIGAMENTO_INTENCIONAL.test(String(item.last_error ?? ""))
     ).length;
   const disconnected = disconnectedChannels.length - knownSuspended;
 

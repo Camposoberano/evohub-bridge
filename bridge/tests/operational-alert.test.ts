@@ -4,6 +4,7 @@ import {
   formatarAlerta,
   horasDeSilencioParaAlarmar,
 } from "../shared/operational-alert.ts";
+import { DESLIGAMENTO_INTENCIONAL } from "../handlers/operational-health.ts";
 
 // 29/08: o monitor gravou `channel_disconnected` crítico junto com 5 avisos crônicos, e o
 // conjunto ficou numa tabela que ninguém lê. Estes testes prendem as duas regras do conserto:
@@ -62,4 +63,21 @@ Deno.test("limiar de silêncio acompanha o volume do canal", () => {
   assertEquals(horasDeSilencioParaAlarmar(700), 3); // ~100/dia: 3h calado é incidente
   assertEquals(horasDeSilencioParaAlarmar(70), 6); // ~10/dia
   assertEquals(horasDeSilencioParaAlarmar(25), 36); // ~3,5/dia: um sábado é normal
+});
+
+// "Atendimento FB" está inativo de propósito (duplicata do Mega Sorgo). Como crítico, mandaria
+// alerta de hora em hora para sempre — o alerta novo morreria de ruído na primeira noite.
+Deno.test("canal desligado com motivo declarado não é incidente", () => {
+  assertEquals(
+    DESLIGAMENTO_INTENCIONAL.test(
+      "Duplicado -- canal 'Mega Sorgo Santa Elisa' (pagina 101431812463255) ja cobre esse atendimento",
+    ),
+    true,
+  );
+  assertEquals(
+    DESLIGAMENTO_INTENCIONAL.test("canal preservado e suspenso pelo cliente"),
+    true,
+  );
+  assertEquals(DESLIGAMENTO_INTENCIONAL.test("token expirado"), false);
+  assertEquals(DESLIGAMENTO_INTENCIONAL.test(""), false);
 });
