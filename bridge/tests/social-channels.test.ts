@@ -14,6 +14,11 @@ import {
   matchSocialAutoReply,
   normalizeSocialText,
 } from "../shared/social-autoreply.ts";
+import {
+  isMetaWindowError,
+  metaDeliveryStatus,
+} from "../shared/meta-errors.ts";
+import { windowState } from "../shared/window.ts";
 
 Deno.test("comentário usa a rota correta para cada plataforma", () => {
   assertEquals(
@@ -202,4 +207,89 @@ Deno.test("entrada usa API admin quando a rota pública antiga retorna 404", asy
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+// --- janela Meta em canal social -------------------------------------------------
+// 27-29/08: 47 saídas do Instagram viraram "falha genérica" porque o IG recusa com 403
+// (subcode 2534022) e o classificador só olhava 400 + texto em inglês/português da Cloud API.
+
+Deno.test("erro de janela do Instagram (403/2534022) conta como bloqueio", () => {
+  const igError = {
+    error: {
+      message: "This message is sent outside of allowed window.",
+      type: "IGApiException",
+      code: 10,
+      error_subcode: 2534022,
+    },
+  };
+  assertEquals(isMetaWindowError(403, igError), true);
+  assertEquals(metaDeliveryStatus(403, igError), "blocked");
+});
+
+Deno.test("variantes de texto da Meta em português contam como janela", () => {
+  const espaco = {
+    error: { code: 10, message: "(#10) Essa mensagem foi enviada fora do espaço de tempo permitido." },
+  };
+  const periodo = {
+    error: { code: 10, message: "Essa mensagem foi enviada fora do período permitido." },
+  };
+  assertEquals(isMetaWindowError(400, espaco), true);
+  assertEquals(isMetaWindowError(400, periodo), true);
+});
+
+Deno.test("falha que não é de janela continua sendo falha comum", () => {
+  const expirado = {
+    error: { code: 190, message: "Error validating access token: Session has expired" },
+  };
+  assertEquals(isMetaWindowError(401, expirado), false);
+  assertEquals(metaDeliveryStatus(401, expirado), "failed");
+  assertEquals(isMetaWindowError(403, { error: { code: 551, message: "Esta pessoa não está disponível." } }), false);
+});
+
+function dbComUltimaEntrada(sentAt: string | null) {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            order: () => ({
+              limit: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({ data: sentAt ? { sent_at: sentAt } : null }),
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+  };
+}
+
+Deno.test("Instagram sem phone_number_id tem janela de 24h, não 'sem-janela'", async () => {
+  const ha25h = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  const fechada = await windowState(
+    dbComUltimaEntrada(ha25h) as never,
+    { id: "conv-1" },
+    { type: "instagram", phone_number_id: null },
+  );
+  assertEquals(fechada.tipo, "24h");
+  assertEquals(fechada.aberta, false);
+
+  const ha2h = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const aberta = await windowState(
+    dbComUltimaEntrada(ha2h) as never,
+    { id: "conv-2" },
+    { type: "facebook", phone_number_id: null },
+  );
+  assertEquals(aberta.aberta, true);
+});
+
+Deno.test("canal não-oficial (uazapi/ryzeapi) continua sem janela", async () => {
+  const win = await windowState(
+    dbComUltimaEntrada(null) as never,
+    { id: "conv-3" },
+    { type: "whatsapp", phone_number_id: null },
+  );
+  assertEquals(win.tipo, "sem-janela");
+  assertEquals(win.aberta, true);
 });

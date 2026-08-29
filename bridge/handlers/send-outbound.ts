@@ -121,8 +121,10 @@ export async function handle(req: Request): Promise<Response> {
 
   // GATE de janela (Meta): funil/n8n mandando mensagem livre com janela fechada = rejeição
   // silenciosa e custo perdido. Bloqueia e deixa NOTA PRIVADA na conversa (1x/dia por conversa,
-  // pra retry do cron não virar spam de nota).
-  if (isWhatsapp && !hybrid) {
+  // pra retry do cron não virar spam de nota). Vale pra DM oficial de qualquer produto Meta —
+  // WhatsApp Cloud, Messenger e Instagram; quem decide se há janela é windowState (comentário
+  // público não tem janela e já foi barrado acima).
+  if (!hybrid) {
     const win = await windowState(db, conv as Json, channel as Json);
     if (!win.aberta) {
       const dia = new Date().toISOString().slice(0, 10);
@@ -130,7 +132,10 @@ export async function handle(req: Request): Promise<Response> {
         const nota =
           `🚫 *JANELA ${win.tipo.toUpperCase()} FECHADA — envio automático (funil/campanha) bloqueado.*\n\n` +
           `As próximas peças NÃO serão entregues até o cliente responder. ` +
-          `Opções: template aprovado (/template <nome>) ou aguardar resposta do cliente.`;
+          // Messenger e Instagram não têm template aprovado: a janela só reabre pelo cliente.
+          (isWhatsapp
+            ? `Opções: template aprovado (/template <nome>) ou aguardar resposta do cliente.`
+            : `Este canal não tem template — a janela só reabre quando o cliente mandar uma nova mensagem.`);
         try {
           await createConversationMessage(cwConvId, {
             content: nota,
@@ -144,7 +149,8 @@ export async function handle(req: Request): Promise<Response> {
       db.from("events").insert({
         source: "funil",
         event_type: "send_blocked_window",
-        payload: { conv: cwConvId, type, janela: win.tipo },
+        channel_id: channel.id,
+        payload: { conv: cwConvId, type, janela: win.tipo, canal: channel.type },
       }).then(() => {}, () => {});
       return json({ ok: false, blocked: "janela-fechada", janela: win.tipo });
     }

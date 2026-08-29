@@ -296,8 +296,11 @@ const version = {
     "recovery-chain-1-2-4-7",
     "recovery-chain-funil-abandonado",
     "version-uptime",
+    "social-window-gate-24h",
+    "meta-window-403-subcode-2534022",
+    "social-token-health-alarm",
   ],
-  build: "2026-08-04-recovery-chain",
+  build: "2026-08-29-social-window-gate",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
