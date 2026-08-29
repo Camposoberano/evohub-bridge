@@ -44,6 +44,17 @@ const TITULOS: Record<string, string> = {
   overdue_funnel_queue: "Fila do funil atrasada",
 };
 
+// Silêncio significa coisas diferentes conforme o volume do canal. O 5895 recebe ~100 por
+// dia: 6h calado já é incidente. O Atendimento IG recebe 4 a 11 por dia e passar um sábado
+// sem mensagem é rotina — foi exatamente o falso positivo que o limiar fixo de 12h produziu
+// na primeira rodada. Daí o corte proporcional à média diária da última semana.
+export function horasDeSilencioParaAlarmar(entradasNaSemana: number): number {
+  const mediaDiaria = entradasNaSemana / 7;
+  if (mediaDiaria >= 50) return 3;
+  if (mediaDiaria >= 10) return 6;
+  return 36;
+}
+
 export function alertasParaEntregar(
   issues: OperationalIssue[],
 ): OperationalIssue[] {

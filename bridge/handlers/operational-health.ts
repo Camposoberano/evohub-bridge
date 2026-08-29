@@ -3,6 +3,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { getMeta } from "../shared/hub.ts";
 import {
   entregarAlertas,
+  horasDeSilencioParaAlarmar,
   type OperationalIssue,
 } from "../shared/operational-alert.ts";
 import {
@@ -148,7 +149,6 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   // 2) canal que costuma receber e parou: só alarma quem tem volume (>=20 entradas em 7d),
   //    senão canal naturalmente quieto viraria alerta todo dia.
   const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const since12h = new Date(now.getTime() - 12 * 60 * 60 * 1000).toISOString();
   const canaisMudos: string[] = [];
   for (const canal of activeChannels) {
     const semana = await exactCount(
@@ -156,11 +156,15 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", since7d),
     );
     if (semana < 20) continue;
+    const horas = horasDeSilencioParaAlarmar(semana);
+    const corte = new Date(now.getTime() - horas * 60 * 60 * 1000).toISOString();
     const recente = await exactCount(
       db.from("messages").select("id", { count: "exact", head: true })
-        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", since12h),
+        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", corte),
     );
-    if (recente === 0) canaisMudos.push(`${canal.name} (${semana} em 7d, 0 em 12h)`);
+    if (recente === 0) {
+      canaisMudos.push(`${canal.name} (${semana} em 7d, 0 em ${horas}h)`);
+    }
   }
 
   // 3) mensagem perdida na ingestão: os eventos existem desde o conserto do claim órfão,

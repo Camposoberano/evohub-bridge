@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   alertasParaEntregar,
   formatarAlerta,
+  horasDeSilencioParaAlarmar,
 } from "../shared/operational-alert.ts";
 
 // 29/08: o monitor gravou `channel_disconnected` crítico junto com 5 avisos crônicos, e o
@@ -53,4 +54,12 @@ Deno.test("texto nomeia o problema e carrega o detalhe", () => {
     true,
   );
   assertEquals(texto.includes("lead_missing_avatar"), false);
+});
+
+// Primeira rodada em produção alarmou "Atendimento IG (25 em 7d, 0 em 12h)" num sábado —
+// canal que recebe 4 a 11 por dia. Silêncio só é incidente em relação ao ritmo do canal.
+Deno.test("limiar de silêncio acompanha o volume do canal", () => {
+  assertEquals(horasDeSilencioParaAlarmar(700), 3); // ~100/dia: 3h calado é incidente
+  assertEquals(horasDeSilencioParaAlarmar(70), 6); // ~10/dia
+  assertEquals(horasDeSilencioParaAlarmar(25), 36); // ~3,5/dia: um sábado é normal
 });

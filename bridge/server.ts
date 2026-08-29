@@ -313,7 +313,7 @@ const version = {
     "operational-alert-delivery",
     "monitor-token-silence-inbound-loss",
   ],
-  build: "2026-08-29-alerta-operacional",
+  build: "2026-08-29-alerta-silencio-proporcional",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
