@@ -18,16 +18,33 @@ async function ensureBucket() {
   bucketReady = true;
 }
 
+// O webhook do Chatwoot chega antes do anexo estar servível pelo ActiveStorage: a primeira
+// leitura devolve 404 e segundos depois a mesma URL responde 200. Em 28/08 isso derrubou 17
+// envios de mídia em rajada, e no dia seguinte todas as URLs daquelas mensagens abriam
+// normalmente. Tentar de novo resolve; falhar na primeira tentativa perde o envio.
+const RELAY_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
+
+async function baixarComRetry(sourceUrl: string): Promise<Response> {
+  let ultimoStatus = 0;
+  for (let tentativa = 0; ; tentativa++) {
+    const response = await fetch(sourceUrl, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (response.ok) return response;
+    ultimoStatus = response.status;
+    // 4xx que não seja 404 é definitivo (403/410): repetir só queima tempo.
+    const valeRepetir = response.status === 404 || response.status >= 500;
+    if (!valeRepetir || tentativa >= RELAY_RETRY_DELAYS_MS.length) break;
+    await new Promise((r) => setTimeout(r, RELAY_RETRY_DELAYS_MS[tentativa]));
+  }
+  throw new Error(`download da mídia retornou HTTP ${ultimoStatus}`);
+}
+
 export async function relayProviderMedia(
   sourceUrl: string,
   fallbackName = "arquivo",
 ): Promise<string> {
-  const response = await fetch(sourceUrl, {
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok) {
-    throw new Error(`download da mídia retornou HTTP ${response.status}`);
-  }
+  const response = await baixarComRetry(sourceUrl);
 
   const declaredSize = Number(response.headers.get("content-length") ?? "0");
   if (declaredSize > MAX_BYTES) {

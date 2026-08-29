@@ -236,8 +236,13 @@ async function syncInbound(
     if (!Number.isNaN(updatedMs) && updatedMs < opts.cutoffMs) continue;
     result.conversations_scanned++;
 
+    // `attachments` sem subcampos deixa a Graph escolher o que devolve: vinham cartões
+    // `generic_template` (os botões que NÓS mandamos) misturados com arquivo de verdade, e
+    // sem garantia de trazer a URL. Pedindo os campos na mão o retorno fica determinístico.
+    const attachmentFields =
+      "attachments{id,name,mime_type,size,file_url,image_data,video_data,audio_data}";
     const messagesPath =
-      `${conversation.id}/messages?fields=id,from,to,message,created_time,attachments&limit=${opts.messageLimit}`;
+      `${conversation.id}/messages?fields=id,from,to,message,created_time,${attachmentFields}&limit=${opts.messageLimit}`;
     const msgRes = await getMeta(secret.channel_token as string, messagesPath);
     if (!msgRes.ok) {
       throw new Error(
@@ -663,6 +668,9 @@ async function downloadAttachments(
 ): Promise<InboundAttachment[]> {
   const attachments: InboundAttachment[] = [];
   for (const metaAttachment of metaAttachments) {
+    // Cartão/template (generic_template, botões, resposta rápida) não é arquivo: não tem URL
+    // pra baixar e contá-lo como mídia falhada inflava media_failed com ruído nosso mesmo.
+    if (!attachmentUrl(metaAttachment)) continue;
     result.media_found++;
     try {
       const downloaded = await downloadAttachment(metaAttachment);
@@ -672,7 +680,13 @@ async function downloadAttachments(
       } else {
         result.media_failed++;
       }
-    } catch {
+    } catch (e) {
+      // Sem o motivo no log, media_failed é um número sem diagnóstico — foi o que atrasou
+      // a investigação de 29/08.
+      console.warn(
+        "sync-facebook: download de anexo falhou:",
+        String(e).slice(0, 180),
+      );
       result.media_failed++;
     }
   }

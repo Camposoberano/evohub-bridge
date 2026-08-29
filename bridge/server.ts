@@ -301,8 +301,10 @@ const version = {
     "social-token-health-alarm",
     "inbound-claim-release-on-error",
     "inbound-survives-chatwoot-failure",
+    "social-attachment-subfields",
+    "media-relay-retry-404",
   ],
-  build: "2026-08-29-inbound-no-loss",
+  build: "2026-08-29-media-fixes",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
