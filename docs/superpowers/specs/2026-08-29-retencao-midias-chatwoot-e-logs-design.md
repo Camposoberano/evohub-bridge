@@ -41,6 +41,26 @@ Excluido:
 - alteracao de funis, canais, campanhas ou dados comerciais;
 - desativacao imediata de Analytics/Vector sem validacao explicita do impacto no Studio.
 
+### Adendo: audios repetidos de campanha
+
+A auditoria encontrou 794 mensagens de audio `outgoing` repetidas, equivalentes a cerca de
+487 MB. Elas sao mensagens publicas da empresa, sem `source_id`; 793 nao possuem atributos
+adicionais e uma possui atributos adicionais, que fica fora de qualquer limpeza.
+
+O Chatwoot historico nao registra um marcador confiavel que diferencie, entre essas mensagens
+antigas, um audio automatico de campanha de um audio manual com o mesmo arquivo. A tentativa de
+correlacionar os hashes com o bucket `soberano-out` tambem nao foi conclusiva: os dois sistemas
+registram copias com hashes diferentes. Portanto, **nao se pode excluir automaticamente esses
+audios antigos com seguranca suficiente ainda**.
+
+Para audios, o escopo seguro passa a ser:
+
+- impedir novas copias pelo mesmo mecanismo de eco descrito nesta especificacao;
+- registrar daqui em diante a origem `campaign` no evento local antes de publicar no Chatwoot;
+- manter os 794 candidatos historicos intactos ate existir um criterio verificavel por campanha
+  (por exemplo, lista de IDs gerada no momento do disparo);
+- nunca incluir mensagens `incoming`, privadas, com mais de um anexo ou com atributos adicionais.
+
 ## Solucao escolhida
 
 ### 1. Prevencao no bridge
