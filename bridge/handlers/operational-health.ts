@@ -1,5 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { env, optionalEnv } from "../shared/env.ts";
+import { getMeta } from "../shared/hub.ts";
+import {
+  entregarAlertas,
+  type OperationalIssue,
+} from "../shared/operational-alert.ts";
 import {
   admin,
   claimDeliveryWithTtl,
@@ -117,8 +122,76 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     ).length;
   const disconnected = disconnectedChannels.length - knownSuspended;
 
+  // --- checagens acrescentadas depois do incidente de 29/08 -----------------------------
+  // 1) token social morre em silêncio: o do Atendimento IG expirou 26/08 e o canal ficou
+  //    ~28h mudo; o do sorgo brasileiro ficou 3 dias. `status` continua "active" nos dois.
+  const canaisSociais = activeChannels.filter((c) =>
+    c.type === "facebook" || c.type === "instagram"
+  );
+  const tokensInvalidos: string[] = [];
+  for (const canal of canaisSociais) {
+    const { data: secret } = await db.from("channel_secrets")
+      .select("channel_token").eq("channel_id", canal.id).maybeSingle();
+    const token = secret?.channel_token as string | undefined;
+    if (!token) {
+      tokensInvalidos.push(`${canal.name}: sem token`);
+      continue;
+    }
+    try {
+      const r = await getMeta(token, "me?fields=id");
+      if (!r.ok) tokensInvalidos.push(`${canal.name}: HTTP ${r.status}`);
+    } catch {
+      // erro de rede não é token inválido — não vira alarme
+    }
+  }
+
+  // 2) canal que costuma receber e parou: só alarma quem tem volume (>=20 entradas em 7d),
+  //    senão canal naturalmente quieto viraria alerta todo dia.
+  const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const since12h = new Date(now.getTime() - 12 * 60 * 60 * 1000).toISOString();
+  const canaisMudos: string[] = [];
+  for (const canal of activeChannels) {
+    const semana = await exactCount(
+      db.from("messages").select("id", { count: "exact", head: true })
+        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", since7d),
+    );
+    if (semana < 20) continue;
+    const recente = await exactCount(
+      db.from("messages").select("id", { count: "exact", head: true })
+        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", since12h),
+    );
+    if (recente === 0) canaisMudos.push(`${canal.name} (${semana} em 7d, 0 em 12h)`);
+  }
+
+  // 3) mensagem perdida na ingestão: os eventos existem desde o conserto do claim órfão,
+  //    mas ninguém os consumia.
+  const since1h = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+  const perdidasIngest = await exactCount(
+    db.from("events").select("id", { count: "exact", head: true })
+      .in("event_type", ["inbound_ingest_failed", "chatwoot_post_failed"])
+      .gte("received_at", since1h),
+  );
+
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
+    {
+      key: "social_token_invalid",
+      severity: "critical",
+      count: tokensInvalidos.length,
+      detail: tokensInvalidos.join("; ") || undefined,
+    },
+    {
+      key: "channel_silent",
+      severity: "critical",
+      count: canaisMudos.length,
+      detail: canaisMudos.join("; ") || undefined,
+    },
+    {
+      key: "inbound_lost",
+      severity: "critical",
+      count: perdidasIngest,
+      detail: perdidasIngest ? "última hora" : undefined,
+    },
     {
       key: "channel_known_suspended",
       severity: "warning",
@@ -171,8 +244,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     }
   }
 
+  const entrega = await entregarAlertas(
+    db,
+    issues as OperationalIssue[],
+    now,
+  ).catch((e) => {
+    console.error("operational-alert erro:", e);
+    return { enviado: false, motivo: "excecao" };
+  });
+
   return {
     ok: !issues.some((issue) => issue.severity === "critical"),
+    alerta: entrega,
     checked_at: now.toISOString(),
     monitoring_window: monitoringWindow,
     ai: {

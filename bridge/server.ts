@@ -310,8 +310,10 @@ const version = {
     "media-relay-retry-404",
     "ig-attachment-hub-auth",
     "ig-share-link-inbound",
+    "operational-alert-delivery",
+    "monitor-token-silence-inbound-loss",
   ],
-  build: "2026-08-29-ig-shares",
+  build: "2026-08-29-alerta-operacional",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
