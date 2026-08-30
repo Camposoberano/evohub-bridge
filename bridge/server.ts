@@ -316,7 +316,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-guarda-loops",
+  build: "2026-08-30-guarda-loops-2",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -380,8 +380,10 @@ function startCommentsLoop() {
       console.error("sync-comments (auto) erro:", e);
     }
   };
-  setTimeout(run, 90_000);
-  setInterval(run, COMMENTS_INTERVAL_MS);
+  agendarLoop("comments", run, {
+    intervaloMs: COMMENTS_INTERVAL_MS,
+    primeiraEmMs: 90_000,
+  });
 }
 
 // Saída do WhatsApp por PULL — fallback pro webhook do Chatwoot quando ele para de
@@ -593,8 +595,10 @@ function startRollupLoop() {
       console.error("metrics-rollup (auto) erro:", e);
     }
   };
-  setTimeout(run, 60_000);
-  setInterval(run, ROLLUP_INTERVAL_MS);
+  agendarLoop("rollup", run, {
+    intervaloMs: ROLLUP_INTERVAL_MS,
+    primeiraEmMs: 60_000,
+  });
 }
 
 // Retenção de mídia — loop diário. Dry-run por padrão (só conta); apaga de verdade
@@ -615,8 +619,11 @@ function startRetentionLoop() {
       console.error("media-retention (auto) erro:", e);
     }
   };
-  setTimeout(run, 120_000);
-  setInterval(run, 24 * 60 * 60 * 1000);
+  agendarLoop("retention", run, {
+    intervaloMs: 24 * 60 * 60 * 1000,
+    primeiraEmMs: 120_000,
+    travaMaximaMs: 2 * 60 * 60_000,
+  });
 }
 
 // Enriquecimento de clientes (uazapi) — loop sempre-on, resumível. Só roda se
@@ -710,8 +717,11 @@ function startDataCleanupLoop() {
       console.error("data-cleanup erro:", e);
     }
   };
-  setTimeout(run, 180_000);
-  setInterval(run, 24 * 60 * 60 * 1000);
+  agendarLoop("data-cleanup", run, {
+    intervaloMs: 24 * 60 * 60 * 1000,
+    primeiraEmMs: 180_000,
+    travaMaximaMs: 2 * 60 * 60_000,
+  });
 }
 
 // Macro commands via labels — Chatwoot macros add labels (cmd-*), mas NÃO disparam
@@ -1144,8 +1154,10 @@ function startChannelSyncLoop() {
       console.error("channel-sync erro:", e);
     }
   };
-  setTimeout(run, 45_000);
-  setInterval(run, 5 * 60 * 1000);
+  agendarLoop("channel-sync", run, {
+    intervaloMs: 5 * 60 * 1000,
+    primeiraEmMs: 45_000,
+  });
 }
 
 function startFunnelQueueLoop() {
@@ -1336,8 +1348,10 @@ function startDeclineGuardLoop() {
       console.error("decline-guard loop erro:", e);
     }
   };
-  setTimeout(run, 90_000);
-  setInterval(run, DECLINE_GUARD_INTERVAL_MS);
+  agendarLoop("decline-guard", run, {
+    intervaloMs: DECLINE_GUARD_INTERVAL_MS,
+    primeiraEmMs: 90_000,
+  });
   console.log("decline-guard loop ON (5min)");
 }
 
@@ -1361,8 +1375,10 @@ function startFunnelRecoveryLoop() {
       console.error("funnel-recovery erro:", e);
     }
   };
-  setTimeout(run, 60_000);
-  setInterval(run, 5 * 60_000);
+  agendarLoop("funnel-recovery", run, {
+    intervaloMs: 5 * 60_000,
+    primeiraEmMs: 60_000,
+  });
   console.log(
     "funnel-recovery loop ON (5min, follow-up 10h úteis + auto-resume)",
   );
