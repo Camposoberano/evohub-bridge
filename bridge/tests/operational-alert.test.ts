@@ -135,3 +135,16 @@ Deno.test("histórico curto demais não vira alarme", () => {
   assertEquals(avaliarSilencio([agora - 50 * H], [agora], agora).anormal, false);
   assertEquals(avaliarSilencio([], [], agora).anormal, false);
 });
+
+// 30/08, 21:23: o alerta acusou "5895 — 150.4h calado" num canal que tinha recebido 54
+// minutos antes. Causa: o monitor pedia 3000 linhas em ordem ASCENDENTE e o canal tem 7.615
+// por semana, então enxergava as 3.000 mais ANTIGAS. A avaliação estava certa; a entrada
+// dela é que vinha truncada pelo lado errado.
+Deno.test("lista em ordem decrescente é avaliada corretamente", () => {
+  const entradasDesc: number[] = [];
+  for (let i = 0; i < 200; i++) entradasDesc.push(agora - i * 20 * 60_000);
+  // a mais recente é `agora`; em ordem decrescente ela vem PRIMEIRO
+  const r = avaliarSilencio(entradasDesc, [agora - H], agora);
+  assertEquals(r.anormal, false, "recebeu agora há pouco: não pode alarmar");
+  assertEquals(r.silencioAtualH < 0.1, true);
+});

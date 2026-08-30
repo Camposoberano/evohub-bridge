@@ -155,17 +155,26 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const canaisMudos: string[] = [];
   for (const canal of activeChannels) {
-    // uma consulta por canal traz entrada E saída da semana: o silêncio é comparado com o
-    // hábito do próprio canal, e só conta se nós ainda estivermos enviando.
-    const { data: semana } = await db.from("messages")
-      .select("sent_at,direction")
-      .eq("channel_id", canal.id).gte("sent_at", since7d)
-      .order("sent_at", { ascending: true }).limit(3000);
-    const linhas = (semana ?? []) as Json[];
-    const entradas = linhas.filter((m) => m.direction === "in")
+    // SEMPRE em ordem decrescente. A primeira versão pedia 3000 linhas em ordem
+    // ASCENDENTE: no 5895, que tem 7.615 linhas por semana, isso entregava as 3.000 mais
+    // ANTIGAS, a "última entrada" caía em 24/08 e o alerta acusou 150h de silêncio num
+    // canal que tinha recebido 54 minutos antes. Truncamento silencioso vindo do próprio
+    // monitor.
+    const { data: recentes } = await db.from("messages")
+      .select("sent_at").eq("channel_id", canal.id).eq("direction", "in")
+      .gte("sent_at", since7d)
+      .order("sent_at", { ascending: false }).limit(500);
+    const entradas = ((recentes ?? []) as Json[])
       .map((m) => Date.parse(String(m.sent_at))).filter(Number.isFinite);
     if (entradas.length < 20) continue;
-    const saidas = linhas.filter((m) => m.direction === "out")
+
+    // basta saber se houve QUALQUER envio nosso depois da última entrada
+    const ultimaEntrada = new Date(Math.max(...entradas)).toISOString();
+    const { data: saidaDepois } = await db.from("messages")
+      .select("sent_at").eq("channel_id", canal.id).eq("direction", "out")
+      .gt("sent_at", ultimaEntrada)
+      .order("sent_at", { ascending: false }).limit(1);
+    const saidas = ((saidaDepois ?? []) as Json[])
       .map((m) => Date.parse(String(m.sent_at))).filter(Number.isFinite);
 
     const veredito = avaliarSilencio(entradas, saidas, now.getTime());
