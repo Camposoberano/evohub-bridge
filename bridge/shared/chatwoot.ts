@@ -147,8 +147,9 @@ export async function resolveInboxIdentifier(
   return raw;
 }
 
-// Acha uma inbox existente pelo nome (ex: ryzeapi nativo já criou a inbox por baixo e
-// só precisamos do inbox_identifier pra nosso ingestInbound postar na mesma conversa).
+// Acha uma inbox existente pelo nome: quando a inbox já foi criada por fora (pelo próprio
+// provedor ou à mão), só precisamos do inbox_identifier pra o ingestInbound postar na mesma
+// conversa em vez de abrir uma paralela.
 export async function findInboxByName(
   name: string,
   acct: CwAcct = envAcct(),

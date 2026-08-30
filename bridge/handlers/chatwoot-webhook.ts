@@ -186,8 +186,8 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   // canal uazapi puro (whatsapp não-oficial, sem par Meta): sem phone_number_id e com
-  // external_id = nome da instância uazapi. Migrado de RyzeAPI em 27/08 -- a conta RyzeAPI
-  // não é mais usada, todo canal nessa forma agora envia pela uazapi (shared/hybrid.ts).
+  // external_id = nome da instância uazapi. Todo canal nessa forma envia pela uazapi
+  // (shared/hybrid.ts) -- o provedor não-oficial anterior saiu do projeto em 30/08.
   const isUazapiOnly = channel.type === "whatsapp" &&
     Boolean(channel.external_id) && !channel.phone_number_id;
 
