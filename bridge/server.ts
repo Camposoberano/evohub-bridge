@@ -61,6 +61,7 @@ import {
 } from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
+import { agendarLoop } from "./shared/loop-guard.ts";
 import { admin, claimDelivery, releaseDelivery } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
@@ -315,7 +316,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-29-hybrid-diag-auth",
+  build: "2026-08-30-guarda-loops",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -488,17 +489,14 @@ const LABEL_WINDOW_INTERVAL_MS = 5 * 60_000;
 function startLabelWindowLoop() {
   const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
   const url = `http://internal/label-window?token=${encodeURIComponent(token)}`;
-  setInterval(async () => {
-    try {
-      const res = await labelWindow(new Request(url));
-      const body = await res.json();
-      if (body.labeled > 0 || body.errors?.length) {
-        console.log("label-window (auto):", JSON.stringify(body));
-      }
-    } catch (e) {
-      console.error("label-window (auto) erro:", e);
+  const tick = async () => {
+    const res = await labelWindow(new Request(url));
+    const body = await res.json();
+    if (body.labeled > 0 || body.errors?.length) {
+      console.log("label-window (auto):", JSON.stringify(body));
     }
-  }, LABEL_WINDOW_INTERVAL_MS);
+  };
+  agendarLoop("label-window", tick, { intervaloMs: LABEL_WINDOW_INTERVAL_MS });
 }
 
 // Espelha as etiquetas do Chatwoot em conversations.labels e deriva outcome (won/lost).
@@ -847,8 +845,10 @@ function startMacroCommandLoop() {
       console.error("macro-poll erro:", e);
     }
   };
-  setTimeout(tick, 10_000);
-  setInterval(tick, MACRO_POLL_INTERVAL_MS);
+  agendarLoop("macro-command-poll", tick, {
+    intervaloMs: MACRO_POLL_INTERVAL_MS,
+    primeiraEmMs: 10_000,
+  });
   console.log("macro-command-poll loop ON (15s, filter API)");
 }
 
@@ -930,8 +930,10 @@ function startBotMuteLoop() {
       console.error("bot-mute-poll erro:", e);
     }
   };
-  setTimeout(tick, 25_000);
-  setInterval(tick, BOT_MUTE_POLL_INTERVAL_MS);
+  agendarLoop("bot-mute-poll", tick, {
+    intervaloMs: BOT_MUTE_POLL_INTERVAL_MS,
+    primeiraEmMs: 25_000,
+  });
   console.log(`bot-mute-poll loop ON (20s, label ${BOT_MUTE_LABEL})`);
 }
 
@@ -1035,8 +1037,10 @@ function startOutcomeLabelLoop() {
       console.error("outcome-label-poll erro:", e);
     }
   };
-  setTimeout(tick, 12_000);
-  setInterval(tick, OUTCOME_LABEL_POLL_INTERVAL_MS);
+  agendarLoop("outcome-label-poll", tick, {
+    intervaloMs: OUTCOME_LABEL_POLL_INTERVAL_MS,
+    primeiraEmMs: 12_000,
+  });
   console.log(
     "outcome-label-poll loop ON (20s, filter API) -- etiquetas pago/nao-compra",
   );
@@ -1418,8 +1422,10 @@ function startOperationalMonitorLoop() {
       console.error("operational-monitor erro:", error);
     }
   };
-  setTimeout(run, 90_000);
-  setInterval(run, 15 * 60_000);
+  agendarLoop("operational-monitor", run, {
+    intervaloMs: 15 * 60_000,
+    primeiraEmMs: 90_000,
+  });
   console.log("operational-monitor loop ON (15min)");
 }
 
