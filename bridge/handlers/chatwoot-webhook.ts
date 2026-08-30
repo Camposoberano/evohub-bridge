@@ -22,6 +22,11 @@ import {
 import type { SendResult } from "../shared/hybrid.ts";
 import { redactSecrets } from "../shared/redact.ts";
 import { commentReplyPath } from "../shared/social.ts";
+import {
+  type EnvioIndividual,
+  notaDeEnvioParcial,
+  resumoDeEnvios,
+} from "../shared/envio-multiplo.ts";
 import { relayProviderMedia } from "../shared/media-relay.ts";
 import {
   isMetaThreadControlError,
@@ -205,6 +210,15 @@ export async function handleOutgoing(db: Db, p: Json) {
   let res: { ok: boolean; status: number; data: unknown } | undefined;
   let msgType = "text";
   let mediaUrl: string | null = null;
+  // Uma mensagem com vários anexos vira vários envios. Guardamos cada um para decidir o
+  // status pelo conjunto, em vez de pelo último — ver shared/envio-multiplo.ts.
+  const envios: EnvioIndividual[] = [];
+  const registrarEnvio = (
+    r: { ok: boolean; status: number; data: unknown } | undefined,
+    url: string | null,
+  ) => {
+    if (r) envios.push({ ok: r.ok, mediaUrl: r.ok ? url : null });
+  };
   let isSocialDirectMessage = false;
   if (isUazapiOnly) {
     // canal uazapi puro: sem canal oficial Meta pra rotear, manda direto pela instância
@@ -386,6 +400,7 @@ export async function handleOutgoing(db: Db, p: Json) {
         } else {
           res = hybridRes;
         }
+        registrarEnvio(res, mediaUrl);
       }
       if (content && !captionUsed && !onlyAudio) {
         if (hybrid) {
@@ -485,6 +500,7 @@ export async function handleOutgoing(db: Db, p: Json) {
         },
         messaging_type: "RESPONSE",
       });
+      registrarEnvio(res, mediaUrl);
     }
     if (content) {
       res = await sendMeta(token, "me/messages", {
@@ -533,6 +549,10 @@ export async function handleOutgoing(db: Db, p: Json) {
       ? (d as { id: string }).id
       : null);
 
+  // Com vários anexos, `res` guarda só o ÚLTIMO envio. O status da linha tem que refletir o
+  // CONJUNTO: se uma imagem chegou e a outra não, a mensagem não é "falha".
+  const resumo = envios.length > 1 ? resumoDeEnvios(envios) : null;
+  const entregouAlgo = resumo ? resumo.status === "sent" : res.ok;
   const failureStatus = !res.ok && isSocialDirectMessage
     ? metaDeliveryStatus(res.status, res.data)
     : "failed";
@@ -545,8 +565,10 @@ export async function handleOutgoing(db: Db, p: Json) {
     media_url: mediaUrl,
     meta_message_id: metaId,
     chatwoot_message_id: (p.id as number) ?? null,
-    status: res.ok ? "sent" : failureStatus,
+    status: entregouAlgo ? "sent" : failureStatus,
   };
+  // primeira mídia ENTREGUE, não a última tentada
+  if (resumo?.mediaUrl) messageRow.media_url = resumo.mediaUrl;
   if (retryingFailedMessage?.id) {
     await db.from("messages").update(messageRow).eq(
       "id",
@@ -556,7 +578,31 @@ export async function handleOutgoing(db: Db, p: Json) {
     await db.from("messages").insert(messageRow);
   }
 
-  if (!res.ok) {
+  // Entrega parcial merece aviso próprio: dizer "falhou" faria o atendente reenviar tudo e
+  // o cliente receber duplicado o que já tinha chegado.
+  if (resumo?.parcial) {
+    const acct = await accountForChannel(channel.id as string);
+    const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
+    await createConversationMessage(cwConversationId, {
+      content: notaDeEnvioParcial(resumo),
+      messageType: "outgoing",
+      private: true,
+    }, noteAcct).catch((error) =>
+      console.error("chatwoot nota parcial erro:", error)
+    );
+    await db.from("events").insert({
+      source: "chatwoot",
+      event_type: "outgoing_partial",
+      payload: {
+        chatwoot_message_id: cwMsgId,
+        channel_id: channel.id,
+        entregues: resumo.entregues,
+        falhados: resumo.falhados,
+      },
+    }).then(() => {}, () => {});
+  }
+
+  if (!res.ok && !entregouAlgo) {
     const acct = await accountForChannel(channel.id as string);
     const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
     const detail = JSON.stringify(redactSecrets(res.data as Json)).slice(0, 240);
