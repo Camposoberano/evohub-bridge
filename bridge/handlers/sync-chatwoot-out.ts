@@ -4,6 +4,7 @@
 // Chatwoot e as entrega reusando handleOutgoing (texto/mídia/áudio/botões + dedup atômico
 // por claim cw-out-<id>). Idempotente: se o webhook real voltar, o claim impede duplicar.
 // Roda em loop interno no server.ts (cada SYNC_OUT_INTERVAL_MS). Auth: ?token=<SYNC/WEBHOOK secret>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -216,7 +217,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(token, expected);
+  return confereSegredo(token, [expected]);
 }
 
 function intParam(

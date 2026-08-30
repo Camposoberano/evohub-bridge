@@ -1,6 +1,7 @@
 // funil-control — controle manual do funil (pause/stop/resume/status/dispatch).
 // Chamado por macros do Chatwoot ou API direta.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
@@ -32,7 +33,7 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) {
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
     return json({ error: "unauthorized" }, 401);
   }
 

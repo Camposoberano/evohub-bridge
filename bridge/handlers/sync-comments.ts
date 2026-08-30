@@ -4,6 +4,7 @@
 // Contato = "cmt-fb-<user_id>" / "cmt-ig-<username>" (prefixo isola do PSID de Messenger:
 // responder essas conversas pelo Chatwoot NÃO entrega — Fase 2). Dedup por comment id
 // (meta_message_id). Auth: SYNC_SECRET|CHATWOOT_WEBHOOK_SECRET|RYZEAPI_WEBHOOK_TOKEN.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -227,7 +228,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const auth = req.headers.get("Authorization") ?? "";
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
-  if (timingSafeEqual(token, optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET"))) return true;
+  if (confereSegredo(token, [optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET")])) return true;
   const rz = optionalEnv("RYZEAPI_WEBHOOK_TOKEN");
   return rz ? timingSafeEqual(token, rz) : false;
 }

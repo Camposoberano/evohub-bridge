@@ -9,6 +9,7 @@
 // cada sync substitui só a sua fatia (ver shared/outcome-labels.ts).
 // Cobre apenas o canal não-oficial: o WhatsApp oficial (Meta) não tem etiquetas.
 // Auth: ?token=<SYNC_SECRET|CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -203,7 +204,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(token, expected);
+  return confereSegredo(token, [expected]);
 }
 
 function json(obj: unknown, status = 200): Response {

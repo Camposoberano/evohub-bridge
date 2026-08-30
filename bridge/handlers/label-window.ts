@@ -2,6 +2,7 @@
 // (texto livre sem template) está aberta, fechando ou fechada, via label do Chatwoot.
 // Sem isso o atendente não tem como saber, na tela, quem ele pode responder livre e quem só
 // com template (ou perde a venda, como ocorreu com Cezar Hoffman/campo soberano em 28/06).
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -116,7 +117,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(token, expected);
+  return confereSegredo(token, [expected]);
 }
 
 function intParam(url: URL, key: string, fallback: number, min: number, max: number): number {

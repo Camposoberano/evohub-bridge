@@ -4,6 +4,7 @@
 //
 // Auth: o inbox é criado com webhook_url contendo ?token=<CHATWOOT_WEBHOOK_SECRET>.
 // Validamos esse token. TODO Fase 5: usar assinatura nativa se a versão suportar.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
@@ -55,7 +56,7 @@ export async function handle(req: Request): Promise<Response> {
   // canais ryzeapi usam o inbox webhook_url com o token deles (RYZEAPI_WEBHOOK_TOKEN) em vez
   // do segredo principal -- assim a inbox roteada pra ryzeapi não precisa expor o segredo
   // compartilhado dos canais oficiais.
-  const validToken = timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET")) ||
+  const validToken = confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")]) ||
     (optionalEnv("RYZEAPI_WEBHOOK_TOKEN")
       ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!)
       : false);

@@ -17,6 +17,7 @@
 //                     FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import {
   admin,
   claimDelivery,
@@ -47,7 +48,7 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET"))) {
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
     return json({ error: "unauthorized" }, 401);
   }
 

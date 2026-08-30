@@ -1,6 +1,7 @@
 // uazapi-webhook — recebe eventos do uazapi e grava em events (source=uazapi).
 // Alimenta o monitor de eventos do painel e ingesta inbound de mensagens no Chatwoot.
 // Auth: ?token=<UAZAPI_WEBHOOK_TOKEN|CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
@@ -52,7 +53,7 @@ export async function handle(req: Request): Promise<Response> {
   const token = url.searchParams.get("token") ?? "";
   const expected = optionalEnv("UAZAPI_WEBHOOK_TOKEN") ??
     env("CHATWOOT_WEBHOOK_SECRET");
-  if (!timingSafeEqual(token, expected)) {
+  if (!confereSegredo(token, [expected])) {
     return new Response("unauthorized", { status: 401 });
   }
 

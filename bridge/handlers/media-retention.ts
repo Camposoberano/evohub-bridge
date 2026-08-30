@@ -3,6 +3,7 @@
 // Seguro por padrão: só apaga de verdade com ?confirm=1 OU MEDIA_RETENTION_ENABLED=true.
 // Lista/apaga via service role (Storage REST) — não precisa das chaves S3 aqui.
 // Auth: token de cron (?token=) OU JWT do dashboard.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -15,7 +16,7 @@ export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
   const cronToken = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  let authed = timingSafeEqual(token, cronToken);
+  let authed = confereSegredo(token, [cronToken]);
   if (!authed) {
     const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

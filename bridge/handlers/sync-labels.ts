@@ -9,6 +9,7 @@
 // Não sobrescreve outcome definido à mão pelo dashboard (outcome_source='dashboard' vence).
 // Roda em loop no server.ts e também aceita chamada manual para backfill.
 // Auth: ?token=<SYNC_SECRET|CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -131,7 +132,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(token, expected);
+  return confereSegredo(token, [expected]);
 }
 
 function intParam(

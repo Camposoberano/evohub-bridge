@@ -1,5 +1,6 @@
 // sync-facebook — fallback por pull para Messenger/Instagram quando o webhook de
 // mensagens da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -910,7 +911,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(token, expected);
+  return confereSegredo(token, [expected]);
 }
 
 function intParam(

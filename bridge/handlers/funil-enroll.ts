@@ -3,6 +3,7 @@
 // Textos e botões são fixos (roteiro v2 — docs/funil-mega-sorgo-playbook.md). Imagem/áudios/
 // vídeo vêm da faixa (rotação por slot). Slot sem mídia cadastrada -> peça é pulada (não trava).
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
+import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
@@ -334,7 +335,7 @@ export async function handle(req: Request): Promise<Response> {
   const token = url.searchParams.get("token") ?? "";
   // aceita o segredo principal OU o RYZEAPI_WEBHOOK_TOKEN (pra disparo operacional via API
   // sem precisar do segredo principal -- ex: re-teste do funil pelo painel/CLI).
-  const okToken = timingSafeEqual(token, env("CHATWOOT_WEBHOOK_SECRET")) ||
+  const okToken = confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")]) ||
     (optionalEnv("RYZEAPI_WEBHOOK_TOKEN")
       ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!)
       : false);

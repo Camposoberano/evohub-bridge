@@ -7,6 +7,7 @@
 //   POST /metrics-rollup     rollup diário (agendado)
 //   POST /llm-orchestrate    roteamento e persistência de tentativas multi-LLM
 //   GET  /health             health-check
+import { confereSegredo } from "./shared/segredo-bridge.ts";
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
@@ -316,7 +317,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-label-window-cache",
+  build: "2026-08-30-segredo-rotacao-etapa1",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1419,7 +1420,7 @@ function diagAutorizado(req: Request, url: URL): boolean {
   const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const informado = bearer || url.searchParams.get("token") || "";
   const esperado = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return timingSafeEqual(informado, esperado);
+  return confereSegredo(informado, [esperado]);
 }
 
 function startOperationalMonitorLoop() {
