@@ -7,7 +7,10 @@
 //   POST /metrics-rollup     rollup diário (agendado)
 //   POST /llm-orchestrate    roteamento e persistência de tentativas multi-LLM
 //   GET  /health             health-check
-import { confereSegredo } from "./shared/segredo-bridge.ts";
+import {
+  confereSegredo,
+  segredoParaChamadaInterna,
+} from "./shared/segredo-bridge.ts";
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
@@ -304,7 +307,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-rotacao-etapa2",
+  build: "2026-08-30-rotacao-loops-internos",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -318,7 +321,7 @@ const STARTED_AT = new Date().toISOString();
 // (a entrada já chega por webhook); duplicados são ignorados pelo dedup do próprio sync.
 const SYNC_LOOP_INTERVAL_MS = 30_000;
 function startSyncLoop() {
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
   // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
   // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
@@ -353,7 +356,7 @@ function startSyncLoop() {
 const COMMENTS_INTERVAL_MS = 5 * 60_000;
 function startCommentsLoop() {
   if (optionalEnv("COMMENTS_SYNC_ENABLED") === "false") return; // ligado por padrão
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   const url = `http://internal/sync-comments?token=${
     encodeURIComponent(token)
   }&since_minutes=1440`;
@@ -402,7 +405,7 @@ function startChatwootOutLoop() {
     console.log("sync-chatwoot-out loop OFF (SYNC_OUT_ENABLED=false)");
     return;
   }
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   let running = false;
   let forceRecovery = false;
   let lastSuccessfulAt: string | null = null;
@@ -477,7 +480,7 @@ function boundedEnvInt(
 // suficiente (o aviso "fechando" já dá 1h de antecedência).
 const LABEL_WINDOW_INTERVAL_MS = 5 * 60_000;
 function startLabelWindowLoop() {
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   const url = `http://internal/label-window?token=${encodeURIComponent(token)}`;
   const tick = async () => {
     const res = await labelWindow(new Request(url));
@@ -499,7 +502,7 @@ function startSyncLabelsLoop() {
     console.log("sync-labels loop OFF (SYNC_LABELS_ENABLED=false)");
     return;
   }
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   const url = `http://internal/sync-labels?token=${encodeURIComponent(token)}`;
   let running = false;
   const tick = async () => {
@@ -537,7 +540,7 @@ function startSyncWaLabelsLoop() {
     console.log("sync-wa-labels loop OFF (uazapi não configurado)");
     return;
   }
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   const url = `http://internal/sync-wa-labels?token=${
     encodeURIComponent(token)
   }`;
@@ -571,8 +574,7 @@ function startRollupLoop() {
     try {
       // /metrics-rollup passou a exigir auth (defeito 9 da auditoria 08/2026) -- o loop
       // interno precisa do mesmo token de cron que os outros loops (ex: startRetentionLoop).
-      const token = optionalEnv("SYNC_SECRET") ??
-        env("CHATWOOT_WEBHOOK_SECRET");
+      const token = segredoParaChamadaInterna();
       const res = await metricsRollup(
         new Request(
           `http://internal/metrics-rollup?token=${encodeURIComponent(token)}`,
@@ -592,7 +594,7 @@ function startRollupLoop() {
 // Retenção de mídia — loop diário. Dry-run por padrão (só conta); apaga de verdade
 // se MEDIA_RETENTION_ENABLED=true. Usa o token de cron interno.
 function startRetentionLoop() {
-  const token = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const token = segredoParaChamadaInterna();
   const url = `http://internal/media-retention?token=${
     encodeURIComponent(token)
   }`;
@@ -1406,7 +1408,7 @@ function startFlowTimeoutLoop() {
 function diagAutorizado(req: Request, url: URL): boolean {
   const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const informado = bearer || url.searchParams.get("token") || "";
-  const esperado = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  const esperado = segredoParaChamadaInterna();
   return confereSegredo(informado, [esperado]);
 }
 

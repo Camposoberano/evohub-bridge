@@ -54,3 +54,15 @@ export function confereSegredo(
   }
   return casouLegado || casouNovo;
 }
+
+/**
+ * Segredo que o BRIDGE usa para chamar a si mesmo (os loops internos do server.ts montam
+ * `http://internal/...?token=`). Durante uma rotação ele precisa usar o NOVO — senão o
+ * próprio sistema fica gerando o aviso de "segredo legado" e afoga o sinal que importa:
+ * o chamador externo que ainda não migrou. Medido em 30/08: 115 avisos em 4 minutos, todos
+ * do próprio bridge.
+ */
+export function segredoParaChamadaInterna(): string {
+  return segredoEmRotacao() ?? optionalEnv("SYNC_SECRET") ??
+    optionalEnv("CHATWOOT_WEBHOOK_SECRET") ?? "";
+}
