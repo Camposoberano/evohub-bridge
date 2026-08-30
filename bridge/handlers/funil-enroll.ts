@@ -333,13 +333,9 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  // aceita o segredo principal OU o RYZEAPI_WEBHOOK_TOKEN (pra disparo operacional via API
-  // sem precisar do segredo principal -- ex: re-teste do funil pelo painel/CLI).
-  const okToken = confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")]) ||
-    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN")
-      ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!)
-      : false);
-  if (!okToken) return json({ error: "unauthorized" }, 401);
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   const body = await req.json().catch(() => ({})) as Json;
   const cwConvId = Number(body.chatwoot_conversation_id);

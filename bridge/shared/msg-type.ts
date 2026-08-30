@@ -1,12 +1,12 @@
 // msg-type — normalização do tipo de mensagem para o enum msg_type do Postgres.
 //
 // A Meta manda o tipo já no vocabulário do enum ("text", "image", "interactive"...), mas os
-// canais não-oficiais (uazapi/RyzeAPI, ambos Baileys por baixo) mandam o nome do campo do
+// o canal não-oficial (uazapi, Baileys por baixo) manda o nome do campo do
 // protocolo do WhatsApp: "conversation", "extendedTextMessage", "imageMessage", "ptt",
 // "listResponseMessage". Antes desta tabela tudo isso caía em "unknown" — 95% do inbound e
 // ~32% do outbound gravados sem tipo, o que inviabiliza qualquer recorte por tipo de mensagem.
 //
-// A normalização é feita aqui (e não no webhook de cada provedor) porque uazapi, RyzeAPI e
+// A normalização é feita aqui (e não no webhook de cada provedor) porque uazapi e
 // reparo de mídia passam todos por ingestInbound.
 export type MsgType =
   | "text"

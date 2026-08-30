@@ -16,8 +16,6 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
-import { handle as ryzeapiWebhook } from "./handlers/ryzeapi-webhook.ts";
-import { handle as ryzeapi } from "./handlers/ryzeapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import {
   handle as funilEnroll,
@@ -112,8 +110,6 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
-  "/ryzeapi-webhook": ryzeapiWebhook,
-  "/ryzeapi": ryzeapi,
   "/send-outbound": sendOutbound,
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
@@ -179,12 +175,6 @@ const version = {
     "logo-fixa-fase1",
     "offsets-anti-batch-cron",
     "imagem-botao-combinados",
-    "ryzeapi-payload-fix",
-    "ryzeapi-painel",
-    "ryzeapi-inbound-acct",
-    "ryzeapi-outbound-bridge",
-    "ryzeapi-inbox-webhook-repoint",
-    "ryzeapi-outbound-no-channel-secret",
     "funil-fase1-sem-imagem-solta",
     "funil-fase4-botao-imagem",
     "funil-enroll-force-token",
@@ -247,13 +237,10 @@ const version = {
     "social-webhook-safe-retry",
     "social-outgoing-failure-note",
     "social-comments-pagination",
-    "ryze-device-message-direction",
     "social-comment-keyword-autoreply",
     "latest-open-conversation-selection",
-    "ryze-failed-ingest-retry",
     "chatwoot-admin-send-fallback",
     "chatwoot-stale-source-incoming-fallback",
-    "ryze-private-media-relay",
     "meta-window-terminal-failure",
     "chatwoot-out-5s-single-flight",
     "funnel-silence-followup",
@@ -317,7 +304,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-segredo-rotacao-etapa1",
+  build: "2026-08-30-sem-ryzeapi",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

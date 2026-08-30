@@ -53,14 +53,9 @@ export async function handle(req: Request): Promise<Response> {
 
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  // canais ryzeapi usam o inbox webhook_url com o token deles (RYZEAPI_WEBHOOK_TOKEN) em vez
-  // do segredo principal -- assim a inbox roteada pra ryzeapi não precisa expor o segredo
-  // compartilhado dos canais oficiais.
-  const validToken = confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")]) ||
-    (optionalEnv("RYZEAPI_WEBHOOK_TOKEN")
-      ? timingSafeEqual(token, optionalEnv("RYZEAPI_WEBHOOK_TOKEN")!)
-      : false);
-  if (!validToken) return new Response("unauthorized", { status: 401 });
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
+    return new Response("unauthorized", { status: 401 });
+  }
 
   const raw = await req.text();
   let p: Json;

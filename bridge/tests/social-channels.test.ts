@@ -284,7 +284,7 @@ Deno.test("Instagram sem phone_number_id tem janela de 24h, não 'sem-janela'", 
   assertEquals(aberta.aberta, true);
 });
 
-Deno.test("canal não-oficial (uazapi/ryzeapi) continua sem janela", async () => {
+Deno.test("canal não-oficial (uazapi) continua sem janela", async () => {
   const win = await windowState(
     dbComUltimaEntrada(null) as never,
     { id: "conv-3" },

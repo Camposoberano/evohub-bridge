@@ -1,7 +1,7 @@
 // window — estado da janela de mensagem livre da Meta por conversa.
 // 24h da última msg do CLIENTE; 72h quando a conversa veio de anúncio CTWA/free entry point
 // (conversations.origem = 'anuncio'). Vale para todo canal OFICIAL da Meta: WhatsApp Cloud
-// (phone_number_id) e Messenger/Instagram DM. Canais não-oficiais (ryzeapi/uazapi) não têm janela.
+// (phone_number_id) e Messenger/Instagram DM. Canal não-oficial (uazapi) não tem janela.
 import type { DbClient } from "./supabase.ts";
 
 type Json = Record<string, unknown>;

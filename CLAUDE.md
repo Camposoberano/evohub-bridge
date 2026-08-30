@@ -5,7 +5,7 @@
 - **DB**: Supabase self-host (`bancortovital.soberano.pro`)
 - **Chatwoot**: `gerenciador.soberano.pro` (conta 1)
 - **Gateway**: EVO Hub (proxy Meta — WhatsApp oficial, FB, IG)
-- **WhatsApp não-oficial**: uazapi (disparo massa) + RyzeAPI (mato grosso)
+- **WhatsApp não-oficial**: uazapi (disparo em massa e canais espelhados)
 
 ## Deploy
 - Trabalha em `master`, deploya com `git push origin master:main` (Coolify observa `main`)
@@ -27,7 +27,7 @@
 
 ## Convenções
 - Toda mensagem registrada no Chatwoot DEVE capturar `chatwoot_message_id` do response e gravar na tabela `messages` (previne duplicação pelo pull-loop)
-- Canal não-oficial (uazapi/RyzeAPI) = sem janela Meta
+- Canal não-oficial (uazapi) = sem janela Meta
 - Lógica de negócio SEMPRE no bridge (n8n é só cron de despacho)
 
 ---

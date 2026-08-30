@@ -46,7 +46,7 @@ Contexto de arquitetura:
 - O Chatwoot e a camada de atendimento e interface operacional.
 - O Supabase e a base operacional, analitica e de auditoria.
 - O dashboard Next.js consome o estado operacional e expõe ferramentas internas.
-- Integracoes principais incluem EVO Hub, Uazapi e RyzeAPI para mensageria.
+- Integracoes principais incluem EVO Hub e Uazapi para mensageria.
 
 Principios de execucao:
 - Preserve compatibilidade com a arquitetura existente.

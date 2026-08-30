@@ -57,7 +57,7 @@ export async function handle(req: Request): Promise<Response> {
     if (convErr) { totals.errors.push(`${ch.name}: ${convErr.message}`); continue; }
 
     const acct = await accountForChannel(ch.id as string);
-    // canal oficial Meta = tem phone_number_id; não-oficial (ryzeapi/uazapi) = external_id sem phone.
+    // canal oficial Meta = tem phone_number_id; não-oficial (uazapi) = external_id sem phone.
     const oficial = ch.type !== "whatsapp" || Boolean(ch.phone_number_id);
     const canalLabel = oficial ? LABEL_OFICIAL : LABEL_NAO_OFICIAL;
 
