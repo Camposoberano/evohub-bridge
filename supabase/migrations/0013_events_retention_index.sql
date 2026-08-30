@@ -1,0 +1,51 @@
+-- 0013 — índice de retenção da tabela `events`
+--
+-- PROBLEMA (medido em 29/08/2026):
+--   events tem 1.756.241 linhas; a mais antiga é de 04/07, 57 dias atrás.
+--   A política de retenção é de 30 dias e 1.105.622 linhas (63% da tabela) já deveriam
+--   ter sido apagadas. Nenhum evento de limpeza foi registrado.
+--
+--   A rotina existe (startDataCleanupLoop em bridge/server.ts) e roda todo dia, mas o
+--   DELETE filtra por `received_at` e NÃO EXISTE índice com essa coluna como líder — os
+--   dois índices atuais são (channel_id, received_at) e (source, event_type, received_at).
+--   Resultado: varredura sequencial que estoura o statement_timeout em ~8s, a limpeza
+--   nunca completa, a tabela cresce, e quanto maior mais garantido o timeout.
+--
+--   Medição por HTTP: `order by received_at desc limit 1` sem filtro = 4.984ms;
+--   `received_at < now()-30d` = timeout (57014).
+--
+-- POR QUE B-TREE E NÃO BRIN:
+--   BRIN seria menor (a tabela é append-only e received_at é quase monotônico), mas o
+--   planner o descarta com mais facilidade e aqui não há margem para incerteza — a
+--   consulta precisa deixar de varrer, de forma previsível. Em 1,7M linhas o B-tree em
+--   timestamptz custa dezenas de MB, o que é barato perto de uma limpeza que não roda.
+--
+-- CONCURRENTLY: constrói sem travar escrita. Webhook e ingestão seguem funcionando
+--   durante a criação. Não pode rodar dentro de bloco de transação — se a ferramenta de
+--   migration envolver tudo num BEGIN, rode este arquivo à parte.
+--
+-- REVERSÍVEL: `drop index concurrently if exists idx_events_received_at;`
+
+create index concurrently if not exists idx_events_received_at
+  on events (received_at);
+
+-- ---------------------------------------------------------------------------------------
+-- DEPOIS do índice: drenar o passivo EM LOTES, nunca de uma vez.
+--
+-- Um único DELETE de 1,1 milhão de linhas estoura o timeout e gera um WAL enorme.
+-- Rode o bloco abaixo repetidamente (ou em laço no cliente) até `deleted` voltar 0.
+-- Cada rodada apaga no máximo 20 mil linhas e termina em segundos.
+--
+--   with alvo as (
+--     select ctid from events
+--      where received_at < now() - interval '30 days'
+--      limit 20000
+--   )
+--   delete from events e using alvo a where e.ctid = a.ctid;
+--
+-- ESPAÇO EM DISCO: apagar linha não devolve espaço ao sistema operacional — o espaço
+-- fica marcado como reutilizável pela própria tabela, e o autovacuum cuida disso. Para
+-- devolver ao SO seria preciso `vacuum full events`, que TRAVA a tabela inteira e só deve
+-- rodar em janela combinada. Com a limpeza voltando a funcionar, a tabela para de crescer
+-- e o espaço já liberado é reaproveitado pelas inserções seguintes.
+-- ---------------------------------------------------------------------------------------
