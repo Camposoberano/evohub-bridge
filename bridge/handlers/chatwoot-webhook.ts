@@ -53,7 +53,7 @@ export async function handle(req: Request): Promise<Response> {
 
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "chatwoot-webhook")) {
     return new Response("unauthorized", { status: 401 });
   }
 

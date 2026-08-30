@@ -14,7 +14,7 @@ type Json = Record<string, unknown>;
 export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const tokenParam = url.searchParams.get("token") ?? "";
-  const internal = confereSegredo(tokenParam, [env("CHATWOOT_WEBHOOK_SECRET")]);
+  const internal = confereSegredo(tokenParam, [env("CHATWOOT_WEBHOOK_SECRET")], "hybrid-routes");
   if (!internal) {
     const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

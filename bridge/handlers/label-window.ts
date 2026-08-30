@@ -117,7 +117,7 @@ function isAuthorized(req: Request, url: URL): boolean {
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const token = bearer || url.searchParams.get("token") || "";
   const expected = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  return confereSegredo(token, [expected]);
+  return confereSegredo(token, [expected], "label-window");
 }
 
 function intParam(url: URL, key: string, fallback: number, min: number, max: number): number {

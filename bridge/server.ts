@@ -307,7 +307,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-rotacao-etapa3",
+  build: "2026-08-30-rotacao-origem",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1409,7 +1409,7 @@ function diagAutorizado(req: Request, url: URL): boolean {
   const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
   const informado = bearer || url.searchParams.get("token") || "";
   const esperado = segredoParaChamadaInterna();
-  return confereSegredo(informado, [esperado]);
+  return confereSegredo(informado, [esperado], "server");
 }
 
 function startOperationalMonitorLoop() {

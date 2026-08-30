@@ -53,7 +53,7 @@ export async function handle(req: Request): Promise<Response> {
   const token = url.searchParams.get("token") ?? "";
   const expected = optionalEnv("UAZAPI_WEBHOOK_TOKEN") ??
     env("CHATWOOT_WEBHOOK_SECRET");
-  if (!confereSegredo(token, [expected])) {
+  if (!confereSegredo(token, [expected], "uazapi-webhook")) {
     return new Response("unauthorized", { status: 401 });
   }
 

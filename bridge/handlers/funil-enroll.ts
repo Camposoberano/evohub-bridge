@@ -333,7 +333,7 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")])) {
+  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")) {
     return json({ error: "unauthorized" }, 401);
   }
 

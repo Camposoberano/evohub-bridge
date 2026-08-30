@@ -16,7 +16,7 @@ export function cronToken(): string {
 
 export async function isAuthedCronOrUser(req: Request, url: URL): Promise<boolean> {
   const token = url.searchParams.get("token") ?? "";
-  if (confereSegredo(token, [cronToken()])) return true;
+  if (confereSegredo(token, [cronToken()], "report-auth")) return true;
 
   const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
     global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

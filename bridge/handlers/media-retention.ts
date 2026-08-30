@@ -16,7 +16,7 @@ export async function handle(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
   const cronToken = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
-  let authed = confereSegredo(token, [cronToken]);
+  let authed = confereSegredo(token, [cronToken], "media-retention");
   if (!authed) {
     const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

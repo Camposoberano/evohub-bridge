@@ -35,6 +35,7 @@ export function segredoEmRotacao(): string | undefined {
 export function confereSegredo(
   informado: string | null | undefined,
   esperados: (string | null | undefined)[],
+  origem = "desconhecida",
 ): boolean {
   const token = informado ?? "";
   if (!token) return false;
@@ -52,7 +53,9 @@ export function confereSegredo(
   // que se sabe, sem adivinhar, se ainda há chamador por migrar antes de removê-lo. O n8n
   // dispara /send-outbound e /funil-enroll e seus workflows não são visíveis daqui.
   if (rotacao && casouNovo && !casouLegado) {
-    console.warn("segredo LEGADO ainda em uso — falta migrar este chamador");
+    console.warn(
+      `segredo LEGADO ainda em uso em ${origem} — falta migrar este chamador`,
+    );
   }
   return casouLegado || casouNovo;
 }
