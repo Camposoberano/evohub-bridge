@@ -1,4 +1,6 @@
 import { admin } from "./supabase.ts";
+import { optionalEnv } from "./env.ts";
+import { avaliarDestino, ehIpInterno } from "./destino-seguro.ts";
 
 const BUCKET = "soberano-relay";
 const MAX_BYTES = 30 * 1024 * 1024;
@@ -24,6 +26,47 @@ async function ensureBucket() {
 // normalmente. Tentar de novo resolve; falhar na primeira tentativa perde o envio.
 const RELAY_RETRY_DELAYS_MS = [1_000, 3_000, 8_000];
 
+// Host do Chatwoot: é de lá que vem o data_url do anexo. Serve só para distinguir o
+// esperado do inesperado no log — host público fora dessa lista continua passando.
+function hostsEsperados(): string[] {
+  const cw = optionalEnv("CHATWOOT_URL") ?? "";
+  try {
+    return cw ? [new URL(cw).hostname] : [];
+  } catch {
+    return [];
+  }
+}
+
+// Nome público que RESOLVE para IP interno é o contorno clássico do bloqueio por host.
+// Se a resolução falhar, deixamos passar: o fetch a seguir falharia de qualquer forma, e
+// derrubar mídia legítima por um hiccup de DNS sairia mais caro que o risco residual.
+async function resolveParaRedeInterna(host: string): Promise<boolean> {
+  try {
+    const enderecos = await Deno.resolveDns(host, "A");
+    return enderecos.some((ip) => ehIpInterno(ip));
+  } catch {
+    return false;
+  }
+}
+
+async function garantirDestinoSeguro(sourceUrl: string): Promise<void> {
+  const veredito = avaliarDestino(sourceUrl, hostsEsperados());
+  if (!veredito.ok) {
+    throw new Error(`destino de mídia recusado — ${veredito.motivo}`);
+  }
+  if (!veredito.hostConhecido) {
+    console.warn(
+      "media-relay: host de mídia fora do esperado (permitido, só registrando):",
+      veredito.host,
+    );
+  }
+  if (await resolveParaRedeInterna(veredito.host)) {
+    throw new Error(
+      `destino de mídia recusado — ${veredito.host} resolve para rede interna`,
+    );
+  }
+}
+
 async function baixarComRetry(sourceUrl: string): Promise<Response> {
   let ultimoStatus = 0;
   for (let tentativa = 0; ; tentativa++) {
@@ -44,6 +87,7 @@ export async function relayProviderMedia(
   sourceUrl: string,
   fallbackName = "arquivo",
 ): Promise<string> {
+  await garantirDestinoSeguro(sourceUrl);
   const response = await baixarComRetry(sourceUrl);
 
   const declaredSize = Number(response.headers.get("content-length") ?? "0");
