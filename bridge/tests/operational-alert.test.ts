@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   alertasParaEntregar,
   formatarAlerta,
-  horasDeSilencioParaAlarmar,
+  avaliarSilencio,
 } from "../shared/operational-alert.ts";
 import { DESLIGAMENTO_INTENCIONAL } from "../handlers/operational-health.ts";
 
@@ -57,14 +57,6 @@ Deno.test("texto nomeia o problema e carrega o detalhe", () => {
   assertEquals(texto.includes("lead_missing_avatar"), false);
 });
 
-// Primeira rodada em produção alarmou "Atendimento IG (25 em 7d, 0 em 12h)" num sábado —
-// canal que recebe 4 a 11 por dia. Silêncio só é incidente em relação ao ritmo do canal.
-Deno.test("limiar de silêncio acompanha o volume do canal", () => {
-  assertEquals(horasDeSilencioParaAlarmar(700), 3); // ~100/dia: 3h calado é incidente
-  assertEquals(horasDeSilencioParaAlarmar(70), 6); // ~10/dia
-  assertEquals(horasDeSilencioParaAlarmar(25), 36); // ~3,5/dia: um sábado é normal
-});
-
 // "Atendimento FB" está inativo de propósito (duplicata do Mega Sorgo). Como crítico, mandaria
 // alerta de hora em hora para sempre — o alerta novo morreria de ruído na primeira noite.
 Deno.test("canal desligado com motivo declarado não é incidente", () => {
@@ -80,4 +72,66 @@ Deno.test("canal desligado com motivo declarado não é incidente", () => {
   );
   assertEquals(DESLIGAMENTO_INTENCIONAL.test("token expirado"), false);
   assertEquals(DESLIGAMENTO_INTENCIONAL.test(""), false);
+});
+
+// --- silêncio de canal ------------------------------------------------------------------
+// O limiar por MÉDIA diária alarmou o 6836 em 30/08: 125 entradas em 7 dias, mas em rajada
+// de campanha (47 num dia, 0 no outro, 38 no seguinte). Média não descreve rajada.
+
+const H = 60 * 60 * 1000;
+const agora = Date.parse("2026-08-30T20:14:00Z");
+/** entradas do 6836 como realmente foram: picos e um dia inteiro em branco */
+function entradasDo6836(): number[] {
+  const dias: [string, number][] = [
+    ["2026-08-24", 47], ["2026-08-25", 22], ["2026-08-26", 0],
+    ["2026-08-27", 9], ["2026-08-28", 38], ["2026-08-29", 8],
+  ];
+  const out: number[] = [];
+  for (const [dia, n] of dias) {
+    for (let i = 0; i < n; i++) {
+      out.push(Date.parse(`${dia}T12:00:00Z`) + i * 6 * 60_000);
+    }
+  }
+  out.push(Date.parse("2026-08-30T11:43:00Z"));
+  return out;
+}
+
+Deno.test("canal de campanha em rajada não alarma por 8h de silêncio", () => {
+  // ninguém enviou depois da última entrada: a campanha está pausada
+  const r = avaliarSilencio(entradasDo6836(), [], agora);
+  assertEquals(r.anormal, false);
+  assertEquals(r.silencioAtualH > 8, true, "de fato está 8h+ calado");
+});
+
+Deno.test("silêncio dentro do hábito do canal não alarma nem com envio nosso", () => {
+  // o 6836 já passou ~24h sem entrada na semana; 8h está longe disso
+  const saidaRecente = [Date.parse("2026-08-30T19:00:00Z")];
+  const r = avaliarSilencio(entradasDo6836(), saidaRecente, agora);
+  assertEquals(r.anormal, false);
+  assertEquals(r.motivo, "dentro do hábito do canal");
+});
+
+Deno.test("canal de fluxo constante alarma rápido quando some", () => {
+  // uma entrada a cada 30min por 3 dias: o hábito é meia hora
+  const entradas: number[] = [];
+  for (let t = agora - 3 * 24 * H; t < agora - 5 * H; t += 30 * 60_000) entradas.push(t);
+  const r = avaliarSilencio(entradas, [agora - 1 * H], agora);
+  assertEquals(r.anormal, true, "5h calado num canal de 30min é incidente");
+  assertEquals(r.maiorSilencioHabitualH < 1, true);
+});
+
+Deno.test("silêncio dos dois lados é operação parada, não canal quebrado", () => {
+  const entradas: number[] = [];
+  for (let t = agora - 3 * 24 * H; t < agora - 20 * H; t += 30 * 60_000) entradas.push(t);
+  const semEnvio = avaliarSilencio(entradas, [agora - 30 * H], agora);
+  assertEquals(semEnvio.anormal, false);
+  assertEquals(semEnvio.motivo.includes("operação parada"), true);
+  // mesmo histórico, mas continuamos enviando -> aí sim é suspeito
+  const comEnvio = avaliarSilencio(entradas, [agora - 2 * H], agora);
+  assertEquals(comEnvio.anormal, true);
+});
+
+Deno.test("histórico curto demais não vira alarme", () => {
+  assertEquals(avaliarSilencio([agora - 50 * H], [agora], agora).anormal, false);
+  assertEquals(avaliarSilencio([], [], agora).anormal, false);
 });

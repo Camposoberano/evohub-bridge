@@ -307,7 +307,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-rotacao-origem",
+  build: "2026-08-30-silencio-por-habito",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

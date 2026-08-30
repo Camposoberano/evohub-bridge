@@ -3,7 +3,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { getMeta } from "../shared/hub.ts";
 import {
   entregarAlertas,
-  horasDeSilencioParaAlarmar,
+  avaliarSilencio,
   type OperationalIssue,
 } from "../shared/operational-alert.ts";
 import {
@@ -155,19 +155,25 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const canaisMudos: string[] = [];
   for (const canal of activeChannels) {
-    const semana = await exactCount(
-      db.from("messages").select("id", { count: "exact", head: true })
-        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", since7d),
-    );
-    if (semana < 20) continue;
-    const horas = horasDeSilencioParaAlarmar(semana);
-    const corte = new Date(now.getTime() - horas * 60 * 60 * 1000).toISOString();
-    const recente = await exactCount(
-      db.from("messages").select("id", { count: "exact", head: true })
-        .eq("channel_id", canal.id).eq("direction", "in").gte("sent_at", corte),
-    );
-    if (recente === 0) {
-      canaisMudos.push(`${canal.name} (${semana} em 7d, 0 em ${horas}h)`);
+    // uma consulta por canal traz entrada E saída da semana: o silêncio é comparado com o
+    // hábito do próprio canal, e só conta se nós ainda estivermos enviando.
+    const { data: semana } = await db.from("messages")
+      .select("sent_at,direction")
+      .eq("channel_id", canal.id).gte("sent_at", since7d)
+      .order("sent_at", { ascending: true }).limit(3000);
+    const linhas = (semana ?? []) as Json[];
+    const entradas = linhas.filter((m) => m.direction === "in")
+      .map((m) => Date.parse(String(m.sent_at))).filter(Number.isFinite);
+    if (entradas.length < 20) continue;
+    const saidas = linhas.filter((m) => m.direction === "out")
+      .map((m) => Date.parse(String(m.sent_at))).filter(Number.isFinite);
+
+    const veredito = avaliarSilencio(entradas, saidas, now.getTime());
+    if (veredito.anormal) {
+      canaisMudos.push(
+        `${canal.name} (${veredito.silencioAtualH}h calado; o normal dele é até ` +
+          `${veredito.maiorSilencioHabitualH}h, e seguimos enviando)`,
+      );
     }
   }
 

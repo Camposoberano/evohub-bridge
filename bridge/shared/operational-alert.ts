@@ -44,15 +44,79 @@ const TITULOS: Record<string, string> = {
   overdue_funnel_queue: "Fila do funil atrasada",
 };
 
-// Silêncio significa coisas diferentes conforme o volume do canal. O 5895 recebe ~100 por
-// dia: 6h calado já é incidente. O Atendimento IG recebe 4 a 11 por dia e passar um sábado
-// sem mensagem é rotina — foi exatamente o falso positivo que o limiar fixo de 12h produziu
-// na primeira rodada. Daí o corte proporcional à média diária da última semana.
-export function horasDeSilencioParaAlarmar(entradasNaSemana: number): number {
-  const mediaDiaria = entradasNaSemana / 7;
-  if (mediaDiaria >= 50) return 3;
-  if (mediaDiaria >= 10) return 6;
-  return 36;
+// Silêncio de canal: quando ele é incidente e quando é rotina.
+//
+// A primeira versão usava um limiar fixo (12h) e alarmou o Instagram num sábado. A segunda
+// usou a MÉDIA diária dos 7 dias — e alarmou o 6836, que recebe em rajada de campanha:
+// 47 entradas num dia, 0 no outro, 38 no seguinte. Média não descreve rajada, e o próprio
+// canal já tinha passado 24h calado na mesma semana sem nada de errado.
+//
+// Agora o canal é comparado consigo mesmo: se ele já ficou N horas calado nos últimos 7
+// dias sem que houvesse problema, N horas não é sintoma. Só o silêncio claramente maior que
+// o próprio hábito conta.
+//
+// E há um segundo critério, que é o que separa "quebrou" de "está parado": só alarma se NÓS
+// estivermos falando. Silêncio dos dois lados é operação parada — a campanha do 6836 está
+// pausada desde 26/08, então ninguém responde porque ninguém foi chamado. Entrada que morre
+// ENQUANTO continuamos enviando, essa sim é suspeita.
+export type AvaliacaoDeSilencio = {
+  anormal: boolean;
+  silencioAtualH: number;
+  maiorSilencioHabitualH: number;
+  motivo: string;
+};
+
+export function avaliarSilencio(
+  entradasMs: number[],
+  saidasMs: number[],
+  agora: number,
+  pisoHoras = 3,
+): AvaliacaoDeSilencio {
+  const H = 60 * 60 * 1000;
+  const entradas = [...entradasMs].sort((a, b) => a - b);
+  if (entradas.length < 2) {
+    return {
+      anormal: false,
+      silencioAtualH: 0,
+      maiorSilencioHabitualH: 0,
+      motivo: "histórico insuficiente",
+    };
+  }
+  let maiorGap = 0;
+  for (let i = 1; i < entradas.length; i++) {
+    maiorGap = Math.max(maiorGap, entradas[i] - entradas[i - 1]);
+  }
+  const ultima = entradas[entradas.length - 1];
+  const silencioAtual = agora - ultima;
+  // 1,5x o maior silêncio já observado, com piso: variação normal não dispara
+  const limite = Math.max(pisoHoras * H, maiorGap * 1.5);
+  const h = (ms: number) => Math.round(ms / H * 10) / 10;
+
+  if (silencioAtual <= limite) {
+    return {
+      anormal: false,
+      silencioAtualH: h(silencioAtual),
+      maiorSilencioHabitualH: h(maiorGap),
+      motivo: "dentro do hábito do canal",
+    };
+  }
+  // continuamos enviando e não volta nada? aí é suspeito. Silêncio dos dois lados é
+  // operação parada, não canal quebrado.
+  const enviamosDepois = saidasMs.some((t) => t > ultima);
+  if (!enviamosDepois) {
+    return {
+      anormal: false,
+      silencioAtualH: h(silencioAtual),
+      maiorSilencioHabitualH: h(maiorGap),
+      motivo: "sem envio nosso no período — operação parada, não canal quebrado",
+    };
+  }
+  return {
+    anormal: true,
+    silencioAtualH: h(silencioAtual),
+    maiorSilencioHabitualH: h(maiorGap),
+    motivo: "silêncio acima do hábito, com envio nosso acontecendo",
+  };
 }
 
 export function alertasParaEntregar(
