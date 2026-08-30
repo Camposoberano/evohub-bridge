@@ -7,7 +7,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
-import { redactSecrets } from "../shared/redact.ts";
+import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
@@ -63,8 +63,7 @@ export async function handle(req: Request): Promise<Response> {
     return new Response("bad json", { status: 400 });
   }
 
-  const eventType = (p.event as string) ?? (p.type as string) ??
-    (p.EventType as string) ?? "uazapi_event";
+  const eventType = rotuloDeEvento(p);
   const db = admin();
   db.from("events").insert({
     source: "uazapi",
@@ -79,6 +78,29 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   return new Response("ok", { status: 200 });
+}
+
+// `p.event` da uazapi às vezes é um OBJETO (recibo de leitura, por exemplo), não uma
+// string. O `as string` que havia aqui é só um cast: o objeto passava direto e o Postgres o
+// serializava inteiro dentro de `events.event_type`, um campo que deveria guardar um rótulo
+// curto. Duas consequências, medidas em 30/08:
+//
+//  1. telefone do cliente, IDs e URLs de mídia iam parar no rótulo, que aparece em qualquer
+//     listagem de eventos — o oposto da minimização que o resto do código já pratica;
+//  2. como cada linha ganhava um valor único e gigante, o índice
+//     idx_events_type(source, event_type, received_at) ficava inútil para essas linhas.
+//
+// E havia um efeito colateral silencioso: a guarda de `ReadReceipt` em
+// isInboundUazapiEvent comparava contra o objeto e nunca casava.
+const TAMANHO_MAXIMO_ROTULO = 120;
+
+export function rotuloDeEvento(p: Json): string {
+  for (const candidato of [p.event, p.type, p.EventType]) {
+    if (typeof candidato === "string" && candidato.trim()) {
+      return candidato.trim().slice(0, TAMANHO_MAXIMO_ROTULO);
+    }
+  }
+  return "uazapi_event";
 }
 
 function isInboundUazapiEvent(eventType: string, p: Json): boolean {
@@ -215,7 +237,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       // sem isso o alerta que cai no 11910 aciona o bot de intenção, que responde pro 5895,
       // que ingere de volta: laço entre dois números da casa.
       if (msg.from && await isNumeroDaCasa(db, msg.from)) {
-        console.log("entrada de número interno: automação ignorada,", msg.from);
+        console.log("entrada de número interno: automação ignorada,", sufixoContato(msg.from));
         continue;
       }
 
@@ -226,7 +248,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         msg.from &&
         await isBotMutedForContact(db, String(channel.id), msg.from)
       ) {
-        console.log("bot-mute: entrada uazapi ignorada pelo bot,", msg.from);
+        console.log("bot-mute: entrada uazapi ignorada pelo bot,", sufixoContato(msg.from));
         continue;
       }
 
@@ -390,7 +412,7 @@ async function handleUazapiClick(
     console.warn("uazapi-webhook: clique sem handler", id);
     return;
   }
-  console.log("uazapi-webhook: clique processado", id, from);
+  console.log("uazapi-webhook: clique processado", id, sufixoContato(from));
 }
 
 async function handleUazapiIntent(
@@ -451,7 +473,7 @@ async function handleUazapiIntent(
   }
 
   await handleMenuClick(db, channel, from, intent.menu, acct);
-  console.log("uazapi-webhook: intent disparado", intent.name, from);
+  console.log("uazapi-webhook: intent disparado", intent.name, sufixoContato(from));
 }
 
 // Cache curto: a lista de números próprios muda quando alguém cadastra canal, não a cada

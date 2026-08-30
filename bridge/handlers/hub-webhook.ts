@@ -5,6 +5,7 @@
 // Fase 1: WhatsApp TEXTO ponta a ponta (Meta -> Chatwoot + Postgres).
 // FB/IG e mídia: evento é persistido; tradução fica para Fase 2/3 (TODO marcados).
 import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
+import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { getChannelDetail, getMeta, sendMeta } from "../shared/hub.ts";
@@ -105,7 +106,7 @@ export async function handle(req: Request): Promise<Response> {
     source: "hub",
     event_type: (payload.event_type as string) ?? (payload.event as string) ??
       (payload.object as string) ?? "unknown",
-    payload,
+    payload: redactSecrets(payload),
     occurred_at: (payload.occurred_at as string) ?? null,
   });
 
@@ -329,7 +330,7 @@ async function handleWhatsApp(db: Db, p: Json) {
         if (
           await isBotMutedForContact(db, channel.id as string, from)
         ) {
-          console.log("bot-mute: entrada ignorada pelo bot, conv de", from);
+          console.log("bot-mute: entrada ignorada pelo bot, conv de", sufixoContato(from));
           continue;
         }
 

@@ -4,6 +4,7 @@
 // por isso processamos a entrada por aqui, com ingestInbound() (mesma função usada pro Hub
 // oficial), em vez de depender da ponte deles. Saída continua pela ponte nativa deles.
 import { admin, releaseDelivery } from "../shared/supabase.ts";
+import { redactSecrets } from "../shared/redact.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
@@ -81,7 +82,7 @@ export async function handle(req: Request): Promise<Response> {
   db.from("events").insert({
     source: "ryzeapi",
     event_type: eventType,
-    payload: p,
+    payload: redactSecrets(p),
     occurred_at: occurredAt ?? null,
   }).then(() => {}, () => {});
 

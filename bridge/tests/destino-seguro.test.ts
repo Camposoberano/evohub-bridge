@@ -68,3 +68,38 @@ Deno.test("ehHostInterno cobre nome sem ponto e sufixos reservados", () => {
   assertEquals(ehHostInterno("app.cluster.local"), true);
   assertEquals(ehHostInterno("gerenciador.soberano.pro"), false);
 });
+
+// --- minimização de dado pessoal --------------------------------------------------------
+import { redactSecrets, sufixoContato } from "../shared/redact.ts";
+
+Deno.test("telefone em log fica só com os quatro últimos dígitos", () => {
+  assertEquals(sufixoContato("5511910363320"), "…3320");
+  assertEquals(sufixoContato("+55 19 99971-5895"), "…5895");
+  assertEquals(sufixoContato(""), "(sem número)");
+  assertEquals(sufixoContato(null), "(sem número)");
+});
+
+// A regex antes exigia casamento EXATO da chave: `instance_token` passava limpo.
+Deno.test("chave de credencial com prefixo ou sufixo também é mascarada", () => {
+  const limpo = redactSecrets({
+    instance_token: "abc123",
+    wa_token: "def456",
+    refresh_token_v2: "ghi789",
+    authorization: "Bearer xyz",
+    nome: "Maria",
+    aninhado: { channel_token: "zzz", cidade: "Uberaba" },
+  }) as Record<string, unknown>;
+  assertEquals(limpo.instance_token, "[REDACTED]");
+  assertEquals(limpo.wa_token, "[REDACTED]");
+  assertEquals(limpo.refresh_token_v2, "[REDACTED]");
+  assertEquals(limpo.authorization, "[REDACTED]");
+  assertEquals(limpo.nome, "Maria", "dado comum não pode ser mascarado");
+  assertEquals(
+    (limpo.aninhado as Record<string, unknown>).channel_token,
+    "[REDACTED]",
+  );
+  assertEquals(
+    (limpo.aninhado as Record<string, unknown>).cidade,
+    "Uberaba",
+  );
+});
