@@ -35,11 +35,22 @@ export function confereSegredo(
 ): boolean {
   const token = informado ?? "";
   if (!token) return false;
-  const candidatos = [...esperados, segredoEmRotacao()]
-    .filter((s): s is string => Boolean(s && s.trim()));
-  let valido = false;
-  for (const esperado of candidatos) {
-    if (timingSafeEqual(token, esperado)) valido = true;
+  const rotacao = segredoEmRotacao();
+  const legados = esperados.filter((s): s is string => Boolean(s && s.trim()));
+
+  // percorre a lista inteira de propósito: sair no primeiro acerto abriria canal de temporização
+  let casouLegado = false;
+  for (const esperado of legados) {
+    if (timingSafeEqual(token, esperado)) casouLegado = true;
   }
-  return valido;
+  const casouNovo = rotacao ? timingSafeEqual(token, rotacao) : false;
+
+  // Durante a rotação, quem ainda chega com o segredo ANTIGO precisa aparecer. As 10 inboxes
+  // do Chatwoot já migraram, mas o n8n dispara /send-outbound e /funil-enroll e seus workflows
+  // não são visíveis deste repositório. Sem este aviso, promover o novo seria adivinhação —
+  // e derrubaria esses jobs em silêncio.
+  if (rotacao && casouLegado && !casouNovo) {
+    console.warn("segredo LEGADO ainda em uso — falta migrar este chamador");
+  }
+  return casouLegado || casouNovo;
 }

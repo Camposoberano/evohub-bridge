@@ -45,3 +45,22 @@ Deno.test("env de rotação em branco é ignorada", () => {
     Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
   }
 });
+
+// Antes de matar o segredo antigo é preciso saber se alguém ainda o usa — o n8n chama
+// /send-outbound e /funil-enroll, e seus workflows não são visíveis deste repositório.
+Deno.test("uso do segredo legado durante a rotação é sinalizado", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "novo");
+  const original = console.warn;
+  const avisos: string[] = [];
+  console.warn = (...a: unknown[]) => avisos.push(a.join(" "));
+  try {
+    assertEquals(confereSegredo("novo", ["atual"]), true);
+    assertEquals(avisos.length, 0, "quem já migrou não gera aviso");
+    assertEquals(confereSegredo("atual", ["atual"]), true);
+    assertEquals(avisos.length, 1, "quem ficou no antigo gera aviso");
+    assertEquals(avisos[0].includes("LEGADO"), true);
+  } finally {
+    console.warn = original;
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
+  }
+});

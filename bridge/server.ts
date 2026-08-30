@@ -304,7 +304,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-30-limpeza-final",
+  build: "2026-08-30-rotacao-etapa2",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
