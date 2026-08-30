@@ -60,6 +60,7 @@ import {
   runOperationalAudit,
 } from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
+import { timingSafeEqual } from "./shared/hmac.ts";
 import { admin, claimDelivery, releaseDelivery } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
@@ -314,7 +315,7 @@ const version = {
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
   ],
-  build: "2026-08-29-alerta-sem-ruido",
+  build: "2026-08-29-hybrid-diag-auth",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1042,7 +1043,8 @@ function startOutcomeLabelLoop() {
 }
 
 Deno.serve({ port }, async (req) => {
-  const { pathname } = new URL(req.url);
+  const reqUrl = new URL(req.url);
+  const { pathname } = reqUrl;
 
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
   if (pathname === "/health") return new Response("ok");
@@ -1057,11 +1059,27 @@ Deno.serve({ port }, async (req) => {
     );
   }
   if (pathname === "/hybrid-diag") {
+    // Era a única rota do arquivo sem autenticação — respondia 200 para qualquer um na
+    // internet devolvendo, entre outras coisas, o `chatwoot_inbox_identifier` de cada canal.
+    // Esse identifier NÃO é um dado inócuo: é com ele que o próprio bridge cria contato e
+    // mensagem em `/public/api/v1/inboxes/{identifier}/...` (shared/chatwoot.ts), rota que
+    // não pede header nenhum. Ou seja, era credencial de escrita nas inboxes do Chatwoot,
+    // exposta publicamente.
+    //
+    // Aceita Bearer OU ?token= de propósito: é rota de diagnóstico manual, e exigir JWT do
+    // painel tiraria a possibilidade de consultar pelo terminal. Mesmo padrão do
+    // /label-window.
+    if (!diagAutorizado(req, reqUrl)) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     try {
       const db = admin();
       const { data: ch } = await db.from("channels")
         .select(
-          "id,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier,type,status",
+          "id,name,phone_number,phone_number_id,chatwoot_inbox_id,type,status",
         )
         .eq("type", "whatsapp").not("phone_number_id", "is", null);
       const inst = uazapiConfigured()
@@ -1078,7 +1096,8 @@ Deno.serve({ port }, async (req) => {
           phone: c.phone_number,
           phone_norm: cp || "(vazio)",
           chatwoot_inbox_id: c.chatwoot_inbox_id ?? null,
-          chatwoot_inbox_identifier: c.chatwoot_inbox_identifier ?? null,
+          // `chatwoot_inbox_identifier` sai daqui de vez: o diagnóstico (canal -> telefone ->
+          // instância uazapi casada) não precisa dele, e ele é credencial de escrita.
           uaz_match: match ? (match as Record<string, unknown>).name : null,
         };
       });
@@ -1372,6 +1391,15 @@ function startFlowTimeoutLoop() {
   setTimeout(run, 90_000);
   setInterval(run, FLOW_TIMEOUT_INTERVAL_MS);
   console.log("flow-timeout loop ON (2min)");
+}
+
+// Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
+// internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
+function diagAutorizado(req: Request, url: URL): boolean {
+  const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+  const informado = bearer || url.searchParams.get("token") || "";
+  const esperado = optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");
+  return timingSafeEqual(informado, esperado);
 }
 
 function startOperationalMonitorLoop() {
