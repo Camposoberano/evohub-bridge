@@ -19,7 +19,10 @@
 import { optionalEnv } from "./env.ts";
 import { timingSafeEqual } from "./hmac.ts";
 
-/** Segredo adicional aceito durante uma rotação. Ausente = etapa não iniciada. */
+/**
+ * Segredo ADICIONAL aceito além do principal. Durante uma rotação ele guarda o segredo que
+ * está saindo — o principal (`CHATWOOT_WEBHOOK_SECRET`) é sempre o vigente.
+ */
 export function segredoEmRotacao(): string | undefined {
   const v = optionalEnv("CHATWOOT_WEBHOOK_SECRET_NOVO");
   return v && v.trim() ? v : undefined;
@@ -45,11 +48,10 @@ export function confereSegredo(
   }
   const casouNovo = rotacao ? timingSafeEqual(token, rotacao) : false;
 
-  // Durante a rotação, quem ainda chega com o segredo ANTIGO precisa aparecer. As 10 inboxes
-  // do Chatwoot já migraram, mas o n8n dispara /send-outbound e /funil-enroll e seus workflows
-  // não são visíveis deste repositório. Sem este aviso, promover o novo seria adivinhação —
-  // e derrubaria esses jobs em silêncio.
-  if (rotacao && casouLegado && !casouNovo) {
+  // Quem chega pelo segredo ADICIONAL (o que está saindo) precisa aparecer no log: é assim
+  // que se sabe, sem adivinhar, se ainda há chamador por migrar antes de removê-lo. O n8n
+  // dispara /send-outbound e /funil-enroll e seus workflows não são visíveis daqui.
+  if (rotacao && casouNovo && !casouLegado) {
     console.warn("segredo LEGADO ainda em uso — falta migrar este chamador");
   }
   return casouLegado || casouNovo;
@@ -63,6 +65,8 @@ export function confereSegredo(
  * do próprio bridge.
  */
 export function segredoParaChamadaInterna(): string {
-  return segredoEmRotacao() ?? optionalEnv("SYNC_SECRET") ??
-    optionalEnv("CHATWOOT_WEBHOOK_SECRET") ?? "";
+  // SEMPRE o principal, nunca o adicional: o adicional guarda o segredo que está saindo, e
+  // usá-lo faria o próprio bridge disparar o aviso de "legado" a cada 30s — afogando o sinal
+  // que existe para dizer qual chamador EXTERNO ainda falta migrar.
+  return optionalEnv("SYNC_SECRET") ?? optionalEnv("CHATWOOT_WEBHOOK_SECRET") ?? "";
 }

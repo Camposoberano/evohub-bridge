@@ -54,10 +54,11 @@ Deno.test("uso do segredo legado durante a rotação é sinalizado", () => {
   const avisos: string[] = [];
   console.warn = (...a: unknown[]) => avisos.push(a.join(" "));
   try {
-    assertEquals(confereSegredo("novo", ["atual"]), true);
-    assertEquals(avisos.length, 0, "quem já migrou não gera aviso");
+    // "atual" = principal (vigente); "novo" = env adicional, que guarda o segredo saindo
     assertEquals(confereSegredo("atual", ["atual"]), true);
-    assertEquals(avisos.length, 1, "quem ficou no antigo gera aviso");
+    assertEquals(avisos.length, 0, "quem usa o principal não gera aviso");
+    assertEquals(confereSegredo("novo", ["atual"]), true);
+    assertEquals(avisos.length, 1, "quem usa o segredo que está saindo gera aviso");
     assertEquals(avisos[0].includes("LEGADO"), true);
   } finally {
     console.warn = original;
