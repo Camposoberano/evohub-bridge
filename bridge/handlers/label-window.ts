@@ -20,6 +20,16 @@ const LABEL_CLOSED = "janela-fechada";
 const WINDOW_LABELS = new Set([LABEL_OPEN, LABEL_CLOSING, LABEL_CLOSED]);
 // etiquetas INFORMATIVAS (o time não mexe, só lê): origem e tipo de canal.
 const LABEL_ANUNCIO = "origem-anuncio";
+// Estado do que JÁ foi aplicado em cada conversa, por processo. Na medição de 30/08 a rodada
+// varria 368 conversas, gastava ~20s em chamadas ao Chatwoot e mudava exatamente 1 etiqueta.
+// Guardando o alvo já aplicado, a conversa cujo alvo não mudou é pulada sem nenhuma chamada.
+//
+// Guardamos só o ALVO, nunca as etiquetas lidas: escrever a partir de leitura velha poderia
+// apagar uma etiqueta posta à mão nesse meio-tempo — e uma delas é a `bot-off`, que cala o
+// bot. Quando o alvo muda, lê fresco do Chatwoot e só então escreve.
+const ultimoAlvoAplicado = new Map<number, { alvo: string; em: number }>();
+// Revalidação periódica: se alguém apagar a etiqueta à mão, o estado se corrige sozinho.
+const REVALIDAR_APOS_MS = 6 * 60 * 60 * 1000;
 const LABEL_OFICIAL = "canal-oficial";
 const LABEL_NAO_OFICIAL = "canal-nao-oficial";
 
@@ -36,7 +46,7 @@ export async function handle(req: Request): Promise<Response> {
     .in("type", ["whatsapp", "facebook", "instagram"]).eq("status", "active");
   if (chErr) return json({ error: chErr.message }, 500);
 
-  const totals = { channels: channels?.length ?? 0, conversations_scanned: 0, labeled: 0, skipped_no_inbound: 0, unchanged: 0, errors: [] as string[] };
+  const totals = { channels: channels?.length ?? 0, conversations_scanned: 0, labeled: 0, skipped_no_inbound: 0, unchanged: 0, sem_consulta: 0, errors: [] as string[] };
 
   for (const ch of channels ?? []) {
     const { data: convs, error: convErr } = await db.from("conversations")
@@ -66,16 +76,28 @@ export async function handle(req: Request): Promise<Response> {
       const elapsed = Date.now() - lastInMs;
       const target = elapsed >= windowMs ? LABEL_CLOSED : (windowMs - elapsed <= CLOSING_SOON_MS ? LABEL_CLOSING : LABEL_OPEN);
 
+      const extras = [canalLabel, ...(conv.origem === "anuncio" ? [LABEL_ANUNCIO] : [])];
+      const assinatura = [target, ...extras].join("|");
+      const aplicado = ultimoAlvoAplicado.get(cwConvId);
+      if (
+        aplicado && aplicado.alvo === assinatura &&
+        Date.now() - aplicado.em < REVALIDAR_APOS_MS
+      ) {
+        totals.sem_consulta++;
+        continue;
+      }
+
       try {
         const current = await getConversationLabels(cwConvId, acct);
-        const extras = [canalLabel, ...(conv.origem === "anuncio" ? [LABEL_ANUNCIO] : [])];
         const jaTemExtras = extras.every((l) => current.includes(l));
         if (current.includes(target) && current.filter((l) => WINDOW_LABELS.has(l)).length === 1 && jaTemExtras) {
+          ultimoAlvoAplicado.set(cwConvId, { alvo: assinatura, em: Date.now() });
           totals.unchanged++;
           continue;
         }
         const next = [...new Set([...current.filter((l) => !WINDOW_LABELS.has(l)), target, ...extras])];
         await setConversationLabels(cwConvId, next, acct);
+        ultimoAlvoAplicado.set(cwConvId, { alvo: assinatura, em: Date.now() });
         totals.labeled++;
       } catch (e) {
         totals.errors.push(`conv ${cwConvId}: ${errorMessage(e)}`);
