@@ -134,7 +134,30 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
 
   const channel = await findChannelForInstance(db, instanceName, data);
   if (!channel) {
+    // Número novo conectado na uazapi sem linha em `channels`: a mensagem do cliente chega
+    // aqui e não tem onde ser gravada. Antes isso morria num console.warn que some do log
+    // em horas -- mesma forma de perda silenciosa que engoliu 73 mensagens em 29/08.
+    // Agora vira evento, e o monitor transforma em alerta de WhatsApp (canal_nao_cadastrado).
     console.warn("uazapi-webhook sem canal para instancia", instanceName);
+    // Um evento por instância por hora: a instância órfã recebe em rajada e não adianta
+    // gravar 200 linhas iguais -- o que importa é o nome dela chegar no alerta.
+    const marca = `sem-canal-${instanceName}-${
+      new Date().toISOString().slice(0, 13)
+    }`;
+    if (await claimDelivery(db, marca, "uazapi-sem-canal")) {
+      await db.from("events").insert({
+        source: "uazapi",
+        event_type: "inbound_sem_canal",
+        payload: {
+          instance: instanceName,
+          // sem telefone: o alerta precisa do NOME da instância pra cadastrar o canal,
+          // e número de cliente em log/alerta é dado pessoal viajando à toa.
+          detectado_em: new Date().toISOString(),
+        },
+      }).then(() => {}, (e: unknown) => {
+        console.error("uazapi-webhook: falha ao registrar sem-canal:", e);
+      });
+    }
     return;
   }
 

@@ -14,6 +14,7 @@ import {
 import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
+import { handle as connectUazapi } from "./handlers/connect-uazapi.ts";
 import { handle as conversationOutcome } from "./handlers/conversation-outcome.ts";
 import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
@@ -108,6 +109,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/hub-webhook": hubWebhook,
   "/chatwoot-webhook": chatwootWebhook,
   "/connect-channel": connectChannel,
+  "/connect-uazapi": connectUazapi,
   "/conversation-outcome": conversationOutcome,
   "/channel-health": channelHealth,
   "/media-retention": mediaRetention,
@@ -306,8 +308,10 @@ const version = {
     "operational-alert-delivery",
     "monitor-token-silence-inbound-loss",
     "internal-number-no-automation",
+    "uazapi-inbound-sem-canal-alerta",
+    "connect-uazapi-provisionamento",
   ],
-  build: "2026-08-30-silencio-ordem-correta",
+  build: "2026-08-31-numero-novo-pronto-no-dia",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

@@ -195,8 +195,28 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       .gte("received_at", since1h),
   );
 
+  // 3b) instância uazapi entregando sem canal cadastrado: o número foi conectado, o cliente
+  //     está escrevendo, e o webhook descarta tudo porque não existe linha em `channels`.
+  //     O nome da instância é o que a pessoa precisa pra cadastrar -- por isso vai no detalhe.
+  const { data: eventosSemCanal } = await db.from("events")
+    .select("payload").eq("event_type", "inbound_sem_canal")
+    .gte("received_at", since1h);
+  const instanciasSemCanal = [
+    ...new Set(
+      ((eventosSemCanal ?? []) as Json[])
+        .map((e) => String(((e.payload ?? {}) as Json).instance ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
+
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
+    {
+      key: "canal_nao_cadastrado",
+      severity: "critical",
+      count: instanciasSemCanal.length,
+      detail: instanciasSemCanal.join("; ") || undefined,
+    },
     {
       key: "social_token_invalid",
       severity: "critical",

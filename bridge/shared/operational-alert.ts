@@ -31,6 +31,9 @@ const ENTREGAVEIS = new Set([
   "social_token_invalid",
   "channel_silent",
   "inbound_lost",
+  // Número conectado na uazapi sem canal cadastrado: cliente escrevendo, bridge descartando.
+  // Exige ação humana imediata (cadastrar o canal) e o conserto é de minutos.
+  "canal_nao_cadastrado",
   "failed_messages_15m",
   "overdue_funnel_queue",
 ]);
@@ -40,6 +43,7 @@ const TITULOS: Record<string, string> = {
   social_token_invalid: "Token de canal social inválido",
   channel_silent: "Canal ativo parou de receber mensagem",
   inbound_lost: "Mensagem de cliente perdida na ingestão",
+  canal_nao_cadastrado: "Número recebendo sem canal cadastrado",
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
 };
