@@ -9,12 +9,39 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Dois buckets crescem: `chatwoot-media` (o que recebemos) e `soberano-out` (o que geramos
-// pra enviar -- PTT em ogg). O segundo ficou de fora até 08/09 e sozinho passava de 5 GB.
-const BUCKETS = (optionalEnv("MEDIA_RETENTION_BUCKETS") ??
-  optionalEnv("MEDIA_BUCKET") ?? "chatwoot-media,soberano-out")
-  .split(",").map((b) => b.trim()).filter(Boolean);
+// Dois buckets crescem, e o que guardam NÃO tem o mesmo valor:
+//
+//   chatwoot-media  o que o CLIENTE mandou -- áudio, foto, documento dele. Isso é histórico
+//                   de atendimento e, por decisão do dono da conta, fica.
+//   soberano-out    o que NÓS geramos pra disparar (PTT do funil). É material de campanha,
+//                   reproduzível: com o nome por hash, apagar só força um novo upload.
+//
+// Por isso a janela é POR BUCKET: "nome:dias", caindo em MEDIA_RETENTION_DAYS quando o
+// número não vier. Uma janela única obrigaria a escolher entre perder conversa de cliente
+// ou carregar gigabytes de campanha para sempre.
 const DAYS = Number(optionalEnv("MEDIA_RETENTION_DAYS") ?? "365");
+
+export function lerBuckets(
+  spec: string,
+  padraoDias: number,
+): { bucket: string; dias: number }[] {
+  return spec.split(",").map((parte) => {
+    const [nome, dias] = parte.split(":").map((s) => s.trim());
+    const n = Number(dias);
+    return {
+      bucket: nome,
+      // dias inválido ou ausente cai no padrão: nunca vira NaN, que apagaria tudo ou nada
+      // dependendo da comparação e sem ninguém entender por quê.
+      dias: Number.isFinite(n) && n > 0 ? n : padraoDias,
+    };
+  }).filter((b) => b.bucket);
+}
+
+const BUCKETS = lerBuckets(
+  optionalEnv("MEDIA_RETENTION_BUCKETS") ?? optionalEnv("MEDIA_BUCKET") ??
+    "chatwoot-media,soberano-out",
+  DAYS,
+);
 
 type Alvo = { scanned: number; paths: string[] };
 
@@ -80,11 +107,11 @@ export async function handle(req: Request): Promise<Response> {
   if (!authed) return json({ error: "unauthorized" }, 401);
 
   const confirm = url.searchParams.get("confirm") === "1" || optionalEnv("MEDIA_RETENTION_ENABLED") === "true";
-  const cutoff = Date.now() - DAYS * 86_400_000;
 
   const porBucket: Record<string, unknown>[] = [];
   let scanned = 0, expired = 0, removed = 0;
-  for (const bucket of BUCKETS) {
+  for (const { bucket, dias } of BUCKETS) {
+    const cutoff = Date.now() - dias * 86_400_000;
     // deno-lint-ignore no-explicit-any
     const storage = (admin() as any).storage.from(bucket);
     const alvo: Alvo = { scanned: 0, paths: [] };
@@ -92,7 +119,7 @@ export async function handle(req: Request): Promise<Response> {
       await coletarExpirados(storage, "", cutoff, alvo);
     } catch (e) {
       // Um bucket que falha não pode impedir a limpeza dos outros: o disco enche igual.
-      porBucket.push({ bucket, erro: String(e).slice(0, 140) });
+      porBucket.push({ bucket, dias, erro: String(e).slice(0, 140) });
       continue;
     }
     let apagados = 0;
@@ -105,10 +132,10 @@ export async function handle(req: Request): Promise<Response> {
     scanned += alvo.scanned;
     expired += alvo.paths.length;
     removed += apagados;
-    porBucket.push({ bucket, scanned: alvo.scanned, expired: alvo.paths.length, removed: apagados });
+    porBucket.push({ bucket, dias, scanned: alvo.scanned, expired: alvo.paths.length, removed: apagados });
   }
 
-  return json({ buckets: porBucket, retention_days: DAYS, scanned, expired, confirmed: confirm, removed });
+  return json({ buckets: porBucket, scanned, expired, confirmed: confirm, removed });
 }
 
 function json(obj: unknown, status = 200): Response {
