@@ -310,8 +310,12 @@ const version = {
     "internal-number-no-automation",
     "uazapi-inbound-sem-canal-alerta",
     "connect-uazapi-provisionamento",
+    "conta-chatwoot-admin-proprio",
+    "audio-saida-por-hash",
+    "retencao-por-bucket",
+    "channel-sync-preenche-id-social",
   ],
-  build: "2026-08-31-numero-novo-pronto-no-dia",
+  build: "2026-09-08-id-social-e-retencao",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

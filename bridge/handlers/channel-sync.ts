@@ -9,9 +9,31 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 
+/**
+ * Identificador que a Meta usa pra endereçar a entrada: `page_id` no Facebook, o id de
+ * usuário do Instagram no IG.
+ *
+ * Os nomes variam entre respostas do Hub, então a busca é por ordem de preferência em vez de
+ * um campo só — e no IG `instagram_user_id` vem antes de `instagram_id`: são números
+ * diferentes, e é o primeiro que aparece no webhook de entrada.
+ */
+export function achaIdSocial(detalhe: Json, tipo: string): string | null {
+  if (tipo === "facebook") {
+    const fb = (detalhe.facebook_connection ?? {}) as Json;
+    return (fb.page_id as string) ?? null;
+  }
+  if (tipo === "instagram") {
+    const ig = (detalhe.instagram_connection ?? {}) as Json;
+    return ((ig.instagram_user_id ?? ig.ig_id ?? ig.instagram_id ?? ig.id) as string) ?? null;
+  }
+  return null;
+}
+
 // Sincroniza todos os canais (ou um tipo). Devolve resumo.
 export async function syncChannels(db: Db, type?: string): Promise<Json> {
-  let q = db.from("channels").select("id,name,type,status,hub_channel_id,phone_number_id").not("hub_channel_id", "is", null);
+  let q = db.from("channels").select(
+    "id,name,type,status,hub_channel_id,phone_number_id,page_id,ig_id",
+  ).not("hub_channel_id", "is", null);
   if (type) q = q.eq("type", type);
   const { data: channels } = await q;
   let updated = 0;
@@ -32,6 +54,18 @@ export async function syncChannels(db: Db, type?: string): Promise<Json> {
       if (waba) patch.waba_id = waba;
       if (p.display_phone_number) patch.phone_number = p.display_phone_number;
       if (p.verified_name) patch.display_name = p.verified_name;
+
+      // Identificador de ROTEAMENTO do canal social. A entrada da Meta acha o canal por
+      // `page_id` (FB) ou `ig_id` (IG) -- sem ele, a mensagem não casa com canal nenhum e é
+      // descartada em silêncio. Quem preenche é o evento `channel_connected`, UMA vez: se o
+      // detalhe no Hub ainda não trouxer a conexão naquele instante, o canal nasce mudo e
+      // nunca se conserta. Foi o que deixou `david face` e `david inst` três dias ativos e
+      // com zero conversa. Aqui a corrida se resolve sozinha na próxima rodada.
+      const idSocial = achaIdSocial(det, ch.type as string);
+      if (idSocial) {
+        if (ch.type === "facebook" && !ch.page_id) patch.page_id = idSocial;
+        if (ch.type === "instagram" && !ch.ig_id) patch.ig_id = idSocial;
+      }
       if (status === "active" && ch.status !== "active") patch.connected_at = new Date().toISOString();
       if (Object.keys(patch).length) {
         await db.from("channels").update(patch).eq("id", ch.id);
