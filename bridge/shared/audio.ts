@@ -18,6 +18,37 @@ async function ensureBucket() {
   bucketReady = true;
 }
 
+/**
+ * Caminho estável derivado do conteúdo do áudio: mesmo áudio, mesmo objeto no bucket.
+ *
+ * É o que transforma "sobe uma cópia por envio" em "sobe uma vez e reaproveita". SHA-256
+ * porque colisão aqui serviria um áudio errado para o cliente.
+ */
+export async function caminhoDoAudio(bytes: Uint8Array): Promise<string> {
+  // cópia própria: o Uint8Array que chega pode estar sobre SharedArrayBuffer, que o
+  // crypto.subtle não aceita.
+  const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return `ptt/${hex}.ogg`;
+}
+
+/**
+ * Upload que bate em objeto já existente é SUCESSO, não falha — é exatamente o
+ * reaproveitamento. Tratar como erro faria o áudio deixar de ser enviado a partir da
+ * segunda vez, que é o caso comum.
+ */
+export function ehObjetoJaExistente(
+  error: { message?: string; statusCode?: string | number } | null | undefined,
+): boolean {
+  if (!error) return false;
+  if (String(error.statusCode ?? "") === "409") return true;
+  return /already exists|duplicate|resource already/i.test(
+    String(error.message ?? ""),
+  );
+}
+
 // Devolve URL pública de um .ogg/opus, ou null se falhar (caller usa o original).
 export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
   // SEMPRE transcodifica pra ogg/opus. (Não pula .ogg: o Chatwoot serve ogg/vorbis,
@@ -66,13 +97,18 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     if (bytes.length === 0) return null;
 
     await ensureBucket();
-    const path = `ptt/${crypto.randomUUID()}.ogg`;
+    // Nome derivado do CONTEÚDO, não sorteado. O funil manda os mesmos áudios para todo
+    // lead, e o randomUUID subia um arquivo novo a cada envio: 43 áudios distintos viraram
+    // 9.552 objetos e 4,59 GB de cópia em três meses -- um único áudio de 1 MB tinha 907
+    // cópias. Com o hash, o segundo envio do mesmo áudio reaproveita o objeto existente.
+    const path = await caminhoDoAudio(bytes);
     const { error } = await (admin() as any).storage.from(BUCKET).upload(
       path,
       new Blob([bytes], { type: "audio/ogg" }),
       { contentType: "audio/ogg", upsert: false },
     );
-    if (error) {
+    // Colisão aqui não é falha: é o reaproveitamento acontecendo. Só erro de verdade aborta.
+    if (error && !ehObjetoJaExistente(error)) {
       console.error("upload ogg falhou:", error.message);
       return null;
     }
