@@ -7,7 +7,11 @@ import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
-import { foldText, isDefaultAdMessage } from "../shared/ad-lead.ts";
+import {
+  foldText,
+  isDefaultAdMessage,
+  pareceAberturaComercial,
+} from "../shared/ad-lead.ts";
 import {
   addBusinessSeconds,
   clampBusinessTime,
@@ -510,6 +514,46 @@ function json(obj: unknown, status = 200): Response {
 //   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
 //   FUNIL_KEYWORD             = (opcional) só entra se a msg contiver a palavra-chave do anúncio
 // Chamado pelo hub-webhook a cada entrada. Dedup: 1 funil por conversa (sales_sequences).
+const CANAIS_SOCIAIS = new Set(["facebook", "instagram"]);
+
+/** Frases extras de anúncio, para acrescentar um icebreaker novo sem deploy. */
+export function icebreakersConfigurados(): string[] {
+  return (optionalEnv("FUNIL_ICEBREAKERS") ?? "")
+    .split("|").map((f) => f.trim()).filter(Boolean);
+}
+
+/**
+ * É a PRIMEIRA mensagem de um lead social e tem cara de pergunta de anúncio?
+ *
+ * A exigência de ser a primeira é o que separa "lead que chegou pelo anúncio" de "cliente
+ * de duas semanas que agora perguntou o preço" — o segundo não deve cair numa sequência de
+ * apresentação. `autoEnrollFunil` roda a cada mensagem recebida, então sem essa checagem a
+ * regra pegaria qualquer menção a preço no meio da conversa.
+ */
+export async function ehAberturaDeAnuncioSocial(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+  content: string,
+): Promise<boolean> {
+  if (!CANAIS_SOCIAIS.has(String(channel.type ?? ""))) return false;
+  if (!pareceAberturaComercial(content, icebreakersConfigurados())) return false;
+
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (!contact) return false;
+  const { data: conv } = await db.from("conversations").select("id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (!conv) return false;
+
+  // 1 = a que acabou de ser gravada. Acima disso a conversa já estava em andamento.
+  const { count } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conv.id).eq("direction", "in");
+  return (count ?? 0) <= 1;
+}
+
 export async function autoEnrollFunil(
   db: ReturnType<typeof admin>,
   channel: Json,
@@ -520,6 +564,20 @@ export async function autoEnrollFunil(
   // A mensagem pré-preenchida do anúncio e o referral da Meta são sinais
   // suficientes mesmo sem configuração adicional no ambiente.
   if (fromAd || isDefaultAdMessage(content)) {
+    await enrollIfNew(db, channel, from);
+    return;
+  }
+
+  // Facebook e Instagram: pergunta comercial NA ABERTURA vale como lead de anúncio.
+  //
+  // Nesses dois canais a Meta não manda `referral` quando o lead escolhe uma das perguntas
+  // prontas do anúncio -- conferido nas 15 conversas de 03-08/09: referral, ad_id, ctwa_clid
+  // e source_url vazios em todas. Sem outro sinal, o texto é o que resta.
+  //
+  // Só na abertura, e só nesses canais. No WhatsApp a inscrição já funciona por outro caminho
+  // (63 de 67 aberturas comerciais entraram no funil nos mesmos 5 dias), e alargar a regra lá
+  // pegaria quem chega por indicação, não por anúncio.
+  if (await ehAberturaDeAnuncioSocial(db, channel, from, content)) {
     await enrollIfNew(db, channel, from);
     return;
   }
