@@ -24,6 +24,49 @@ import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
 
+/**
+ * Falha que NÃO adianta repetir — e a frase que explica isso ao atendente.
+ *
+ * O loop de macros só consome a etiqueta quando recebe `ok:true` ou `terminal:true`; em
+ * qualquer outra resposta ele MANTÉM a etiqueta e tenta de novo a cada 15 segundos, para
+ * sempre. Em 08/09 havia seis conversas nesse estado — 24 tentativas por minuto, sem fim,
+ * cada uma repetindo uma falha que jamais mudaria sozinha: canal social sem template, janela
+ * fechada, canal sem credencial, conversa que o bridge não enxerga.
+ *
+ * Marcar terminal não é só parar o laço. Sem a nota, o atendente clica na macro, nada
+ * acontece e a etiqueta desaparece — ele precisa saber POR QUE não foi.
+ */
+const MOTIVOS_TERMINAIS: [RegExp, string][] = [
+  [
+    /sem phone_number_id|n[aã]o[- ]oficial/i,
+    "Este canal não tem template aprovado. Com a janela fechada, só o cliente pode reabrir a conversa — e a peça sai quando ele responder.",
+  ],
+  [
+    /janela[- ]fechada/i,
+    "A janela de resposta da Meta está fechada. A peça não sai até o cliente mandar uma nova mensagem.",
+  ],
+  [
+    /canal sem credenciais|canal sem token/i,
+    "O canal não tem credencial para enviar esta sequência. É configuração do canal, não desta conversa.",
+  ],
+  [
+    /conversa n[aã]o encontrada|canal ou contato n[aã]o encontrado/i,
+    "Esta conversa não está ligada a nenhum canal do bridge, então a macro não a alcança.",
+  ],
+  [
+    /comentario-publico|coment[aá]rio p[uú]blico/i,
+    "Comentário público não aceita funil — responda na conversa privada.",
+  ],
+];
+
+/** Motivo legível se a falha for definitiva; null se vale tentar de novo. */
+export function motivoTerminal(detalhe: string): string | null {
+  for (const [padrao, motivo] of MOTIVOS_TERMINAIS) {
+    if (padrao.test(detalhe)) return motivo;
+  }
+  return null;
+}
+
 export { autoPauseFunil } from "../shared/funnel-state.ts";
 
 type Json = Record<string, unknown>;
@@ -57,7 +100,7 @@ export async function handle(req: Request): Promise<Response> {
     "id, channel_id, contact_id, chatwoot_conversation_id",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-  if (!conv) return json({ error: "conversa não encontrada" }, 404);
+  if (!conv) return json({ error: "conversa não encontrada", terminal: true }, 404);
 
   const acct = await accountForChannel(conv.channel_id as string);
 
@@ -333,7 +376,7 @@ export async function handle(req: Request): Promise<Response> {
   if (action === "catalogo" || action === "abrir-catalogo") {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado" }, 404);
+      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     }
     await sendCatalogRootMenu(
       db,
@@ -353,7 +396,7 @@ export async function handle(req: Request): Promise<Response> {
   if (action === "catalogo-sair" || action === "voltar-mega-sorgo") {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado" }, 404);
+      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     }
     await leaveCatalogJourney(db, resolved.channel, resolved.from, acct);
     await nota(
@@ -395,7 +438,7 @@ export async function handle(req: Request): Promise<Response> {
   if (menuId) {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado" }, 404);
+      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     }
     try {
       // Uma sequencia comercial manual substitui a conversa automatica naquele
@@ -450,6 +493,11 @@ export async function handle(req: Request): Promise<Response> {
           error: detail,
         }, 409);
       }
+      const motivo = motivoTerminal(detail);
+      if (motivo) {
+        await nota(cwConvId, `🚫 *Macro "${action}" não executada.* ${motivo}`, acct);
+        return json({ ok: false, terminal: true, error: detail }, 422);
+      }
       return json({ error: detail }, 500);
     }
   }
@@ -472,7 +520,7 @@ export async function dispatchRecovery(
 ): Promise<Response> {
   const resolved = await resolveChannelAndContact(db, conv);
   if (!resolved) {
-    return json({ error: "canal ou contato não encontrado" }, 404);
+    return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
   }
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
@@ -608,10 +656,25 @@ export async function dispatchRecovery(
     });
   } catch (error) {
     await releaseDelivery(db, claimKey);
+    const detail = String(error).slice(0, 240);
+    const motivo = motivoTerminal(detail);
+    if (motivo) {
+      await nota(
+        cwConvId,
+        `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,
+        acct,
+      );
+      return json({
+        ok: false,
+        terminal: true,
+        action: `recuperacao-${variation}`,
+        error: detail,
+      }, 422);
+    }
     return json({
       ok: false,
       action: `recuperacao-${variation}`,
-      error: String(error).slice(0, 240),
+      error: detail,
     }, 500);
   }
 }
