@@ -42,7 +42,14 @@ function toCwAcct(a: StoredAcct | undefined): CwAcct {
     url: a.url || def.url,
     token: a.token || def.token, // conta sem token guardado (mesma instância) -> usa o do env
     accountId: a.accountId,
-    adminToken: def.adminToken,
+    // Conta com token PRÓPRIO administra a si mesma. O adminToken do env pertence à conta
+    // principal e o Chatwoot recusa com 401 "Você não está autorizado a acessar esta conta"
+    // em qualquer outra -- criar inbox exige Administrator DAQUELA conta, não da nossa.
+    // Foi o que travou o WhatsApp do David em 05/09: as inboxes de Facebook e Instagram
+    // nasceram antes de CHATWOOT_ADMIN_TOKEN existir no ambiente (e o código caía no token
+    // da própria conta, que funciona); depois que a env entrou, a terceira tentativa falhou.
+    // Conta sem token guardado é a nossa própria instância, e aí o adminToken do env vale.
+    adminToken: a.token || def.adminToken,
   };
 }
 
