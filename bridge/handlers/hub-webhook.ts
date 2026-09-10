@@ -22,6 +22,8 @@ import {
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { ehPrimeiraMensagem } from "../shared/funil-pausa.ts";
+import { textoDeAncoragem } from "../shared/ancoragem-preco.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
@@ -503,6 +505,13 @@ async function handleWhatsApp(db: Db, p: Json) {
               : isNutricaoIntent(intentText)
               ? "nutrição"
               : null;
+            // Lead que ABRE a conversa perguntando o preço veio do anúncio: a pergunta
+            // pronta é o que o anúncio oferece, e ela diz "me interessei", não "quero
+            // fechar". Esse recebe a ancoragem e SEGUE no funil -- pausar aqui mataria a
+            // sequência antes da apresentação, que é justamente o que ele precisa ver antes
+            // do número. Quem pergunta depois já viu a apresentação e está avaliando: aí o
+            // preço vai e o funil espera a reação.
+            let aberturaDeAnuncio = false;
             if (detectedIntent) {
               const { data: _ct } = await db.from("contacts").select("id").eq(
                 "channel_id",
@@ -515,10 +524,35 @@ async function handleWhatsApp(db: Db, p: Json) {
                   "opened_at",
                   { ascending: false },
                 ).limit(1).maybeSingle();
-                if (_cv) await autoPauseFunil(_cv.id as string, detectedIntent);
+                if (_cv) {
+                  aberturaDeAnuncio = isPrecoIntent(intentText) &&
+                    await ehPrimeiraMensagem(db, _cv.id as string);
+                  if (!aberturaDeAnuncio) {
+                    await autoPauseFunil(_cv.id as string, detectedIntent);
+                  }
+                }
               }
             }
-            if (isPrecoIntent(intentText)) {
+            if (aberturaDeAnuncio) {
+              // Responde sem entregar o valor: procedência, frete e desconto por volume.
+              // O número vem depois, quando a apresentação já tiver feito o trabalho dela.
+              try {
+                const { data: _sec } = await db.from("channel_secrets")
+                  .select("channel_token").eq("channel_id", channel.id)
+                  .maybeSingle();
+                const _tok = _sec?.channel_token as string | undefined;
+                if (_tok) {
+                  await sendMeta(_tok, "me/messages", {
+                    recipient: { id: from },
+                    message: { text: textoDeAncoragem() },
+                    messaging_type: "RESPONSE",
+                  });
+                  console.log("ancoragem de preço enviada (abertura de anúncio):", from.slice(-4));
+                }
+              } catch (e) {
+                console.error("ancoragem erro:", String(e).slice(0, 140));
+              }
+            } else if (isPrecoIntent(intentText)) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (

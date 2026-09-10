@@ -317,8 +317,9 @@ const version = {
     "channel-sync-preenche-id-social",
     "funil-pausa-com-prazo",
     "audio-social-m4a",
+    "ancoragem-preco-abertura",
   ],
-  build: "2026-09-10-funil-retoma-e-audio-m4a",
+  build: "2026-09-10-ancoragem-e-retomada",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

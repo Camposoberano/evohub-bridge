@@ -15,10 +15,37 @@ import { optionalEnv } from "./env.ts";
 const FONTE = "funil-pausa-preco";
 const PREFIXO = "funil-pausa-";
 
-/** Horas até a retomada. Variável porque o número certo se descobre observando. */
+/**
+ * Horas até a retomada. Duas por padrão: tempo de o cliente reagir ao preço sem que a
+ * conversa esfrie. Variável porque o número certo se descobre observando.
+ */
 export function horasDePausa(): number {
-  const v = Number(optionalEnv("FUNIL_PAUSA_PRECO_HORAS") ?? "24");
-  return Number.isFinite(v) && v > 0 ? v : 24;
+  const v = Number(optionalEnv("FUNIL_PAUSA_PRECO_HORAS") ?? "2");
+  return Number.isFinite(v) && v > 0 ? v : 2;
+}
+
+/**
+ * O lead está abrindo a conversa agora?
+ *
+ * Separa dois casos que pareciam um só. Quem chega perguntando o preço **na primeira
+ * mensagem** veio do anúncio — o anúncio oferece essa pergunta pronta, e ela diz "me
+ * interessei", não "já quero fechar". Esse precisa da apresentação antes do número, e o funil
+ * não pode ser pausado: ele mal começou.
+ *
+ * Já quem pergunta o preço **depois** de receber a apresentação está avaliando a compra. Aí
+ * o preço vai, e o funil espera a reação.
+ *
+ * 1 = a mensagem que acabou de ser gravada.
+ */
+export async function ehPrimeiraMensagem(
+  db: DbClient,
+  conversationId: string,
+): Promise<boolean> {
+  const { count, error } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversationId).eq("direction", "in");
+  if (error) return false;
+  return (count ?? 0) <= 1;
 }
 
 export function chaveDaPausa(conversationId: string): string {
