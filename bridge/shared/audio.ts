@@ -123,16 +123,31 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
   }
 }
 
-// Instagram rejeita OGG (subcode 2534080). Converte para MP3/MPEG, que pode ser
-// entregue como attachment de audio; o caller ainda mantém um link como fallback.
-export async function toSocialMp3(srcUrl: string): Promise<string | null> {
+/**
+ * Áudio para Facebook e Instagram: m4a/AAC.
+ *
+ * Os áudios do funil são ogg/opus — formato nativo do WhatsApp, que é onde nasceram. A Meta
+ * **não aceita ogg como áudio** nos canais sociais. A documentação dela lista:
+ *
+ *   Áudio  aac, m4a, wav, mp4  (25 MB)     Vídeo  mp4, ogg, avi, mov, webm
+ *
+ * O ogg aparece em VÍDEO, não em áudio. E **mp3 não aparece em nenhum dos dois** — esta
+ * função convertia para mp3 e continuava falhando, com `IGApiException: Upload attachment
+ * failure` (subcode 2018047). O bridge então caía num fallback que mandava a URL como texto:
+ * em 10/09, 100% dos áudios do Instagram chegaram ao cliente como link em vez de som. No
+ * Facebook o mesmo ogg falhava de forma intermitente.
+ *
+ * AAC em contêiner m4a está na lista dos dois canais. Devolve null em caso de falha, e aí o
+ * chamador segue com o original.
+ */
+export async function toSocialAudio(srcUrl: string): Promise<string | null> {
   let inPath = "", outPath = "";
   try {
     const res = await fetch(srcUrl);
     if (!res.ok) return null;
     const input = new Uint8Array(await res.arrayBuffer());
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
-    outPath = await Deno.makeTempFile({ suffix: ".mp3" });
+    outPath = await Deno.makeTempFile({ suffix: ".m4a" });
     await Deno.writeFile(inPath, input);
     const cmd = new Deno.Command("ffmpeg", {
       args: [
@@ -141,9 +156,9 @@ export async function toSocialMp3(srcUrl: string): Promise<string | null> {
         inPath,
         "-vn",
         "-c:a",
-        "libmp3lame",
+        "aac",
         "-b:a",
-        "128k",
+        "96k",
         "-ar",
         "44100",
         "-ac",
@@ -157,7 +172,7 @@ export async function toSocialMp3(srcUrl: string): Promise<string | null> {
     const { success, code, stderr } = await cmd.output();
     if (!success) {
       console.error(
-        `ffmpeg mp3 falhou (code ${code}):`,
+        `ffmpeg m4a falhou (code ${code}):`,
         new TextDecoder().decode(stderr).slice(0, 300),
       );
       return null;
@@ -166,14 +181,18 @@ export async function toSocialMp3(srcUrl: string): Promise<string | null> {
     if (bytes.length === 0) return null;
 
     await ensureBucket();
-    const path = `social-audio/${crypto.randomUUID()}.mp3`;
+    // Nome pelo conteúdo, mesma razão do PTT: o funil manda o mesmo áudio para todo lead, e
+    // o randomUUID daqui criava uma cópia por envio.
+    const path = (await caminhoDoAudio(bytes)).replace(/^ptt\//, "social-audio/")
+      .replace(/\.ogg$/, ".m4a");
     const { error } = await (admin() as any).storage.from(BUCKET).upload(
       path,
-      new Blob([bytes], { type: "audio/mpeg" }),
-      { contentType: "audio/mpeg", upsert: false },
+      new Blob([bytes], { type: "audio/mp4" }),
+      { contentType: "audio/mp4", upsert: false },
     );
-    if (error) {
-      console.error("upload mp3 falhou:", error.message);
+    // Colisão = o mesmo áudio já convertido antes. É reaproveitamento, não falha.
+    if (error && !ehObjetoJaExistente(error)) {
+      console.error("upload m4a falhou:", error.message);
       return null;
     }
     const { data } = (admin() as any).storage.from(BUCKET).getPublicUrl(path);

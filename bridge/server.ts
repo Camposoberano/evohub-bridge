@@ -75,6 +75,7 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
+import { limparPausa, pausasVencidas, podeRetomar } from "./shared/funil-pausa.ts";
 import {
   maintainFunnels,
   resumeSequenceRebased,
@@ -314,8 +315,10 @@ const version = {
     "audio-saida-por-hash",
     "retencao-por-bucket",
     "channel-sync-preenche-id-social",
+    "funil-pausa-com-prazo",
+    "audio-social-m4a",
   ],
-  build: "2026-09-08-id-social-e-retencao",
+  build: "2026-09-10-funil-retoma-e-audio-m4a",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1158,6 +1161,54 @@ function startChannelSyncLoop() {
   });
 }
 
+/**
+ * Devolve ao funil quem foi pausado por pedir preço e não fechou dentro do prazo.
+ *
+ * Sem isso a pausa era definitiva: em 10/09 havia 3.555 peças e 144 sequências paradas,
+ * mais de duzentas acumuladas num único dia. O lead que demonstrou o maior interesse — o
+ * que pergunta quanto custa — era justamente o que sumia da sequência.
+ *
+ * A cada 10 minutos. Não precisa ser mais fino: o prazo é medido em horas.
+ */
+function startFunnelResumeLoop() {
+  const tick = async () => {
+    try {
+      const db = admin();
+      const conversas = await pausasVencidas(db);
+      if (!conversas.length) return;
+      let retomadas = 0, puladas = 0;
+      for (const id of conversas) {
+        const { data: conv } = await db.from("conversations")
+          .select("outcome,bot_muted_at").eq("id", id).maybeSingle();
+        if (!podeRetomar(conv as { outcome?: string | null; bot_muted_at?: string | null } | null)) {
+          // Já comprou, desistiu ou está com o bot travado: some o marcador, não a conversa.
+          await limparPausa(db, id);
+          puladas++;
+          continue;
+        }
+        try {
+          const n = await resumeSequenceRebased(db, id);
+          // Só limpa DEPOIS de confirmar: falhar antes disso transformaria um erro passageiro
+          // em lead perdido para sempre, que é exatamente o defeito que este laço conserta.
+          await limparPausa(db, id);
+          if (n > 0) retomadas++;
+        } catch (e) {
+          console.error("funil-retomada:", id, String(e).slice(0, 120));
+        }
+      }
+      console.log(
+        "funil-retomada:",
+        JSON.stringify({ vencidas: conversas.length, retomadas, puladas }),
+      );
+    } catch (e) {
+      console.error("funil-retomada loop erro:", String(e).slice(0, 150));
+    }
+  };
+  setTimeout(tick, 60_000);
+  setInterval(tick, 10 * 60_000);
+  console.log("funil-retomada loop ON (10min)");
+}
+
 function startFunnelQueueLoop() {
   // Mesma trava do campaign-queue: tick de 30s mandando até 10 peças com mídia passa do
   // intervalo com folga, e rodadas sobrepostas dobram o ritmo do funil.
@@ -1463,6 +1514,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDeclineGuardLoop();
   startBotMuteLoop();
   startFunnelQueueLoop();
+  startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
   startCampaignQueueLoop();

@@ -29,7 +29,7 @@ import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
-import { toSocialMp3, toVoiceOgg } from "../shared/audio.ts";
+import { toSocialAudio, toVoiceOgg } from "../shared/audio.ts";
 import {
   getHybridRoute,
   hybridSendMedia,
@@ -416,8 +416,11 @@ export async function handle(req: Request): Promise<Response> {
   if (!res && !isWhatsapp) {
     let socialPayload = payload;
     let instagramAudioUrl: string | null = null;
-    if (type === "audio" && channel.type === "instagram") {
-      instagramAudioUrl = await toSocialMp3(String(payload.media_url ?? ""));
+    // Vale para Facebook TAMBÉM, não só Instagram: o ogg do funil falhava nos dois. No
+    // Instagram derrubava 100% dos áudios para o fallback de link; no Facebook falhava de
+    // forma intermitente, o que é pior de perceber.
+    if (type === "audio" && (channel.type === "instagram" || channel.type === "facebook")) {
+      instagramAudioUrl = await toSocialAudio(String(payload.media_url ?? ""));
       if (instagramAudioUrl) {
         socialPayload = { ...payload, media_url: instagramAudioUrl };
       }
