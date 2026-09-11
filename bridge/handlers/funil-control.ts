@@ -2,7 +2,7 @@
 // Chamado por macros do Chatwoot ou API direta.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import {
@@ -663,13 +663,7 @@ export async function dispatchRecovery(
       // pular esta variação até o cliente escrever de novo; sem ele, em 11/09 a mesma nota
       // saía a cada rodada de 5 minutos em cinco conversas. A nota continua saindo para quem
       // clica na macro à mão, mas no máximo uma vez a cada 24h por conversa e variação.
-      const { data: avisadaHoje } = await db.from("events").select("id")
-        .eq("source", "recovery").eq("event_type", "recovery_blocked")
-        .eq("payload->>conversation_id", String(conv.id))
-        .eq("payload->>variation", String(variation))
-        .gte("received_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString())
-        .limit(1).maybeSingle();
-      await db.from("events").insert({
+      const { error: blockedError } = await db.from("events").insert({
         source: "recovery",
         event_type: "recovery_blocked",
         payload: {
@@ -679,8 +673,13 @@ export async function dispatchRecovery(
           channel,
           motivo: detail.slice(0, 160),
         },
-      }).then(() => {}, () => {});
-      if (!avisadaHoje) {
+      });
+      if (blockedError) throw blockedError;
+      // Claim atomico: macros simultaneas nao podem publicar duas notas.
+      if (await claimDeliveryWithTtl(
+        db, `recovery-blocked-note-${conv.id}-${variation}`, "recovery",
+        24 * 60 * 60_000,
+      )) {
         await nota(
           cwConvId,
           `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,

@@ -238,7 +238,7 @@ export async function pumpRecoveryChain(
   const [
     { data: conversations },
     { data: recoveryEvents },
-    { data: blockedEvents },
+    { data: blockedEvents, error: blockedEventsError },
   ] = await Promise.all(
     [
       db.from("conversations").select("id,outcome").in("id", ids),
@@ -258,6 +258,8 @@ export async function pumpRecoveryChain(
         .limit(5_000),
     ],
   );
+  // Falha de leitura nao significa ausencia de bloqueio.
+  if (blockedEventsError) throw blockedEventsError;
   // conversa -> variação -> quando bateu no bloqueio terminal pela última vez
   const bloqueios = new Map<string, Map<number, number>>();
   for (const ev of (blockedEvents ?? []) as Json[]) {
