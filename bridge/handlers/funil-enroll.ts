@@ -4,6 +4,7 @@
 // vídeo vêm da faixa (rotação por slot). Slot sem mídia cadastrada -> peça é pulada (não trava).
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
+import { consultaEmLotes } from "../shared/lotes.ts";
 import { admin } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
@@ -648,23 +649,29 @@ export async function recoverEligibleFunnels(
   const conversationIds = conversations.map((item: Json) => item.id);
   const contactIds = conversations.map((item: Json) => item.contact_id);
   const channelIds = conversations.map((item: Json) => item.channel_id);
-  const [
-    { data: existing },
-    { data: inbound },
-    { data: contacts },
-    { data: channels },
-  ] = await Promise.all([
-    db.from("sales_sequences").select("conversation_id").in(
-      "conversation_id",
+  // Em lotes, e erro sobe em vez de virar lista vazia: com `existing` vazio por falha de
+  // consulta, conversa já inscrita pareceria elegível de novo. Cada conversa cai num lote só,
+  // então "a entrada mais recente por conversa" continua certa com a ordem por lote.
+  const [existing, inbound, contacts, channels] = await Promise.all([
+    consultaEmLotes<Json>(
       conversationIds,
+      (lote) => db.from("sales_sequences").select("conversation_id").in("conversation_id", lote),
     ),
-    db.from("messages").select("conversation_id,content,sent_at").in(
-      "conversation_id",
+    consultaEmLotes<Json>(
       conversationIds,
-    )
-      .eq("direction", "in").order("sent_at", { ascending: false }).limit(3000),
-    db.from("contacts").select("id,external_contact_id").in("id", contactIds),
-    db.from("channels").select("*").in("id", channelIds),
+      (lote) =>
+        db.from("messages").select("conversation_id,content,sent_at")
+          .in("conversation_id", lote)
+          .eq("direction", "in").order("sent_at", { ascending: false }).limit(3000),
+    ),
+    consultaEmLotes<Json>(
+      contactIds,
+      (lote) => db.from("contacts").select("id,external_contact_id").in("id", lote),
+    ),
+    consultaEmLotes<Json>(
+      channelIds,
+      (lote) => db.from("channels").select("*").in("id", lote),
+    ),
   ]);
   const enrolledIds = new Set(
     (existing ?? []).map((item: Json) => String(item.conversation_id)),

@@ -10,6 +10,7 @@
 // O que a trava NÃO faz: bloquear `ingestInbound`. Mensagem do cliente continua sendo
 // gravada e espelhada no Chatwoot — silenciar o bot não é parar de escutar o cliente.
 import type { DbClient } from "./supabase.ts";
+import { consultaEmLotes } from "./lotes.ts";
 
 /** Label no Chatwoot que trava o bot. Persistente: some só quando o atendente remove. */
 export const BOT_MUTE_LABEL = "bot-off";
@@ -28,14 +29,17 @@ export async function mutedConversationIds(
   db: DbClient,
   conversationIds: string[],
 ): Promise<Set<string>> {
-  const ids = [...new Set(conversationIds.filter(Boolean))];
-  if (!ids.length) return new Set();
-  const { data, error } = await db.from("conversations")
-    .select("id")
-    .in("id", ids)
-    .not("bot_muted_at", "is", null);
-  if (error) throw error;
-  return new Set(((data ?? []) as { id: unknown }[]).map((r) => String(r.id)));
+  if (!conversationIds.some(Boolean)) return new Set();
+  // em lotes: a varredura do funil manda até 500 ids e isso estourava a URL (414, 11/09)
+  const data = await consultaEmLotes<{ id: unknown }>(
+    conversationIds,
+    (lote) =>
+      db.from("conversations")
+        .select("id")
+        .in("id", lote)
+        .not("bot_muted_at", "is", null),
+  );
+  return new Set(data.map((r) => String(r.id)));
 }
 
 /**

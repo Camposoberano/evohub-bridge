@@ -126,7 +126,10 @@ export default function Conexoes() {
     window.open(`${HUB_FRONTEND}/connect/${token}`, "_blank", "noopener");
   }
 
-  const filtrados = canais.filter((c) =>
+  // Canal inativo sai da tela, mas não do banco: apagar a linha leva em cascata mensagens,
+  // conversas e contatos (11910 e Mato Grosso, 11/09). Quem precisar reativar faz pelo banco.
+  const visiveis = canais.filter((c) => c.status !== "inactive");
+  const filtrados = visiveis.filter((c) =>
     (c.name || "").toLowerCase().includes(busca.toLowerCase()),
   );
 
@@ -151,7 +154,7 @@ export default function Conexoes() {
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 20 }}>
         <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar conexões..."
           style={{ flex: 1 }} />
-        <span className="badge badge-gray">{canais.length} {canais.length === 1 ? "canal" : "canais"}</span>
+        <span className="badge badge-gray">{visiveis.length} {visiveis.length === 1 ? "canal" : "canais"}</span>
       </div>
 
       {!pronto ? (

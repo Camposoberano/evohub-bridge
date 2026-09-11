@@ -319,8 +319,9 @@ const version = {
     "audio-social-m4a",
     "ancoragem-preco-abertura",
     "alerta-uazapi-desconectada",
+    "consulta-em-lotes-sem-414",
   ],
-  build: "2026-09-10-alerta-uazapi-desconectada",
+  build: "2026-09-11-funnel-recovery-em-lotes",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
