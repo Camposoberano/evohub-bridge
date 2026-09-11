@@ -321,7 +321,7 @@ const version = {
     "alerta-uazapi-desconectada",
     "consulta-em-lotes-sem-414",
   ],
-  build: "2026-09-11-funnel-recovery-em-lotes",
+  build: "2026-09-11-funnel-recovery-lotes-de-40",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

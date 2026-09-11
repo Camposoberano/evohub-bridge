@@ -2,12 +2,16 @@
 //
 // O PostgREST põe o `.in()` na query string. 500 uuids passam de 18 KB e o nginx do Supabase
 // devolve `414 Request-URI Too Large` — em 11/09 isso derrubava o loop funnel-recovery a
-// cada rodada (via mutedConversationIds). 100 uuids ficam em ~3,7 KB.
+// cada rodada (via mutedConversationIds).
+//
+// E o limite real é bem menor que o do 414. Medido em 11/09 contra o nosso Supabase:
+// 80 uuids (~3,0 KB de URL) passam, 100 uuids (~3,7 KB) já voltam `502 Bad Gateway` em 60ms,
+// sem chegar ao banco. 40 (~1,5 KB) deixa folga para os filtros que cada consulta soma.
 //
 // E erro de lote NUNCA vira lista vazia: "nenhuma sequência encontrada" faria conversa já
 // inscrita parecer elegível de novo.
 
-export const LOTE_IDS = 100;
+export const LOTE_IDS = 40;
 
 export function emLotes<T>(itens: T[], tamanho = LOTE_IDS): T[][] {
   const lotes: T[][] = [];

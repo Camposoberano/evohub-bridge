@@ -6,12 +6,13 @@ import { consultaEmLotes, emLotes, LOTE_IDS } from "../shared/lotes.ts";
 
 const uuid = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`;
 
-Deno.test("nenhum lote passa do tamanho e a URL fica bem abaixo de 8 KB", () => {
+// 100 uuids (~3,7 KB de URL) já voltavam 502 do proxy do Supabase; 80 (~3 KB) passavam.
+Deno.test("nenhum lote passa do tamanho e a lista fica abaixo de 2 KB", () => {
   const ids = Array.from({ length: 500 }, (_, i) => uuid(i));
   const lotes = emLotes(ids);
-  assertEquals(lotes.length, 5);
+  assertEquals(lotes.length, 13);
   assertEquals(lotes.every((l) => l.length <= LOTE_IDS), true);
-  assertEquals(lotes[0].join(",").length < 4_000, true);
+  assertEquals(lotes[0].join(",").length < 2_000, true);
 });
 
 Deno.test("consulta em lotes junta as linhas e ignora repetidos e vazios", async () => {
@@ -21,7 +22,7 @@ Deno.test("consulta em lotes junta as linhas e ignora repetidos e vazios", async
     tamanhos.push(lote.length);
     return Promise.resolve({ data: lote.map((id) => ({ id })), error: null });
   });
-  assertEquals(tamanhos, [100, 100, 50]);
+  assertEquals(tamanhos, [40, 40, 40, 40, 40, 40, 10]);
   assertEquals(linhas.length, 250);
 });
 
