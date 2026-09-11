@@ -659,11 +659,34 @@ export async function dispatchRecovery(
     const detail = String(error).slice(0, 240);
     const motivo = motivoTerminal(detail);
     if (motivo) {
-      await nota(
-        cwConvId,
-        `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,
-        acct,
-      );
+      // Falha que não muda sozinha. O evento faz a cadeia automática (recovery-chain.ts)
+      // pular esta variação até o cliente escrever de novo; sem ele, em 11/09 a mesma nota
+      // saía a cada rodada de 5 minutos em cinco conversas. A nota continua saindo para quem
+      // clica na macro à mão, mas no máximo uma vez a cada 24h por conversa e variação.
+      const { data: avisadaHoje } = await db.from("events").select("id")
+        .eq("source", "recovery").eq("event_type", "recovery_blocked")
+        .eq("payload->>conversation_id", String(conv.id))
+        .eq("payload->>variation", String(variation))
+        .gte("received_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString())
+        .limit(1).maybeSingle();
+      await db.from("events").insert({
+        source: "recovery",
+        event_type: "recovery_blocked",
+        payload: {
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          variation,
+          channel,
+          motivo: detail.slice(0, 160),
+        },
+      }).then(() => {}, () => {});
+      if (!avisadaHoje) {
+        await nota(
+          cwConvId,
+          `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,
+          acct,
+        );
+      }
       return json({
         ok: false,
         terminal: true,

@@ -149,6 +149,23 @@ export function shouldMarkLostBySilence(input: {
   return silencio > IDADE_MAXIMA_MS;
 }
 
+/**
+ * A variação devida já bateu num bloqueio que não muda sozinho (canal social sem template,
+ * janela fechada) e o cliente não escreveu desde então?
+ *
+ * Existe por causa de 11/09: com a cadeia de volta no ar, cinco conversas de Facebook caíam
+ * no mesmo bloqueio a cada rodada de 5 minutos e cada tentativa deixava uma nota
+ * "Recuperação 1 não enviada" — uma por rodada, o dia inteiro. A própria nota diz que a peça
+ * sai quando o cliente responder; então é isso que destrava: mensagem dele depois do bloqueio.
+ */
+export function recuperacaoBloqueada(
+  bloqueadaEm: number | null,
+  lastInboundAt: number | null,
+): boolean {
+  if (bloqueadaEm === null) return false;
+  return lastInboundAt === null || lastInboundAt <= bloqueadaEm;
+}
+
 export type RecoveryChainResult = {
   scanned: number;
   due: number;
@@ -218,7 +235,11 @@ export async function pumpRecoveryChain(
       if (Number.isFinite(at) && !fimPorFila.has(id)) fimPorFila.set(id, at);
     }
   }
-  const [{ data: conversations }, { data: recoveryEvents }] = await Promise.all(
+  const [
+    { data: conversations },
+    { data: recoveryEvents },
+    { data: blockedEvents },
+  ] = await Promise.all(
     [
       db.from("conversations").select("id,outcome").in("id", ids),
       db.from("events")
@@ -228,8 +249,27 @@ export async function pumpRecoveryChain(
         .gte("received_at", new Date(now - IDADE_MAXIMA_MS).toISOString())
         .order("received_at", { ascending: false })
         .limit(5_000),
+      db.from("events")
+        .select("received_at,payload")
+        .eq("source", "recovery")
+        .eq("event_type", "recovery_blocked")
+        .gte("received_at", new Date(now - IDADE_MAXIMA_MS).toISOString())
+        .order("received_at", { ascending: false })
+        .limit(5_000),
     ],
   );
+  // conversa -> variação -> quando bateu no bloqueio terminal pela última vez
+  const bloqueios = new Map<string, Map<number, number>>();
+  for (const ev of (blockedEvents ?? []) as Json[]) {
+    const payload = (ev.payload as Json | undefined) ?? {};
+    const id = String(payload.conversation_id ?? "");
+    const v = Number(payload.variation ?? 0);
+    const at = Date.parse(String(ev.received_at));
+    if (!id || v < 1 || !Number.isFinite(at)) continue;
+    const porVariacao = bloqueios.get(id) ?? new Map<number, number>();
+    if (!porVariacao.has(v)) porVariacao.set(v, at); // mais novo primeiro
+    bloqueios.set(id, porVariacao);
+  }
   const outcomeById = new Map(
     ((conversations ?? []) as Json[]).map((c) => [
       String(c.id),
@@ -344,18 +384,23 @@ export async function pumpRecoveryChain(
       .limit(1)
       .maybeSingle();
 
+    const lastInboundAt = inbound?.sent_at
+      ? Date.parse(String(inbound.sent_at))
+      : null;
     const variation = dueRecoveryVariation({
       now,
       funnelEndedAt,
-      lastInboundAt: inbound?.sent_at
-        ? Date.parse(String(inbound.sent_at))
-        : null,
+      lastInboundAt,
       lastRecoveryAt: ultimaPorConversa.get(conversationId) ?? null,
       emAtendimento: emAtendimento.has(conversationId),
       sentVariations: enviadasPorConversa.get(conversationId) ?? [],
       outcome: outcomeById.get(conversationId) ?? null,
     });
     if (!variation) continue;
+    // Bloqueio terminal sem resposta do cliente desde então: tentar de novo só repetiria a
+    // falha (e a nota) a cada rodada.
+    const bloqueadaEm = bloqueios.get(conversationId)?.get(variation) ?? null;
+    if (recuperacaoBloqueada(bloqueadaEm, lastInboundAt)) continue;
     result.due++;
 
     try {
