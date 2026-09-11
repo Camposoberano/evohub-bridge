@@ -318,8 +318,9 @@ const version = {
     "funil-pausa-com-prazo",
     "audio-social-m4a",
     "ancoragem-preco-abertura",
+    "alerta-uazapi-desconectada",
   ],
-  build: "2026-09-10-ancoragem-e-retomada",
+  build: "2026-09-10-alerta-uazapi-desconectada",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

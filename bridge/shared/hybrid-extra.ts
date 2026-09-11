@@ -210,7 +210,9 @@ export async function checarProntidao(
     // diagnóstico indisponível não é impedimento
   }
 
-  const conectada = /connected|open/i.test(status);
+  // Igualdade, nunca substring: "disconnected" contém "connected" e passava como pronta —
+  // o preflight liberava disparo em instância caída (6836, 10/09).
+  const conectada = /^(connected|open)$/i.test(status.trim());
   return {
     pronta: conectada && podeIniciar !== false,
     status,

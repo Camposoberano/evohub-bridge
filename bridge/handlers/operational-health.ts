@@ -3,9 +3,11 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { getMeta } from "../shared/hub.ts";
 import {
   entregarAlertas,
+  avaliarInstanciasUazapi,
   avaliarSilencio,
   type OperationalIssue,
 } from "../shared/operational-alert.ts";
+import { listInstances, uazapiConfigured } from "../shared/uazapi.ts";
 import {
   admin,
   claimDeliveryWithTtl,
@@ -70,7 +72,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     adConversations,
   ] = await Promise.all([
     db.from("channels").select(
-      "id,name,type,status,phone_number,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
+      "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
     ).order("name"),
     exactCount(
       db.from("messages").select("id", { count: "exact", head: true })
@@ -209,8 +211,25 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     ),
   ];
 
+  // 3c) instância uazapi caída com o canal `active` no banco (6836, 10/09). Uma consulta
+  //     por rodada; uazapi inacessível não é instância caída — não vira alarme.
+  let instanciasCaidas: string[] = [];
+  if (uazapiConfigured()) {
+    try {
+      instanciasCaidas = avaliarInstanciasUazapi(activeChannels, await listInstances());
+    } catch {
+      // erro de rede na uazapi não é instância desconectada
+    }
+  }
+
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
+    {
+      key: "uazapi_instance_disconnected",
+      severity: "critical",
+      count: instanciasCaidas.length,
+      detail: instanciasCaidas.join("; ") || undefined,
+    },
     {
       key: "canal_nao_cadastrado",
       severity: "critical",

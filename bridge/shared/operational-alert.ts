@@ -36,9 +36,13 @@ const ENTREGAVEIS = new Set([
   "canal_nao_cadastrado",
   "failed_messages_15m",
   "overdue_funnel_queue",
+  // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
+  // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
+  "uazapi_instance_disconnected",
 ]);
 
 const TITULOS: Record<string, string> = {
+  uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
   channel_disconnected: "Canal desconectado",
   social_token_invalid: "Token de canal social inválido",
   channel_silent: "Canal ativo parou de receber mensagem",
@@ -47,6 +51,63 @@ const TITULOS: Record<string, string> = {
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
 };
+
+// Instância uazapi caída enquanto o canal segue `active` no banco.
+//
+// Em 10/09 o 6836 desconectou no meio de um disparo: `channels.status` continuou `active`,
+// a uazapi aceitou os envios e nada saiu. O monitor olhava só o banco; quem percebeu foi o
+// dono. A verdade sobre a conexão está em `/instance/all`, então é lá que se pergunta.
+//
+// Canal e instância se ligam pelos dois jeitos que o envio já usa:
+// - uazapi puro (0595, 11910, Mato Grosso): `external_id` = nome da instância, sem
+//   `phone_number_id` — a mesma regra do `isUazapiOnly` no chatwoot-webhook;
+// - híbrido (5895, 6836): canal oficial cujo número é o `owner` de uma instância. Se o
+//   `owner` vier vazio, vale a instância com o mesmo nome do canal.
+export type InstanciaUazapi = { name: string; number: string | null; status: string };
+
+// Igualdade, nunca substring: "disconnected" contém "connected".
+export function instanciaConectada(status: string | null | undefined): boolean {
+  return /^(connected|open)$/i.test(String(status ?? "").trim());
+}
+
+export function avaliarInstanciasUazapi(
+  canais: Json[],
+  instancias: InstanciaUazapi[],
+): string[] {
+  // lista vazia é a uazapi que não respondeu direito (401, corpo inesperado), não "todas
+  // as instâncias sumiram" — alarmar aqui dispararia um falso alerta para cada canal
+  if (instancias.length === 0) return [];
+  const digitos = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+  const caidas: string[] = [];
+  for (const canal of canais) {
+    if (canal.type !== "whatsapp") continue;
+    if (canal.status !== "active" && canal.status !== "connected") continue;
+    const nome = String(canal.name ?? "");
+    const externo = String(canal.external_id ?? "").trim();
+
+    if (externo && !canal.phone_number_id) {
+      const inst = instancias.find((i) => i.name === externo);
+      if (!inst) caidas.push(`${nome}: instância ${externo} não existe na uazapi`);
+      else if (!instanciaConectada(inst.status)) {
+        caidas.push(`${nome}: instância ${inst.name} ${inst.status}`);
+      }
+      continue;
+    }
+
+    const alvo = digitos(canal.phone_number);
+    let espelhos = alvo.length >= 10
+      ? instancias.filter((i) => digitos(i.number) === alvo)
+      : [];
+    if (espelhos.length === 0) espelhos = instancias.filter((i) => i.name === nome);
+    // canal oficial sem espelho uazapi não depende dela
+    if (espelhos.length === 0) continue;
+    if (espelhos.some((i) => instanciaConectada(i.status))) continue;
+    caidas.push(
+      `${nome}: instância ${espelhos.map((i) => i.name).join("/")} ${espelhos[0].status}`,
+    );
+  }
+  return caidas;
+}
 
 // Silêncio de canal: quando ele é incidente e quando é rotina.
 //

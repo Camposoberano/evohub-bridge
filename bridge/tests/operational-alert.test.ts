@@ -1,8 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   alertasParaEntregar,
+  avaliarInstanciasUazapi,
   formatarAlerta,
   avaliarSilencio,
+  instanciaConectada,
 } from "../shared/operational-alert.ts";
 import { DESLIGAMENTO_INTENCIONAL } from "../handlers/operational-health.ts";
 
@@ -147,4 +149,91 @@ Deno.test("lista em ordem decrescente é avaliada corretamente", () => {
   const r = avaliarSilencio(entradasDesc, [agora - H], agora);
   assertEquals(r.anormal, false, "recebeu agora há pouco: não pode alarmar");
   assertEquals(r.silencioAtualH < 0.1, true);
+});
+
+// --- instância uazapi caída ---------------------------------------------------------------
+// 10/09: o 6836 desconectou no meio de um disparo com `channels.status` = active, e quem
+// percebeu foi o dono. Os dados abaixo têm a forma real do `/instance/all` e de `channels`.
+
+const INSTANCIAS = [
+  { name: "5895", number: "5511900005895", status: "connected" },
+  { name: "6836", number: "5511900006836", status: "disconnected" },
+  { name: "11910", number: "5511910363320", status: "connected" },
+  { name: "0595", number: "5511900000595", status: "connected" },
+  { name: "CECAPE", number: null, status: "disconnected" },
+];
+const CANAIS = [
+  { name: "5895", type: "whatsapp", status: "active", phone_number: "+55 11 90000-5895", phone_number_id: "pn1", external_id: null },
+  { name: "6836", type: "whatsapp", status: "active", phone_number: "+55 11 90000-6836", phone_number_id: "pn2", external_id: "c48b43ec" },
+  { name: "11910", type: "whatsapp", status: "active", phone_number: "5511910363320", phone_number_id: null, external_id: "11910" },
+  { name: "0595", type: "whatsapp", status: "active", phone_number: "5511900000595", phone_number_id: null, external_id: "0595" },
+];
+
+Deno.test("híbrido com espelho desconectado alarma; os conectados não", () => {
+  assertEquals(avaliarInstanciasUazapi(CANAIS, INSTANCIAS), [
+    "6836: instância 6836 disconnected",
+  ]);
+});
+
+Deno.test("instância sem canal (outro projeto) não alarma", () => {
+  // CECAPE está caída, mas não é canal nosso
+  const r = avaliarInstanciasUazapi(CANAIS, INSTANCIAS);
+  assertEquals(r.some((l) => l.includes("CECAPE")), false);
+});
+
+Deno.test("uazapi puro com instância caída ou sumida alarma", () => {
+  const caida = INSTANCIAS.map((i) =>
+    i.name === "0595" ? { ...i, status: "disconnected" } : i
+  );
+  assertEquals(avaliarInstanciasUazapi([CANAIS[3]], caida), [
+    "0595: instância 0595 disconnected",
+  ]);
+  const sumida = INSTANCIAS.filter((i) => i.name !== "11910");
+  assertEquals(avaliarInstanciasUazapi([CANAIS[2]], sumida), [
+    "11910: instância 11910 não existe na uazapi",
+  ]);
+});
+
+Deno.test("híbrido sem espelho uazapi não alarma", () => {
+  const semEspelho = [{ ...CANAIS[0], name: "oficial-puro", phone_number: "+55 21 99999-0000" }];
+  assertEquals(avaliarInstanciasUazapi(semEspelho, INSTANCIAS), []);
+});
+
+Deno.test("owner vazio na queda: casa pelo nome do canal", () => {
+  const semOwner = INSTANCIAS.map((i) => i.name === "6836" ? { ...i, number: null } : i);
+  assertEquals(avaliarInstanciasUazapi([CANAIS[1]], semOwner), [
+    "6836: instância 6836 disconnected",
+  ]);
+});
+
+Deno.test("canal inativo e canal social são ignorados", () => {
+  const inativo = [{ ...CANAIS[1], status: "inactive" }, { ...CANAIS[1], type: "instagram" }];
+  assertEquals(avaliarInstanciasUazapi(inativo, INSTANCIAS), []);
+});
+
+Deno.test("uazapi sem resposta útil não vira alarme em massa", () => {
+  // listInstances devolve [] quando a uazapi responde 401 ou algo que não é array
+  assertEquals(avaliarInstanciasUazapi(CANAIS, []), []);
+});
+
+Deno.test("'disconnected' nunca conta como conectada", () => {
+  assertEquals(instanciaConectada("disconnected"), false);
+  assertEquals(instanciaConectada("connecting"), false);
+  assertEquals(instanciaConectada(""), false);
+  assertEquals(instanciaConectada(undefined), false);
+  assertEquals(instanciaConectada("connected"), true);
+  assertEquals(instanciaConectada(" Open "), true);
+});
+
+Deno.test("instância caída é entregue e o texto diz o que fazer", () => {
+  const issue = {
+    key: "uazapi_instance_disconnected",
+    severity: "critical",
+    count: 1,
+    detail: "6836: instância 6836 disconnected",
+  };
+  assertEquals(alertasParaEntregar([issue]).length, 1);
+  const texto = formatarAlerta([issue], new Date("2026-09-10T23:40:00Z"));
+  assertEquals(texto.includes("reconectar o QR"), true);
+  assertEquals(texto.includes("6836: instância 6836 disconnected"), true);
 });
