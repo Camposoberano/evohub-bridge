@@ -41,9 +41,13 @@ const ENTREGAVEIS = new Set([
   "uazapi_instance_disconnected",
   // Arquivo do funil sumido do storage: a peça sai sem imagem e só repondo o arquivo resolve.
   "midia_indisponivel",
+  // Mensagem de cliente que só apareceu na varredura (não veio pelo webhook): entrou sem
+  // automação e está esperando atendente. Em 11/09 eram 24, uma delas de compra fechando.
+  "inbound_recovered",
 ]);
 
 const TITULOS: Record<string, string> = {
+  inbound_recovered: "Mensagem de cliente recuperada fora do webhook (responder no Chatwoot)",
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
   midia_indisponivel: "Mídia do funil sumiu do storage (peça saindo sem imagem)",
   channel_disconnected: "Canal desconectado",

@@ -235,6 +235,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         .map((url) => decodeURIComponent(url.split("/").pop() ?? url)),
     ),
   ];
+  // 3d) mensagem de cliente que o catch-up achou fora do webhook: entrou sem automação e
+  //     alguém precisa responder. O evento vale por uma hora, o alerta sai uma vez.
+  const { data: eventosRecuperadas } = await db.from("events")
+    .select("payload").eq("event_type", "inbound_recovered")
+    .gte("received_at", since1h);
+  const recuperadasPorCanal = new Map<string, number>();
+  for (const e of (eventosRecuperadas ?? []) as Json[]) {
+    const p = (e.payload ?? {}) as Json;
+    const canal = String(p.canal ?? p.instancia ?? "?");
+    recuperadasPorCanal.set(canal, (recuperadasPorCanal.get(canal) ?? 0) + Number(p.recuperadas ?? 0));
+  }
+  const totalRecuperadas = [...recuperadasPorCanal.values()].reduce((s, n) => s + n, 0);
 
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
@@ -243,6 +255,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: midiasSumidas.length,
       detail: midiasSumidas.slice(0, 6).join("; ") || undefined,
+    },
+    {
+      key: "inbound_recovered",
+      severity: "critical",
+      count: totalRecuperadas,
+      detail: [...recuperadasPorCanal].map(([c, n]) => `${c}: ${n}`).join("; ") || undefined,
     },
     {
       key: "uazapi_instance_disconnected",

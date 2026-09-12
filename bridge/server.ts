@@ -20,6 +20,7 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
+import { recuperarEntradaUazapi } from "./shared/catchup-uazapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import {
   handle as funilEnroll,
@@ -321,8 +322,9 @@ const version = {
     "alerta-uazapi-desconectada",
     "consulta-em-lotes-sem-414",
     "midia-funil-checada",
+    "uazapi-catchup-entrada",
   ],
-  build: "2026-09-12-midia-do-funil-checada",
+  build: "2026-09-12-catchup-e-midia",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1475,6 +1477,30 @@ function diagAutorizado(req: Request, url: URL): boolean {
   return confereSegredo(informado, [esperado], "server");
 }
 
+// Entrada que não veio pelo webhook (sincronização de histórico na reconexão, 6836 em 11/09).
+// Desliga com UAZAPI_CATCHUP_ENABLED=false.
+function startUazapiCatchupLoop() {
+  if (optionalEnv("UAZAPI_CATCHUP_ENABLED") === "false") {
+    console.log("uazapi-catchup loop OFF (UAZAPI_CATCHUP_ENABLED=false)");
+    return;
+  }
+  const run = async () => {
+    try {
+      const resultados = await recuperarEntradaUazapi(admin(), { apply: true });
+      if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
+        console.log("uazapi-catchup:", JSON.stringify(resultados));
+      }
+    } catch (error) {
+      console.error("uazapi-catchup erro:", error);
+    }
+  };
+  agendarLoop("uazapi-catchup", run, {
+    intervaloMs: 15 * 60_000,
+    primeiraEmMs: 180_000,
+  });
+  console.log("uazapi-catchup loop ON (15min, entrada fora do webhook)");
+}
+
 function startOperationalMonitorLoop() {
   const run = async () => {
     try {
@@ -1523,5 +1549,6 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFlowTimeoutLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
+  startUazapiCatchupLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);
