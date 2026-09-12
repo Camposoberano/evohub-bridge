@@ -12,9 +12,9 @@
 // 1. A janela recua até a ÚLTIMA QUEDA da instância (`lastDisconnect` do /instance/all), não
 //    até a rodada anterior: a mensagem sincronizada chega com a data em que o cliente mandou,
 //    horas antes. Uma varredura "de onde parei para frente" nunca a veria.
-// 2. Só entra o que tem mais de 10 minutos. Se a varredura gravasse antes do webhook, o
-//    webhook bateria no claim, veria "duplicate" e pularia a automação — o bot deixaria de
-//    responder uma mensagem que chegou normalmente.
+// 2. Só entra o que tem mais de 30 minutos (ver MARGEM_WEBHOOK_MS). Se a varredura
+//    gravasse antes do webhook, ele bateria no claim, veria "duplicate" e pularia a
+//    automação — o bot deixaria de responder uma mensagem que chegou normalmente.
 // 3. Grava pelo `ingestInbound` direto, sem automação: resposta automática para quem escreveu
 //    há horas é pior que nenhuma. Quem responde é o atendente — por isso o monitor avisa.
 import type { DbClient } from "./supabase.ts";
@@ -28,10 +28,23 @@ type Json = Record<string, unknown>;
 
 const MIN = 60_000;
 const H = 60 * MIN;
-export const MARGEM_WEBHOOK_MS = 10 * MIN;
+/**
+ * Quanto a varredura espera antes de encostar numa mensagem.
+ *
+ * Medido em 11/09 (339 mensagens de cliente em 30h): o caminho normal entrega em 3s na
+ * mediana e 30s no p90, mas UMA resposta de lista levou 10,6 min entre o WhatsApp e o banco.
+ * Se a varredura gravar antes do webhook, o webhook bate no claim, vê "duplicate" e pula a
+ * automação — o funil não reage ao clique do cliente. 30 min deixa folga de 3x sobre o pior
+ * caso observado; o preço é a mensagem realmente perdida aparecer até 45 min depois (30 de
+ * margem + a rodada de 15), em vez de nunca.
+ */
+export const MARGEM_WEBHOOK_MS = 30 * MIN;
 export const JANELA_PADRAO_MS = 6 * H;
 export const JANELA_MAXIMA_MS = 72 * H;
-const LIMITE_FIND = 1000;
+/** Página do /message/find. A janela longa não cabe numa só num número movimentado. */
+export const PAGINA_FIND = 500;
+/** Teto de páginas por instância: 4.000 mensagens cobrem 72h até no 5895. */
+export const MAX_PAGINAS_FIND = 8;
 const MAX_BYTES = 15 * 1024 * 1024;
 
 /** A uazapi manda `messageTimestamp` ora em segundos, ora em milissegundos. */
@@ -51,7 +64,7 @@ export function dataDaQueda(valor: unknown): number | null {
 
 /**
  * Janela da varredura: das últimas 6h, ou desde a última queda se ela foi nas últimas 72h —
- * o que vier antes — até 10 minutos atrás.
+ * o que vier antes — até a margem do webhook atrás (30 min).
  */
 export function janelaDeBusca(
   agora: number,
@@ -82,6 +95,46 @@ export function candidatasARecuperar(
 
 function instanciaConectada(status: unknown): boolean {
   return /^(connected|open)$/i.test(String(status ?? "").trim());
+}
+
+/**
+ * Busca as mensagens da instância até cobrir o começo da janela.
+ *
+ * Uma chamada só de `limit: 1000` não alcança 30h no 5895 (196 mensagens de cliente na janela
+ * e a lista terminava antes do início dela). O `/message/find` devolve do mais novo para o
+ * mais antigo, então dá para parar assim que a página alcançar `desde` — quem tem pouco
+ * movimento resolve na primeira página.
+ *
+ * `truncado` é o que sobrou de fora: existe para o log dizer que a varredura não viu tudo,
+ * em vez de fingir que a janela estava limpa.
+ */
+export async function buscarMensagensDaInstancia(
+  token: string,
+  desde: number,
+  buscar: (
+    token: string,
+    limit: number,
+    offset: number,
+  ) => Promise<{ ok: boolean; data: unknown }> = (t, limit, offset) =>
+    instPost("/message/find", t, { limit, offset }),
+): Promise<{ ok: boolean; lista: Json[]; truncado: boolean }> {
+  const lista: Json[] = [];
+  for (let pagina = 0; pagina < MAX_PAGINAS_FIND; pagina++) {
+    const r = await buscar(token, PAGINA_FIND, pagina * PAGINA_FIND);
+    if (!r.ok) return { ok: false, lista, truncado: true };
+    const lote = (Array.isArray(r.data)
+      ? r.data
+      : ((r.data as Json)?.messages ?? [])) as Json[];
+    lista.push(...lote);
+    if (lote.length < PAGINA_FIND) return { ok: true, lista, truncado: false };
+    const maisAntiga = Math.min(
+      ...lote.map((m) => msDoTimestamp(m.messageTimestamp)).filter(Boolean),
+    );
+    if (Number.isFinite(maisAntiga) && maisAntiga <= desde) {
+      return { ok: true, lista, truncado: false };
+    }
+  }
+  return { ok: true, lista, truncado: true };
 }
 
 function isMedia(tipo: string): boolean {
@@ -166,13 +219,26 @@ export async function recuperarEntradaUazapi(
   const agora = opts.agora ?? Date.now();
   const r = await adminGet("/instance/all");
   const instancias = Array.isArray(r.data) ? r.data as Json[] : [];
+  if (!instancias.length) {
+    // 401, corpo inesperado ou uazapi fora: some em silêncio seria "nada a recuperar".
+    console.warn("uazapi-catchup: /instance/all sem instâncias, HTTP", r.status);
+    return [];
+  }
   const resultados: ResultadoCatchup[] = [];
 
   for (const inst of instancias) {
     const nome = String(inst.name ?? "");
     const token = String(inst.token ?? "");
     if (!nome || !token || !instanciaConectada(inst.status)) continue;
-    const canal = await canalAtivoDaInstancia(db, nome);
+    // Uma instância problemática (dois canais com o mesmo nome, banco oscilando) não pode
+    // derrubar a varredura das outras — quem depende dela é justamente quem acabou de voltar.
+    let canal: Json | null = null;
+    try {
+      canal = await canalAtivoDaInstancia(db, nome);
+    } catch (e) {
+      console.error("uazapi-catchup: canal da instância", nome, String(e).slice(0, 140));
+      continue;
+    }
     if (!canal) continue;
 
     const { desde, ate } = opts.janelaFixa ??
@@ -190,28 +256,33 @@ export async function recuperarEntradaUazapi(
     };
     resultados.push(res);
 
-    const find = await instPost("/message/find", token, { limit: LIMITE_FIND });
+    const find = await buscarMensagensDaInstancia(token, desde);
     if (!find.ok) {
       res.falhas++;
       continue;
     }
-    const lista = (Array.isArray(find.data)
-      ? find.data
-      : ((find.data as Json)?.messages ?? [])) as Json[];
-    const maisAntiga = Math.min(...lista.map((m) => msDoTimestamp(m.messageTimestamp)).filter(Boolean));
-    res.truncado = lista.length >= LIMITE_FIND && maisAntiga > desde;
+    const lista = find.lista;
+    res.truncado = find.truncado;
 
     const candidatas = candidatasARecuperar(lista, desde, ate);
     res.candidatas = candidatas.length;
     if (!candidatas.length) continue;
 
-    const gravadas = new Set(
-      (await consultaEmLotes<{ meta_message_id: unknown }>(
-        candidatas.map((m) => m.id),
-        (lote) => db.from("messages").select("meta_message_id").in("meta_message_id", lote),
-      )).map((m) => String(m.meta_message_id)),
-    );
-    const perdidas = candidatas.filter((m) => !gravadas.has(String(m.id)));
+    let perdidas: Json[];
+    try {
+      const gravadas = new Set(
+        (await consultaEmLotes<{ meta_message_id: unknown }>(
+          candidatas.map((m) => m.id),
+          (lote) => db.from("messages").select("meta_message_id").in("meta_message_id", lote),
+        )).map((m) => String(m.meta_message_id)),
+      );
+      perdidas = candidatas.filter((m) => !gravadas.has(String(m.id)));
+    } catch (e) {
+      // Falha de leitura não é "nada gravado": reingerir tudo criaria duplicata.
+      res.falhas++;
+      console.error("uazapi-catchup: consulta de já gravadas", nome, String(e).slice(0, 140));
+      continue;
+    }
     if (!perdidas.length) continue;
 
     if (!opts.apply) {
@@ -233,7 +304,7 @@ export async function recuperarEntradaUazapi(
         continue;
       }
       try {
-        // Claim sem linha em `messages` é ingestão que morreu no meio; com 10 minutos de
+        // Claim sem linha em `messages` é ingestão que morreu no meio; com 30 minutos de
         // margem o webhook já terminou, então soltar o claim não abre corrida.
         await releaseDelivery(db, `wa-${canal.id}-${id}`);
         const anexos = isMedia(tipo)
