@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { env } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { handle as funnelControl } from "./funil-control.ts";
+import { consultaEmLotes } from "../shared/lotes.ts";
 
 type Json = Record<string, unknown>;
 
@@ -78,11 +79,17 @@ export async function handle(req: Request): Promise<Response> {
       db.from("sales_sequences").select(
         "id,conversation_id,chatwoot_conversation_id,funnel,status",
       ).in("status", ["running", "paused"]).limit(1000),
-      recentIds.length
-        ? db.from("sales_sequences").select(
-          "id,conversation_id,chatwoot_conversation_id,funnel,status",
-        ).in("conversation_id", recentIds)
-        : Promise.resolve({ data: [], error: null }),
+      // Em lotes: `recentIds` é sempre 500 (o limit acima), o que dava ~18 KB de URL e 414
+      // em TODA requisição — a tela de operação do funil respondia 500 e não mostrava nada.
+      consultaEmLotes<Json>(
+        recentIds,
+        (lote) =>
+          db.from("sales_sequences").select(
+            "id,conversation_id,chatwoot_conversation_id,funnel,status",
+          ).in("conversation_id", lote),
+        // erro aqui SOBE (consultaEmLotes lança); o `error` existe só para a forma bater
+        // com as outras consultas do Promise.all.
+      ).then((data) => ({ data, error: null as { message: string } | null })),
       db.from("scheduled_messages").select(
         "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
       ).order("send_at", { ascending: true }).limit(2000),
@@ -122,11 +129,16 @@ export async function handle(req: Request): Promise<Response> {
         .filter(Boolean),
     ),
   ];
-  const { data: conversations } = conversationIds.length
-    ? await db.from("conversations").select(
-      "id,channel_id,contact_id,chatwoot_conversation_id,outcome,outcome_value_cents,status",
-    ).in("id", conversationIds)
-    : { data: [] };
+  // Também em lotes: `conversationIds` vem de até 1.000 sequências mais as mensagens
+  // comerciais de 48h — lista grande o bastante para estourar a URL e voltar vazia, o que
+  // deixaria cada sequência da tela sem contato e sem desfecho.
+  const conversations = await consultaEmLotes<Json>(
+    conversationIds,
+    (lote) =>
+      db.from("conversations").select(
+        "id,channel_id,contact_id,chatwoot_conversation_id,outcome,outcome_value_cents,status",
+      ).in("id", lote),
+  );
   const contactIds = [
     ...new Set(
       (conversations ?? []).map((item: Json) => item.contact_id).filter(
@@ -134,12 +146,11 @@ export async function handle(req: Request): Promise<Response> {
       ),
     ),
   ];
-  const { data: contacts } = contactIds.length
-    ? await db.from("contacts").select("id,name,phone,external_contact_id").in(
-      "id",
-      contactIds,
-    )
-    : { data: [] };
+  const contacts = await consultaEmLotes<Json>(
+    contactIds,
+    (lote) =>
+      db.from("contacts").select("id,name,phone,external_contact_id").in("id", lote),
+  );
   const contactMap = new Map(
     (contacts ?? []).map((item: Json) => [item.id, item]),
   );

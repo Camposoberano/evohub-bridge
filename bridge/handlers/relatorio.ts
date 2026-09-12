@@ -8,6 +8,7 @@ import {
   isVideoIntent,
 } from "../shared/intent.ts";
 import { isAuthedCronOrUser } from "../shared/report-auth.ts";
+import { consultaEmLotes } from "../shared/lotes.ts";
 
 type Json = Record<string, unknown>;
 
@@ -77,18 +78,25 @@ export async function handle(req: Request): Promise<Response> {
 
   const convIds = [...porConv.keys()];
 
-  // Busca as conversas das mensagens do dia (não só as abertas no dia — senão contato vira "Desconhecido")
-  const { data: convRows } = convIds.length
-    ? await db.from("conversations")
-      .select("id,contact_id,status,opened_at,chatwoot_conversation_id,channel_id,origem")
-      .in("id", convIds)
-    : { data: [] as Json[] };
+  // Em lotes, e o erro SOBE. Num dia de disparo as mensagens se espalham por 150-500
+  // conversas; com todos os ids numa URL só o proxy devolve 502/414 e, lendo apenas `data`,
+  // o relatório mostrava um dia fraco que nunca existiu: conversa de anúncio sumia da conta,
+  // "conversas novas" zerava e todo lead virava "Desconhecido". Melhor a página falhar alto
+  // do que entregar número errado para decidir verba de anúncio.
+  const convRows = await consultaEmLotes<Json>(
+    convIds,
+    (lote) =>
+      db.from("conversations")
+        .select("id,contact_id,status,opened_at,chatwoot_conversation_id,channel_id,origem")
+        .in("id", lote),
+  );
 
   // sales_sequences = registro real de enrolamento no funil
-  const { data: seqRows } = convIds.length
-    ? await db.from("sales_sequences").select("conversation_id")
-      .in("conversation_id", convIds)
-    : { data: [] as Json[] };
+  const seqRows = await consultaEmLotes<Json>(
+    convIds,
+    (lote) =>
+      db.from("sales_sequences").select("conversation_id").in("conversation_id", lote),
+  );
   const enrolledSet = new Set(
     (seqRows ?? []).map((s: Json) => String(s.conversation_id)),
   );
@@ -98,10 +106,10 @@ export async function handle(req: Request): Promise<Response> {
 
   const contactIds = (convRows ?? []).map((c: Json) => c.contact_id as string)
     .filter(Boolean);
-  const { data: contacts } = contactIds.length
-    ? await db.from("contacts").select("id,name,external_contact_id")
-      .in("id", contactIds)
-    : { data: [] as Json[] };
+  const contacts = await consultaEmLotes<Json>(
+    contactIds,
+    (lote) => db.from("contacts").select("id,name,external_contact_id").in("id", lote),
+  );
 
   const contactMap = new Map<string, Json>();
   for (const c of (contacts ?? [])) contactMap.set(c.id as string, c as Json);
