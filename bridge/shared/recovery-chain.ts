@@ -10,6 +10,7 @@
 import type { DbClient } from "./supabase.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
+import { consultaEmLotes } from "./lotes.ts";
 
 type Json = Record<string, unknown>;
 
@@ -221,14 +222,19 @@ export async function pumpRecoveryChain(
     .map((s) => String(s.conversation_id));
   const fimPorFila = new Map<string, number>();
   if (semData.length) {
-    const { data: enviadas } = await db.from("scheduled_messages")
-      .select("conversation_id,sent_at")
-      .eq("funnel", "mega-sorgo")
-      .eq("status", "sent")
-      .in("conversation_id", semData)
-      .order("sent_at", { ascending: false })
-      .limit(10_000);
-    for (const row of (enviadas ?? []) as Json[]) {
+    // Em lotes pelo mesmo motivo das outras consultas: 500 ids numa URL só voltam 414, e a
+    // lista vazia faria a conversa parecer sem data de fim — ela sairia da varredura calada.
+    const enviadas = await consultaEmLotes<Json>(
+      semData,
+      (lote) =>
+        db.from("scheduled_messages")
+          .select("conversation_id,sent_at")
+          .eq("funnel", "mega-sorgo")
+          .eq("status", "sent")
+          .in("conversation_id", lote)
+          .order("sent_at", { ascending: false }),
+    );
+    for (const row of enviadas) {
       const id = String(row.conversation_id);
       const at = Date.parse(String(row.sent_at ?? ""));
       // ordenado do mais novo pro mais velho: o primeiro de cada conversa é o último envio
@@ -241,7 +247,16 @@ export async function pumpRecoveryChain(
     { data: blockedEvents, error: blockedEventsError },
   ] = await Promise.all(
     [
-      db.from("conversations").select("id,outcome").in("id", ids),
+      // Em lotes, e o erro SOBE: com 500 ids numa chamada só a URL passa de 18 KB e o proxy
+      // devolve 414. O código antigo ignorava isso, a lista de desfechos vinha vazia e todo
+      // mundo parecia `open` — em 11 e 12/09 a recuperação saiu para 6 conversas com venda
+      // GANHA e 11 com venda perdida, incluindo quem já tinha mandado CPF e pago no PIX.
+      consultaEmLotes<{ id: unknown; outcome: unknown }>(
+        ids,
+        (lote) => db.from("conversations").select("id,outcome").in("id", lote),
+      ).then((linhas) => ({ data: linhas, error: null }), (erro) => {
+        throw erro;
+      }),
       db.from("events")
         .select("received_at,payload")
         .eq("source", "recovery")
@@ -281,14 +296,19 @@ export async function pumpRecoveryChain(
   // Conversas com saída recente = alguém do time está falando com o lead. Uma consulta só,
   // janela curta, então o resultado é pequeno. O gap de 20h entre variações garante que a
   // própria recuperação anterior não caia aqui e trave a cadeia.
-  const { data: saidaRecente } = await db.from("messages")
-    .select("conversation_id")
-    .in("conversation_id", ids)
-    .eq("direction", "out")
-    .gte("sent_at", new Date(now - ATENDIMENTO_RECENTE_MS).toISOString())
-    .limit(5_000);
+  // Também em lotes, e também com o erro subindo: a lista vazia por 414 fazia a recuperação
+  // entrar por cima de conversa que o atendente estava respondendo.
+  const saidaRecente = await consultaEmLotes<{ conversation_id: unknown }>(
+    ids,
+    (lote) =>
+      db.from("messages")
+        .select("conversation_id")
+        .in("conversation_id", lote)
+        .eq("direction", "out")
+        .gte("sent_at", new Date(now - ATENDIMENTO_RECENTE_MS).toISOString()),
+  );
   const emAtendimento = new Set(
-    ((saidaRecente ?? []) as Json[]).map((m) => String(m.conversation_id)),
+    saidaRecente.map((m) => String(m.conversation_id)),
   );
   // Bot travado à mão vence qualquer regra de cadência: se o atendente calou o bot nessa
   // conversa, template de recuperação é exatamente o que ele não quer que saia.
