@@ -39,10 +39,13 @@ const ENTREGAVEIS = new Set([
   // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
   // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
   "uazapi_instance_disconnected",
+  // Arquivo do funil sumido do storage: a peça sai sem imagem e só repondo o arquivo resolve.
+  "midia_indisponivel",
 ]);
 
 const TITULOS: Record<string, string> = {
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
+  midia_indisponivel: "Mídia do funil sumiu do storage (peça saindo sem imagem)",
   channel_disconnected: "Canal desconectado",
   social_token_invalid: "Token de canal social inválido",
   channel_silent: "Canal ativo parou de receber mensagem",

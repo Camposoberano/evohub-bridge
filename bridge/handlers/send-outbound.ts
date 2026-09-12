@@ -31,6 +31,11 @@ import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { toSocialAudio, toVoiceOgg } from "../shared/audio.ts";
 import {
+  decidirSemMidia,
+  midiaDisponivel,
+  urlDaPeca,
+} from "../shared/midia-funil.ts";
+import {
   getHybridRoute,
   hybridSendMedia,
   hybridSendMenu,
@@ -59,8 +64,10 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   // compat: content direto = texto
-  const type = (body.type as string) ?? "text";
-  const payload = (body.payload as Json) ??
+  // `let` porque a peça pode virar outra coisa antes de sair: mídia que sumiu do storage vira
+  // texto (ver a checagem de mídia mais abaixo).
+  let type = (body.type as string) ?? "text";
+  let payload = (body.payload as Json) ??
     (body.content ? { content: body.content } : {});
   const dedupeScope = body.dedupe_scope as string | undefined;
   // Elo com a fila do funil (bridge/shared/funnel-queue.ts) -- ausente em chamada manual/n8n
@@ -250,6 +257,39 @@ export async function handle(req: Request): Promise<Response> {
       if (i < texts.length - 1) await sleep(delayMs);
     }
     return json({ ok: results.every((r) => r.ok), results });
+  }
+
+  // Arquivo que não existe mais no storage (biblioteca do funil apagada em 08/09: 24 dos 64
+  // ativos dão HTTP 400). A Meta recusa a peça inteira, e no social a legenda saía DUAS vezes
+  // — o anexo falhava e o fallback repetia o texto que já tinha ido. Melhor entregar o texto:
+  // imagem/vídeo com legenda viram texto, áudio (que não tem texto) é pulado, e o botão perde
+  // só a imagem do topo. Quando os arquivos voltarem, a checagem passa e nada disso acontece.
+  const urlPeca = urlDaPeca(type, payload);
+  if (urlPeca && !(await midiaDisponivel(urlPeca))) {
+    const decisao = decidirSemMidia(type, payload);
+    db.from("events").insert({
+      source: "funil",
+      event_type: "midia_indisponivel",
+      channel_id: channel.id,
+      payload: {
+        conv: cwConvId,
+        type,
+        url: urlPeca,
+        acao: decisao?.acao ?? "seguiu",
+        funnel_step: funnelLink.funnel_step,
+      },
+    }).then(() => {}, () => {});
+    console.warn("send-outbound: mídia sumiu do storage:", urlPeca.slice(-60));
+    if (decisao?.acao === "pular") {
+      return json({ ok: true, skipped: "midia-indisponivel", url: urlPeca });
+    }
+    if (decisao?.acao === "texto") {
+      type = "text";
+      payload = { content: decisao.conteudo };
+    }
+    if (decisao?.acao === "sem-header") {
+      payload = { ...payload, header_image: undefined };
+    }
   }
 
   // monta o payload Meta conforme o tipo (interactive/áudio/vídeo só fazem sentido no WhatsApp)

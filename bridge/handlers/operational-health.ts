@@ -222,8 +222,28 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     }
   }
 
+  // 3d) peça do funil apontando para arquivo que não existe mais no storage: sai como texto
+  //     (ou é pulada) e alguém precisa repor o arquivo.
+  const { data: eventosMidia } = await db.from("events")
+    .select("payload").eq("event_type", "midia_indisponivel")
+    .gte("received_at", since1h);
+  const midiasSumidas = [
+    ...new Set(
+      ((eventosMidia ?? []) as Json[])
+        .map((e) => String(((e.payload ?? {}) as Json).url ?? ""))
+        .filter(Boolean)
+        .map((url) => decodeURIComponent(url.split("/").pop() ?? url)),
+    ),
+  ];
+
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
+    {
+      key: "midia_indisponivel",
+      severity: "critical",
+      count: midiasSumidas.length,
+      detail: midiasSumidas.slice(0, 6).join("; ") || undefined,
+    },
     {
       key: "uazapi_instance_disconnected",
       severity: "critical",

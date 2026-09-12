@@ -320,8 +320,9 @@ const version = {
     "ancoragem-preco-abertura",
     "alerta-uazapi-desconectada",
     "consulta-em-lotes-sem-414",
+    "midia-funil-checada",
   ],
-  build: "2026-09-11-funnel-recovery-lotes-de-40",
+  build: "2026-09-12-midia-do-funil-checada",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
