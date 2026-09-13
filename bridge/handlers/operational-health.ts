@@ -247,6 +247,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     recuperadasPorCanal.set(canal, (recuperadasPorCanal.get(canal) ?? 0) + Number(p.recuperadas ?? 0));
   }
   const totalRecuperadas = [...recuperadasPorCanal.values()].reduce((s, n) => s + n, 0);
+  // 3e) a varredura da uazapi não conseguiu fazer o trabalho dela (401 no /instance/all,
+  //     consulta falhando, lista truncada). É rede de segurança: se ela cai calada, só se
+  //     descobre no próximo incidente, contando mensagem de cliente perdida.
+  const { data: eventosCatchup } = await db.from("events")
+    .select("payload").eq("event_type", "catchup_degradado")
+    .gte("received_at", since1h);
+  const motivosCatchup = new Map<string, number>();
+  for (const e of (eventosCatchup ?? []) as Json[]) {
+    const p = (e.payload ?? {}) as Json;
+    const motivo = String(p.motivo ?? "?");
+    motivosCatchup.set(motivo, (motivosCatchup.get(motivo) ?? 0) + 1);
+  }
 
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
@@ -261,6 +273,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: totalRecuperadas,
       detail: [...recuperadasPorCanal].map(([c, n]) => `${c}: ${n}`).join("; ") || undefined,
+    },
+    {
+      key: "catchup_degradado",
+      severity: "critical",
+      count: motivosCatchup.size ? 1 : 0,
+      detail: [...motivosCatchup].map(([m, n]) => `${m} (${n}x)`).join("; ") || undefined,
     },
     {
       key: "uazapi_instance_disconnected",

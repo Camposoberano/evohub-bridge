@@ -20,7 +20,7 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
-import { recuperarEntradaUazapi } from "./shared/catchup-uazapi.ts";
+import { janelaProfunda, recuperarEntradaUazapi } from "./shared/catchup-uazapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import {
   handle as funilEnroll,
@@ -323,8 +323,9 @@ const version = {
     "consulta-em-lotes-sem-414",
     "midia-funil-checada",
     "uazapi-catchup-entrada",
+    "catchup-heartbeat-e-varredura-profunda",
   ],
-  build: "2026-09-12-catchup-e-midia",
+  build: "2026-09-13-catchup-endurecido",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1484,11 +1485,15 @@ function startUazapiCatchupLoop() {
     console.log("uazapi-catchup loop OFF (UAZAPI_CATCHUP_ENABLED=false)");
     return;
   }
+  // O resumo sai em TODA rodada, mesmo zerada. Antes o laço só falava quando havia
+  // recuperação ou falha, e uma varredura morta ficava igual a uma varredura ociosa: a rede
+  // de segurança podia estar furada há dias sem ninguém ter como saber de fora.
   const run = async () => {
     try {
-      const resultados = await recuperarEntradaUazapi(admin(), { apply: true });
+      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), { apply: true });
+      console.log("uazapi-catchup:", JSON.stringify(resumo));
       if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
-        console.log("uazapi-catchup:", JSON.stringify(resultados));
+        console.log("uazapi-catchup detalhe:", JSON.stringify(resultados));
       }
     } catch (error) {
       console.error("uazapi-catchup erro:", error);
@@ -1498,7 +1503,30 @@ function startUazapiCatchupLoop() {
     intervaloMs: 15 * 60_000,
     primeiraEmMs: 180_000,
   });
-  console.log("uazapi-catchup loop ON (15min, entrada fora do webhook)");
+
+  // Varredura profunda 1x/dia. A janela curta do laço só estica para trás quando a instância
+  // caiu; falha de ingestão do NOSSO lado (11/09: webhook recebido, ingestão falha, achado só
+  // ~10h depois) não move a janela e some se ninguém passar largo de vez em quando.
+  const runProfundo = async () => {
+    try {
+      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), {
+        apply: true,
+        janelaFixa: janelaProfunda(Date.now()),
+      });
+      console.log("uazapi-catchup-profundo:", JSON.stringify(resumo));
+      if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
+        console.log("uazapi-catchup-profundo detalhe:", JSON.stringify(resultados));
+      }
+    } catch (error) {
+      console.error("uazapi-catchup-profundo erro:", error);
+    }
+  };
+  agendarLoop("uazapi-catchup-profundo", runProfundo, {
+    intervaloMs: 24 * 60 * 60_000,
+    primeiraEmMs: 30 * 60_000,
+  });
+
+  console.log("uazapi-catchup loop ON (15min + varredura profunda 1x/dia)");
 }
 
 function startOperationalMonitorLoop() {

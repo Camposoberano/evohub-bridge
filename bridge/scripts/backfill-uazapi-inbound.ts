@@ -28,7 +28,7 @@ console.log(
   }`,
 );
 
-const resultados = await recuperarEntradaUazapi(admin(), {
+const { resumo, resultados } = await recuperarEntradaUazapi(admin(), {
   apply: APPLY,
   agora,
   janelaFixa: { desde: agora - HORAS * 60 * 60 * 1000, ate: agora },
@@ -42,5 +42,6 @@ for (const r of resultados) {
   );
   for (const a of r.amostras ?? []) console.log(`   [simulado] ${a}`);
 }
-console.log("\nresumo:", JSON.stringify(resultados.map(({ amostras: _, ...r }) => r)));
+console.log("\nrodada:", JSON.stringify(resumo));
+console.log("resumo:", JSON.stringify(resultados.map(({ amostras: _, ...r }) => r)));
 if (!APPLY) console.log("nada foi gravado — rode de novo com --apply");

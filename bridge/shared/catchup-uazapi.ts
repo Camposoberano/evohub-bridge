@@ -18,7 +18,7 @@
 // 3. Grava pelo `ingestInbound` direto, sem automação: resposta automática para quem escreveu
 //    há horas é pior que nenhuma. Quem responde é o atendente — por isso o monitor avisa.
 import type { DbClient } from "./supabase.ts";
-import { releaseDelivery } from "./supabase.ts";
+import { releaseDeliveryIfOlderThan } from "./supabase.ts";
 import { accountForChannel } from "./accounts.ts";
 import { ingestInbound, type InboundAttachment } from "./inbound.ts";
 import { adminGet, instPost, uazapiConfigured } from "./uazapi.ts";
@@ -41,11 +41,45 @@ const H = 60 * MIN;
 export const MARGEM_WEBHOOK_MS = 30 * MIN;
 export const JANELA_PADRAO_MS = 6 * H;
 export const JANELA_MAXIMA_MS = 72 * H;
+/**
+ * Janela da varredura profunda, que roda 1x por dia.
+ *
+ * A janela de 6h do laço de 15 min só estica para trás quando a instância caiu. Mas em
+ * 11/09 duas mensagens do 5895 tiveram webhook RECEBIDO e ingestão falha, sem queda nenhuma:
+ * foram achadas só pelo backfill, ~10h depois. Sem uma passada larga, falha do nosso lado
+ * sai da janela e nunca mais é olhada.
+ */
+export const JANELA_PROFUNDA_MS = 36 * H;
 /** Página do /message/find. A janela longa não cabe numa só num número movimentado. */
 export const PAGINA_FIND = 500;
 /** Teto de páginas por instância: 4.000 mensagens cobrem 72h até no 5895. */
 export const MAX_PAGINAS_FIND = 8;
 const MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Texto de erro que serve para diagnóstico.
+ *
+ * O erro do Supabase é um objeto `{ message, code, details, hint }`, não um `Error`:
+ * `String(e)` devolve "[object Object]" e o log fica dizendo que algo falhou sem dizer o quê.
+ * Já custou duas investigações em 20/08 — e aqui o log É o produto, porque é por ele que se
+ * sabe se a varredura está viva.
+ */
+export function descreveErro(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    const partes = [o.message, o.code, o.details, o.hint]
+      .filter((v) => v != null && v !== "")
+      .map(String);
+    if (partes.length) return partes.join(" · ");
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return "[erro não serializável]";
+    }
+  }
+  return String(e);
+}
 
 /** A uazapi manda `messageTimestamp` ora em segundos, ora em milissegundos. */
 export function msDoTimestamp(valor: unknown): number {
@@ -119,13 +153,22 @@ export async function buscarMensagensDaInstancia(
     instPost("/message/find", t, { limit, offset }),
 ): Promise<{ ok: boolean; lista: Json[]; truncado: boolean }> {
   const lista: Json[] = [];
+  // A paginação é por offset e a lista anda: mensagem que chega entre duas páginas empurra
+  // tudo para baixo e a mesma linha aparece duas vezes. Juntar por id resolve a repetição;
+  // o `truncado` continua avisando quando a janela não foi coberta.
+  const vistos = new Set<string>();
   for (let pagina = 0; pagina < MAX_PAGINAS_FIND; pagina++) {
     const r = await buscar(token, PAGINA_FIND, pagina * PAGINA_FIND);
     if (!r.ok) return { ok: false, lista, truncado: true };
     const lote = (Array.isArray(r.data)
       ? r.data
       : ((r.data as Json)?.messages ?? [])) as Json[];
-    lista.push(...lote);
+    for (const m of lote) {
+      const id = String(m.id ?? "");
+      if (id && vistos.has(id)) continue;
+      if (id) vistos.add(id);
+      lista.push(m);
+    }
     if (lote.length < PAGINA_FIND) return { ok: true, lista, truncado: false };
     const maisAntiga = Math.min(
       ...lote.map((m) => msDoTimestamp(m.messageTimestamp)).filter(Boolean),
@@ -192,6 +235,44 @@ async function canalAtivoDaInstancia(db: DbClient, nome: string): Promise<Json |
   return null;
 }
 
+/**
+ * O que a rodada inteira viu — inclusive o que ela NÃO fez.
+ *
+ * `ResultadoCatchup` só existe para instância que casou com canal ativo. Tudo que desiste
+ * antes disso (instância desconectada, sem canal, `/instance/all` vazio) sumia sem deixar
+ * rastro, e o laço só escrevia log quando havia recuperação ou falha. Resultado: uma rede de
+ * segurança morta e uma ociosa eram idênticas de fora — e só se descobre qual é no próximo
+ * incidente, contando mensagem perdida. O resumo é o que vai para o log em TODA rodada.
+ */
+export type ResumoCatchup = {
+  instancias: number;
+  conectadas: number;
+  comCanal: number;
+  semCanal: number;
+  errosCanal: number;
+  candidatas: number;
+  recuperadas: number;
+  puladas: number;
+  falhas: number;
+  truncadas: number;
+  /** `/instance/all` não devolveu instância nenhuma: 401, uazapi fora ou corpo inesperado */
+  instanceAllVazio: boolean;
+  /** a varredura não pôde fazer o trabalho dela — vira alerta, não silêncio */
+  degradado: boolean;
+};
+
+/** Portas de fora, trocáveis no teste. Em produção ficam nos módulos de sempre. */
+export type CatchupDeps = {
+  listarInstancias?: () => Promise<{ ok: boolean; status: number; data: unknown }>;
+  buscarPagina?: (
+    token: string,
+    limit: number,
+    offset: number,
+  ) => Promise<{ ok: boolean; data: unknown }>;
+  ingerir?: typeof ingestInbound;
+  contaDoCanal?: typeof accountForChannel;
+};
+
 export type ResultadoCatchup = {
   instancia: string;
   canal: string;
@@ -207,39 +288,99 @@ export type ResultadoCatchup = {
   amostras?: string[];
 };
 
+export type RodadaCatchup = {
+  resumo: ResumoCatchup;
+  resultados: ResultadoCatchup[];
+};
+
+/** Janela da varredura profunda, já com a margem do webhook descontada. */
+export function janelaProfunda(agora: number): { desde: number; ate: number } {
+  return { desde: agora - JANELA_PROFUNDA_MS, ate: agora - MARGEM_WEBHOOK_MS };
+}
+
+/** Registra que a varredura não pôde fazer o trabalho dela. Silêncio aqui é o bug original. */
+async function registrarDegradacao(
+  db: DbClient,
+  motivo: string,
+  resumo: ResumoCatchup,
+): Promise<void> {
+  try {
+    const { error } = await db.from("events").insert({
+      source: "catchup",
+      event_type: "catchup_degradado",
+      payload: { motivo, ...resumo },
+    });
+    if (error) throw error;
+  } catch (e) {
+    console.error("uazapi-catchup: evento catchup_degradado falhou", descreveErro(e).slice(0, 140));
+  }
+}
+
 export async function recuperarEntradaUazapi(
   db: DbClient,
   opts: {
     apply: boolean;
     agora?: number;
     janelaFixa?: { desde: number; ate: number };
+    deps?: CatchupDeps;
   },
-): Promise<ResultadoCatchup[]> {
-  if (!uazapiConfigured()) return [];
+): Promise<RodadaCatchup> {
+  const listarInstancias = opts.deps?.listarInstancias ?? (() => adminGet("/instance/all"));
+  const buscarPagina = opts.deps?.buscarPagina;
+  const contaDoCanal = opts.deps?.contaDoCanal ?? accountForChannel;
+  const ingerir = opts.deps?.ingerir ?? ingestInbound;
+  const resumo: ResumoCatchup = {
+    instancias: 0,
+    conectadas: 0,
+    comCanal: 0,
+    semCanal: 0,
+    errosCanal: 0,
+    candidatas: 0,
+    recuperadas: 0,
+    puladas: 0,
+    falhas: 0,
+    truncadas: 0,
+    instanceAllVazio: false,
+    degradado: false,
+  };
+  const resultados: ResultadoCatchup[] = [];
+  if (!uazapiConfigured()) return { resumo, resultados };
   const agora = opts.agora ?? Date.now();
-  const r = await adminGet("/instance/all");
+  const r = await listarInstancias();
   const instancias = Array.isArray(r.data) ? r.data as Json[] : [];
+  resumo.instancias = instancias.length;
   if (!instancias.length) {
     // 401, corpo inesperado ou uazapi fora: some em silêncio seria "nada a recuperar".
+    resumo.instanceAllVazio = true;
+    resumo.degradado = true;
     console.warn("uazapi-catchup: /instance/all sem instâncias, HTTP", r.status);
-    return [];
+    if (opts.apply) {
+      await registrarDegradacao(db, `/instance/all vazio (HTTP ${r.status})`, resumo);
+    }
+    return { resumo, resultados };
   }
-  const resultados: ResultadoCatchup[] = [];
 
   for (const inst of instancias) {
     const nome = String(inst.name ?? "");
     const token = String(inst.token ?? "");
     if (!nome || !token || !instanciaConectada(inst.status)) continue;
+    resumo.conectadas++;
     // Uma instância problemática (dois canais com o mesmo nome, banco oscilando) não pode
     // derrubar a varredura das outras — quem depende dela é justamente quem acabou de voltar.
     let canal: Json | null = null;
     try {
       canal = await canalAtivoDaInstancia(db, nome);
     } catch (e) {
-      console.error("uazapi-catchup: canal da instância", nome, String(e).slice(0, 140));
+      resumo.errosCanal++;
+      resumo.degradado = true;
+      console.error("uazapi-catchup: canal da instância", nome, descreveErro(e).slice(0, 140));
       continue;
     }
-    if (!canal) continue;
+    if (!canal) {
+      resumo.semCanal++;
+      continue;
+    }
+    resumo.comCanal++;
 
     const { desde, ate } = opts.janelaFixa ??
       janelaDeBusca(agora, dataDaQueda(inst.lastDisconnect));
@@ -256,16 +397,23 @@ export async function recuperarEntradaUazapi(
     };
     resultados.push(res);
 
-    const find = await buscarMensagensDaInstancia(token, desde);
+    const find = await buscarMensagensDaInstancia(token, desde, buscarPagina);
     if (!find.ok) {
       res.falhas++;
+      resumo.falhas++;
+      resumo.degradado = true;
       continue;
     }
     const lista = find.lista;
     res.truncado = find.truncado;
+    if (find.truncado) {
+      resumo.truncadas++;
+      resumo.degradado = true;
+    }
 
     const candidatas = candidatasARecuperar(lista, desde, ate);
     res.candidatas = candidatas.length;
+    resumo.candidatas += candidatas.length;
     if (!candidatas.length) continue;
 
     let perdidas: Json[];
@@ -280,7 +428,9 @@ export async function recuperarEntradaUazapi(
     } catch (e) {
       // Falha de leitura não é "nada gravado": reingerir tudo criaria duplicata.
       res.falhas++;
-      console.error("uazapi-catchup: consulta de já gravadas", nome, String(e).slice(0, 140));
+      resumo.falhas++;
+      resumo.degradado = true;
+      console.error("uazapi-catchup: consulta de já gravadas", nome, descreveErro(e).slice(0, 140));
       continue;
     }
     if (!perdidas.length) continue;
@@ -291,26 +441,36 @@ export async function recuperarEntradaUazapi(
         `…${String(m.chatid ?? "").replace(/@.*$/, "").slice(-4)} ${String(m.messageType ?? "")}`
       );
       res.recuperadas = perdidas.length;
+      resumo.recuperadas += perdidas.length;
       continue;
     }
 
-    const acct = await accountForChannel(String(canal.id));
+    const acct = await contaDoCanal(String(canal.id));
     for (const m of perdidas) {
       const id = String(m.id);
       const tipo = String(m.messageType ?? "text");
       const de = String(m.chatid ?? "").replace(/@.*$/, "");
       if (!de) {
         res.puladas++;
+        resumo.puladas++;
         continue;
       }
       try {
-        // Claim sem linha em `messages` é ingestão que morreu no meio; com 30 minutos de
-        // margem o webhook já terminou, então soltar o claim não abre corrida.
-        await releaseDelivery(db, `wa-${canal.id}-${id}`);
+        // Claim sem linha em `messages` é ingestão que morreu no meio, e precisa sair para a
+        // mensagem entrar. Mas só o claim VELHO: o Chatwoot 502/503 deste projeto segura um
+        // webhook em retentativa por muito mais que a margem, e soltar um claim vivo põe dois
+        // ingests na mesma mensagem — o cliente aparece falando duas vezes no Chatwoot.
+        // Claim recente sobrevive, o `ingestInbound` abaixo vê "duplicate" e isto vira pulada.
+        await releaseDeliveryIfOlderThan(
+          db,
+          `wa-${canal.id}-${id}`,
+          MARGEM_WEBHOOK_MS,
+          new Date(agora),
+        );
         const anexos = isMedia(tipo)
           ? await baixarMidia(token, String(m.messageid ?? id), tipo)
           : undefined;
-        const ingest = await ingestInbound(db, canal, {
+        const ingest = await ingerir(db, canal, {
           from: de,
           name: (m.senderName as string | undefined) ?? undefined,
           metaMessageId: id,
@@ -320,29 +480,54 @@ export async function recuperarEntradaUazapi(
           sentAt: new Date(msDoTimestamp(m.messageTimestamp)).toISOString(),
           acct,
         });
-        if (ingest.inserted) res.recuperadas++;
-        else res.puladas++;
+        if (ingest.inserted) {
+          res.recuperadas++;
+          resumo.recuperadas++;
+        } else {
+          res.puladas++;
+          resumo.puladas++;
+        }
       } catch (e) {
         res.falhas++;
-        console.error("uazapi-catchup: falha ao recuperar", nome, String(e).slice(0, 160));
+        resumo.falhas++;
+        resumo.degradado = true;
+        console.error("uazapi-catchup: falha ao recuperar", nome, descreveErro(e).slice(0, 160));
       }
     }
 
     if (res.recuperadas > 0) {
-      // vira alerta no monitor: alguém precisa responder essas conversas
-      await db.from("events").insert({
-        source: "catchup",
-        event_type: "inbound_recovered",
-        channel_id: canal.id,
-        payload: {
-          instancia: nome,
-          canal: res.canal,
-          recuperadas: res.recuperadas,
-          desde: res.desde,
-          ate: res.ate,
-        },
-      }).then(() => {}, () => {});
+      // Vira alerta no monitor: alguém precisa responder essas conversas. É o ÚNICO caminho
+      // até o alerta — engolir o erro aqui deixa a mensagem entrar sem automação e sem avisar
+      // ninguém, que é exatamente o buraco que este módulo existe para tapar.
+      try {
+        const { error } = await db.from("events").insert({
+          source: "catchup",
+          event_type: "inbound_recovered",
+          channel_id: canal.id,
+          payload: {
+            instancia: nome,
+            canal: res.canal,
+            recuperadas: res.recuperadas,
+            desde: res.desde,
+            ate: res.ate,
+          },
+        });
+        if (error) throw error;
+      } catch (e) {
+        res.falhas++;
+        resumo.falhas++;
+        resumo.degradado = true;
+        console.error(
+          "uazapi-catchup: evento inbound_recovered falhou (mensagem entrou SEM alerta)",
+          nome,
+          descreveErro(e).slice(0, 160),
+        );
+      }
     }
   }
-  return resultados;
+
+  if (resumo.degradado && opts.apply && !resumo.instanceAllVazio) {
+    await registrarDegradacao(db, "varredura incompleta", resumo);
+  }
+  return { resumo, resultados };
 }

@@ -22,7 +22,7 @@ Deno.test("lastDisconnect da uazapi vem com espaço no lugar do T", () => {
   assertEquals(dataDaQueda("não é data"), null);
 });
 
-Deno.test("sem queda recente a janela é das últimas 6h até 10 minutos atrás", () => {
+Deno.test("sem queda recente a janela é das últimas 6h até a margem do webhook", () => {
   const j = janelaDeBusca(agora, null);
   assertEquals(j.desde, agora - JANELA_PADRAO_MS);
   assertEquals(j.ate, agora - MARGEM_WEBHOOK_MS);
@@ -138,4 +138,30 @@ Deno.test("mensagem de 15 minutos atrás ainda é do webhook, não da varredura"
     { id: "40min", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 40 * 60_000) },
   ];
   assertEquals(candidatasARecuperar(lista, desde, ate).map((m) => m.id), ["40min"]);
+});
+
+Deno.test("página repetida pelo deslocamento do offset não duplica candidata", async () => {
+  const agora = Date.parse("2026-09-13T12:00:00Z");
+  const s = (d: number) => Math.floor(d / 1000);
+  const repetida = {
+    id: "5511:HHH",
+    fromMe: false,
+    chatid: "5511@s.whatsapp.net",
+    messageTimestamp: s(agora - 60 * 60_000),
+  };
+  const antiga = {
+    id: "5511:III",
+    fromMe: false,
+    chatid: "5511@s.whatsapp.net",
+    messageTimestamp: s(agora - 40 * 60 * 60_000),
+  };
+  const paginas = [Array.from({ length: PAGINA_FIND }, () => repetida), [antiga]];
+  const r = await buscarMensagensDaInstancia(
+    "t",
+    agora - 8 * 60 * 60_000,
+    (_t, _l, offset) =>
+      Promise.resolve({ ok: true, data: paginas[offset / PAGINA_FIND] ?? [] }),
+  );
+  assertEquals(r.ok, true);
+  assertEquals(r.lista.map((m) => m.id), ["5511:HHH", "5511:III"]);
 });

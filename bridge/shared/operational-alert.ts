@@ -44,9 +44,13 @@ const ENTREGAVEIS = new Set([
   // Mensagem de cliente que só apareceu na varredura (não veio pelo webhook): entrou sem
   // automação e está esperando atendente. Em 11/09 eram 24, uma delas de compra fechando.
   "inbound_recovered",
+  // A varredura que recupera entrada perdida parou de funcionar: sem isso, a próxima queda de
+  // instância volta a sumir com mensagem de cliente e ninguém fica sabendo.
+  "catchup_degradado",
 ]);
 
 const TITULOS: Record<string, string> = {
+  catchup_degradado: "Varredura de entrada da uazapi degradada (mensagem perdida pode não ser recuperada)",
   inbound_recovered: "Mensagem de cliente recuperada fora do webhook (responder no Chatwoot)",
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
   midia_indisponivel: "Mídia do funil sumiu do storage (peça saindo sem imagem)",

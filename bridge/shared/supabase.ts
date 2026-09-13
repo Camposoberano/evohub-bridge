@@ -66,3 +66,27 @@ export async function releaseDelivery(
   );
   if (error) throw error;
 }
+
+/**
+ * Solta o claim SÓ se ele for mais velho que `idadeMinimaMs` — claim recente é trabalho em
+ * andamento, não trabalho morto.
+ *
+ * Quem varre a uazapi atrás de mensagem perdida precisa limpar claim de ingestão que morreu
+ * no meio, mas soltar um claim vivo põe dois ingests na mesma mensagem e ela sai em dobro no
+ * Chatwoot. O Chatwoot 502/503 intermitente deste projeto faz um webhook segurar o claim por
+ * bem mais tempo que o normal, então "já passou da margem, ninguém está mexendo" não vale
+ * como garantia. Mesmo corte de `claimDeliveryWithTtl`, sem tomar o claim para si.
+ */
+export async function releaseDeliveryIfOlderThan(
+  db: DbClient,
+  deliveryId: string | null,
+  idadeMinimaMs: number,
+  now = new Date(),
+): Promise<void> {
+  if (!deliveryId) return;
+  const cutoff = new Date(now.getTime() - idadeMinimaMs).toISOString();
+  const { error } = await db.from("deliveries").delete()
+    .eq("delivery_id", deliveryId)
+    .lt("received_at", cutoff);
+  if (error) throw error;
+}
