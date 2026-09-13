@@ -4,6 +4,7 @@ import { admin, claimDelivery } from "./supabase.ts";
 import { env } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
+import { bloqueiosPorConversa, motivoDoBloqueio } from "./gate-comercial.ts";
 
 type Json = Record<string, unknown>;
 
@@ -162,22 +163,21 @@ export async function pumpFunnelQueue(
       .limit(limit);
     if (error) throw error;
 
-    // Quem já comprou não recebe mais isca. A etiqueta "pago"/"venda" no Chatwoot ou no
-    // Tanto venda quanto recusa encerram a automação. A etiqueta/recusa pode ser processada
-    // em outro loop antes deste pump; esta trava independente evita qualquer corrida residual.
-    const stopOutcomes = ["won", "lost"];
+    // Quem já comprou e quem disse que não compra saem da cadeia. A etiqueta é posta pelo
+    // atendente no WhatsApp/Chatwoot e `bloqueiosPorConversa` lê a ETIQUETA junto com o
+    // `outcome`: o desfecho é derivado por um loop de 10 em 10 minutos e, nessa janela, a
+    // conversa já está marcada e ainda dispararia.
+    //
+    // A consulta antiga lia só `data` e descartava `error` — o mesmo descuido que em 12/09
+    // fez "ninguém comprou" virar verdade e mandou recuperação para 6 vendas ganhas. Agora
+    // o erro sobe e a rodada inteira para: não saber o desfecho é motivo para não mandar.
     const convIds: string[] = [
       ...new Set<string>(
         (data ?? []).map((row: Json) => String(row.conversation_id ?? ""))
           .filter(Boolean),
       ),
     ];
-    const closed = new Set<string>();
-    if (convIds.length) {
-      const { data: convs } = await db.from("conversations")
-        .select("id,outcome").in("id", convIds).in("outcome", stopOutcomes);
-      for (const c of (convs ?? []) as Json[]) closed.add(String(c.id));
-    }
+    const closed = await bloqueiosPorConversa(db, convIds);
     // Bot travado na conversa (label bot-off): a peça fica esperando, não é cancelada nem
     // marcada como falha. Marcar 'failed' aqui recriaria o defeito que travou 16
     // sequências por 24 dias — falha segura a conclusão do funil e o lead some dos dois
@@ -188,13 +188,19 @@ export async function pumpFunnelQueue(
     let failed = 0;
     let cancelled = 0;
     let held = 0;
+    const motivosCancelamento = new Map<string, number>();
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
       if (!id) continue;
 
-      if (closed.has(String(row.conversation_id ?? ""))) {
+      const bloqueio = closed.get(String(row.conversation_id ?? ""));
+      if (bloqueio) {
         await db.from("scheduled_messages")
           .update({ status: "cancelled" }).eq("id", id);
+        motivosCancelamento.set(
+          motivoDoBloqueio(bloqueio),
+          (motivosCancelamento.get(motivoDoBloqueio(bloqueio)) ?? 0) + 1,
+        );
         cancelled++;
         continue;
       }
@@ -285,7 +291,8 @@ export async function pumpFunnelQueue(
       console.log(
         "funnel-queue: canceladas",
         cancelled,
-        "msg(s) de conversa ja fechada",
+        "msg(s) por etiqueta:",
+        [...motivosCancelamento].map(([m, n]) => `${m}=${n}`).join(" "),
       );
     }
     if (held > 0) {

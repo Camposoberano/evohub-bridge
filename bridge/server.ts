@@ -98,6 +98,7 @@ import { runFlow } from "./shared/flow-runner.ts";
 import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
+import { bloqueioPorContato, motivoDoBloqueio } from "./shared/gate-comercial.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
 import { runDeclineGuard } from "./shared/decline-guard.ts";
 
@@ -324,8 +325,9 @@ const version = {
     "midia-funil-checada",
     "uazapi-catchup-entrada",
     "catchup-heartbeat-e-varredura-profunda",
+    "etiqueta-trava-disparo",
   ],
-  build: "2026-09-13-catchup-endurecido",
+  build: "2026-09-13-etiqueta-trava-disparo",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1332,6 +1334,27 @@ function startCampaignQueueLoop() {
           );
           if (muted) {
             await marcarPulado(db, item.id, "bot-off");
+            continue;
+          }
+
+          // Quem já pagou e quem disse que não compra não entram em campanha. A etiqueta é
+          // posta pelo atendente no WhatsApp/Chatwoot; aqui ela é LIDA antes do disparo.
+          // Sem saber o desfecho a campanha não manda: erro de consulta devolve o item para
+          // a fila em vez de virar "ninguém comprou" — foi assim que a recuperação saiu para
+          // 224 conversas em 12/09, 6 delas com venda ganha.
+          let bloqueioComercial;
+          try {
+            bloqueioComercial = await bloqueioPorContato(
+              db,
+              String(canal.id),
+              item.contact_key,
+            );
+          } catch (e) {
+            await marcarFalha(db, item, `etiqueta indisponível: ${String(e).slice(0, 120)}`);
+            continue;
+          }
+          if (bloqueioComercial) {
+            await marcarPulado(db, item.id, motivoDoBloqueio(bloqueioComercial));
             continue;
           }
 

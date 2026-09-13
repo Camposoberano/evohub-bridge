@@ -20,8 +20,56 @@ import {
   findWaitingFlow,
   saveFlowPosition,
 } from "./flow-state.ts";
+import {
+  type Bloqueio,
+  bloqueioPorContato,
+  motivoDoBloqueio,
+} from "./gate-comercial.ts";
 
 type Json = Record<string, unknown>;
+
+/**
+ * Tira o contato do fluxo de vez porque a venda fechou ou o cliente disse que não compra.
+ *
+ * Marca `done` em vez de deixar `waiting`: deixado esperando, a etapa vence de novo na
+ * rodada seguinte e o bloqueio vira um laço que consulta o banco a cada 2 minutos para
+ * sempre. O evento é o que deixa isso visível — bloqueio silencioso é indistinguível de
+ * campanha vazia.
+ */
+async function encerrarFluxoPorDesfecho(
+  db: DbClient,
+  p: { campaign_id: string; contact_key: string; conversation_id?: string | null },
+  canal: Json,
+  bloqueio: Bloqueio,
+): Promise<void> {
+  const motivo = motivoDoBloqueio(bloqueio);
+  await saveFlowPosition(db, p.campaign_id, p.contact_key, {
+    stepId: null,
+    done: true,
+  }, { conversationId: p.conversation_id ?? null, channelId: String(canal.id) });
+  console.log(
+    "flow-timeout: etapa bloqueada",
+    p.campaign_id,
+    p.contact_key.slice(-4),
+    motivo,
+  );
+  try {
+    const { error } = await db.from("events").insert({
+      source: "campanha",
+      event_type: "envio_bloqueado_etiqueta",
+      channel_id: canal.id ?? null,
+      payload: {
+        campanha: p.campaign_id,
+        conversation_id: p.conversation_id ?? null,
+        motivo,
+        origem: "flow-timeout",
+      },
+    });
+    if (error) throw error;
+  } catch (e) {
+    console.error("flow-timeout: evento de bloqueio falhou", e);
+  }
+}
 
 /**
  * Monta as duas rotas de saída do canal: a não-oficial (preferida) e a oficial (rede).
@@ -61,8 +109,8 @@ export async function pumpFlowTimeouts(
   db: DbClient,
   minutosMin = 5,
   now = Date.now(),
-): Promise<{ avaliados: number; seguiram: number }> {
-  const resultado = { avaliados: 0, seguiram: 0 };
+): Promise<{ avaliados: number; seguiram: number; bloqueados: number }> {
+  const resultado = { avaliados: 0, seguiram: 0, bloqueados: 0 };
   const pendentes = await findExpiredWaits(db, minutosMin, 200, now);
   if (!pendentes.length) return resultado;
 
@@ -83,6 +131,29 @@ export async function pumpFlowTimeouts(
       )
       .eq("id", p.channel_id).maybeSingle();
     if (!canal) continue;
+
+    // Quem já comprou ou disse que não compra sai da cadeia AQUI também. Este laço era o
+    // único disparador sem nenhuma trava comercial: em 13/09 mandou "Meu amigo, não quero
+    // incomodar…" para 8 conversas etiquetadas `wa:não compra`, uma delas horas depois da
+    // etiqueta. Erro na consulta segura a etapa em vez de soltar: não saber se o cliente
+    // comprou é motivo para não mandar.
+    let bloqueio: Bloqueio | null = null;
+    try {
+      bloqueio = await bloqueioPorContato(db, String(canal.id), p.contact_key);
+    } catch (e) {
+      resultado.bloqueados++;
+      console.error(
+        "flow-timeout: não deu para conferir etiqueta, etapa segurada:",
+        p.contact_key.slice(-4),
+        e,
+      );
+      continue;
+    }
+    if (bloqueio) {
+      resultado.bloqueados++;
+      await encerrarFluxoPorDesfecho(db, p, canal as Json, bloqueio);
+      continue;
+    }
 
     try {
       const ch = await flowChannelFor(db, canal as Json);
