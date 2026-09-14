@@ -29,6 +29,19 @@ function env(nome: string): string {
   return v;
 }
 
+/** O objeto está no bucket agora? Apagado responde 400 na URL pública. */
+async function existeNoBucket(base: string, caminho: string): Promise<boolean> {
+  const url = `${base.replace(/\/+$/, "")}/storage/v1/object/public/${BUCKET}/` +
+    caminho.split("/").map(encodeURIComponent).join("/");
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch {
+    // Rede instável não é prova de que o arquivo sumiu: no caminho de dúvida, não reescreve.
+    return true;
+  }
+}
+
 /** Caminhos que `funnel_media` referencia dentro do bucket, sem repetição. */
 async function alvosDoBanco(
   // deno-lint-ignore no-explicit-any
@@ -51,14 +64,27 @@ async function alvosDoBanco(
 }
 
 /**
- * Nome como o Supabase o gravou: espaço vira `_` e acento cai.
+ * Nomes possíveis para o mesmo arquivo, como o Supabase pode tê-lo gravado.
  *
- * Sem isso o casamento por nome literal acha 12 de 64 — o original no disco é
- * "audio 01 - fase 01.ogg" e no bucket está "audio_01_-_fase_01.ogg".
+ * Foram precisas duas regras, porque o Supabase NÃO remove o acento — ele troca cada
+ * caractere fora de `[A-Za-z0-9._-]` por `_`:
+ *
+ *   "audio 01 - fase 01.ogg"                      -> "audio_01_-_fase_01.ogg"
+ *   "…Produção_Garantida…"                        -> "…Produ_o_Garantida…"   (ç e ã viram _)
+ *   "ChatGPT Image 5 de dez. de 2025, 02_25_27"   -> "ChatGPT_Image_5_de_dez._de_2025_02_25_27"
+ *
+ * A primeira versão só tirava o acento, então "Produção" virava "producao" e nunca casava
+ * com "Produ_o". Três arquivos ficaram órfãos por isso na restauração de 10/09 — e eram
+ * justamente os que se repetem nos dias 1 a 5, 15 das 36 linhas quebradas.
+ *
+ * As duas chaves são mantidas: a antiga continua casando o que já casava.
  */
-function chave(nome: string): string {
-  return nome.normalize("NFD").replace(/[̀-ͯ]/g, "")
+function chaves(nome: string): string[] {
+  const semAcento = nome.normalize("NFD").replace(/[̀-ͯ]/g, "")
     .replace(/\s+/g, "_").toLowerCase();
+  const comoSupabase = nome.replace(/[^A-Za-z0-9._-]/g, "_")
+    .replace(/_+/g, "_").toLowerCase();
+  return [...new Set([semAcento, comoSupabase])];
 }
 
 /**
@@ -77,9 +103,9 @@ async function indexarPasta(raiz: string): Promise<Map<string, string>> {
         await anda(caminho, dentroDeComprimido || /_comprimido/i.test(e.name));
         continue;
       }
-      const chaves = [chave(e.name)];
-      if (dentroDeComprimido) chaves.push(chave("comprimido_" + e.name));
-      for (const c of chaves) {
+      const chavesDoArquivo = [...chaves(e.name)];
+      if (dentroDeComprimido) chavesDoArquivo.push(...chaves("comprimido_" + e.name));
+      for (const c of new Set(chavesDoArquivo)) {
         // primeiro encontrado vence: avisa em vez de escolher em silêncio
         if (indice.has(c)) console.warn(`  ⚠ nome repetido na origem, mantendo o primeiro: ${e.name}`);
         else indice.set(c, caminho);
@@ -102,9 +128,14 @@ function tipoDe(nome: string): string {
 async function main() {
   const args = [...Deno.args];
   const aplicar = args.includes("--aplicar");
+  // Sobe só o que está faltando de verdade no bucket. O upsert nos que já estão lá é
+  // inofensivo, mas reescrever 40 arquivos para consertar 3 é risco sem troco.
+  const somenteFaltantes = args.includes("--somente-faltantes");
   const pasta = args.find((a) => !a.startsWith("--"));
   if (!pasta) {
-    console.error("uso: deno run -A restaurar-midia-funil.ts <pasta> [--aplicar]");
+    console.error(
+      "uso: deno run -A restaurar-midia-funil.ts <pasta> [--aplicar] [--somente-faltantes]",
+    );
     Deno.exit(1);
   }
 
@@ -123,8 +154,12 @@ async function main() {
   let enviados = 0, jaExistiam = 0, falhas = 0;
 
   for (const alvo of alvos) {
-    const origem = indice.get(chave(alvo.nome));
+    const origem = chaves(alvo.nome).map((c) => indice.get(c)).find(Boolean);
     if (!origem) { faltando.push(alvo.caminho); continue; }
+    if (somenteFaltantes && await existeNoBucket(env("SUPABASE_URL"), alvo.caminho)) {
+      jaExistiam++;
+      continue;
+    }
     if (!aplicar) { console.log(`  casa  ${alvo.caminho}`); enviados++; continue; }
 
     try {
