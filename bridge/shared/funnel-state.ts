@@ -12,7 +12,12 @@ import { marcarPausa } from "./funil-pausa.ts";
 export async function autoPauseFunil(
   conversationId: string,
   reason = "intencao comercial",
+  opts: { comPrazo?: boolean } = {},
 ): Promise<boolean> {
+  // `comPrazo: false` = pausa que NAO se retoma sozinha. Serve para quem pediu falar com uma
+  // pessoa: devolver o funil em 2h por cima de quem esta esperando atendente e exatamente a
+  // reclamacao que originou isto (13/09: 2 conversas receberam 19 e 15 pecas depois do pedido).
+  const comPrazo = opts.comPrazo !== false;
   const db = admin();
   const { data: seq } = await db.from("sales_sequences").select("id, status")
     .eq("conversation_id", conversationId).eq("status", "running")
@@ -30,7 +35,12 @@ export async function autoPauseFunil(
     event_type: "auto_paused",
     payload: { conversation_id: conversationId, reason },
   });
-  await marcarPausa(db, conversationId);
-  console.log("funil auto-paused:", conversationId, reason, "(com prazo de retomada)");
+  if (comPrazo) await marcarPausa(db, conversationId);
+  console.log(
+    "funil auto-paused:",
+    conversationId,
+    reason,
+    comPrazo ? "(com prazo de retomada)" : "(SEM prazo - espera atendente)",
+  );
   return true;
 }

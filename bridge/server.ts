@@ -326,8 +326,9 @@ const version = {
     "uazapi-catchup-entrada",
     "catchup-heartbeat-e-varredura-profunda",
     "etiqueta-trava-disparo",
+    "pediu-humano-pausa-e-alerta",
   ],
-  build: "2026-09-13-etiqueta-trava-disparo",
+  build: "2026-09-14-pediu-humano",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

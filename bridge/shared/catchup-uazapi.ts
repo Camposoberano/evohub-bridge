@@ -23,6 +23,7 @@ import { accountForChannel } from "./accounts.ts";
 import { ingestInbound, type InboundAttachment } from "./inbound.ts";
 import { adminGet, instPost, uazapiConfigured } from "./uazapi.ts";
 import { consultaEmLotes } from "./lotes.ts";
+import { descreveErro } from "./erros.ts";
 
 type Json = Record<string, unknown>;
 
@@ -55,31 +56,6 @@ export const PAGINA_FIND = 500;
 /** Teto de páginas por instância: 4.000 mensagens cobrem 72h até no 5895. */
 export const MAX_PAGINAS_FIND = 8;
 const MAX_BYTES = 15 * 1024 * 1024;
-
-/**
- * Texto de erro que serve para diagnóstico.
- *
- * O erro do Supabase é um objeto `{ message, code, details, hint }`, não um `Error`:
- * `String(e)` devolve "[object Object]" e o log fica dizendo que algo falhou sem dizer o quê.
- * Já custou duas investigações em 20/08 — e aqui o log É o produto, porque é por ele que se
- * sabe se a varredura está viva.
- */
-export function descreveErro(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === "object") {
-    const o = e as Record<string, unknown>;
-    const partes = [o.message, o.code, o.details, o.hint]
-      .filter((v) => v != null && v !== "")
-      .map(String);
-    if (partes.length) return partes.join(" · ");
-    try {
-      return JSON.stringify(e);
-    } catch {
-      return "[erro não serializável]";
-    }
-  }
-  return String(e);
-}
 
 /** A uazapi manda `messageTimestamp` ora em segundos, ora em milissegundos. */
 export function msDoTimestamp(valor: unknown): number {

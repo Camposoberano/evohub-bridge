@@ -259,6 +259,16 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     const motivo = String(p.motivo ?? "?");
     motivosCatchup.set(motivo, (motivosCatchup.get(motivo) ?? 0) + 1);
   }
+  // 3f) cliente clicou "Falar com Cícero". O bot responde "já te conectei", o funil para —
+  //     e a partir daqui é uma pessoa que tem que aparecer. Em 13/09 foram 8 pedidos em 5
+  //     dias, nenhum com atendente: o alerta existe para esse silêncio não se repetir.
+  const { data: eventosHumano } = await db.from("events")
+    .select("payload").eq("event_type", "pediu_humano")
+    .gte("received_at", since1h);
+  const pedidosHumano = ((eventosHumano ?? []) as Json[]).map((e) => {
+    const p = (e.payload ?? {}) as Json;
+    return `#${p.chatwoot_conversation_id ?? "?"} ${p.contato ?? ""}`.trim();
+  });
 
   const issues = [
     { key: "channel_disconnected", severity: "critical", count: disconnected },
@@ -273,6 +283,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: totalRecuperadas,
       detail: [...recuperadasPorCanal].map(([c, n]) => `${c}: ${n}`).join("; ") || undefined,
+    },
+    {
+      key: "pediu_humano",
+      severity: "critical",
+      count: pedidosHumano.length,
+      detail: pedidosHumano.slice(0, 8).join("; ") || undefined,
     },
     {
       key: "catchup_degradado",

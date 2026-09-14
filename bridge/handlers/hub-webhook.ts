@@ -22,6 +22,7 @@ import {
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { registrarPedidoHumano } from "../shared/pedido-humano.ts";
 import { ehPrimeiraMensagem } from "../shared/funil-pausa.ts";
 import { textoDeAncoragem } from "../shared/ancoragem-preco.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
@@ -1326,6 +1327,24 @@ export async function handleSocialSalesIntent(
         "lead-quente",
         "pediu-contato",
       ], "Cliente pediu contato com o Cícero. Responder o quanto antes.");
+      // A etiqueta e a nota já ficavam na conversa, mas ninguém era avisado: dos 8 pedidos de
+      // 09 a 13/09, nenhum tinha atendente no dia seguinte. O alerta é o que fecha o laço.
+      {
+        const { data: ct } = await db.from("contacts").select("id")
+          .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+        const { data: cv } = ct
+          ? await db.from("conversations").select("id,chatwoot_conversation_id")
+            .eq("contact_id", ct.id).neq("status", "resolved")
+            .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+          : { data: null };
+        await registrarPedidoHumano(db, {
+          conversationId: (cv?.id as string | undefined) ?? null,
+          channelId: String(channel.id),
+          chatwootConversationId: (cv?.chatwoot_conversation_id as number | undefined) ?? null,
+          origem: "social",
+          contato: from,
+        });
+      }
     } else {
       await sendSocialPieces(db, channel, from, [{
         type: "list",
@@ -2889,6 +2908,19 @@ export async function handleMenuClick(
     status: r.ok ? "sent" : "failed",
     sent_at: new Date().toISOString(),
   });
+
+  // "Já te conectei com o Cícero" era só texto: o funil seguia empilhando peça por cima e
+  // ninguém ficava sabendo do pedido. Agora para o funil (sem prazo) e levanta alerta.
+  // Vale para o WhatsApp oficial e para a uazapi — as duas rotas passam por aqui.
+  if (menuId === "menu_humano") {
+    await registrarPedidoHumano(db, {
+      conversationId: (conv?.id as string | undefined) ?? null,
+      channelId: String(channel.id),
+      chatwootConversationId: (conv?.chatwoot_conversation_id as number | undefined) ?? null,
+      origem: "whatsapp",
+      contato: from,
+    });
+  }
   return { sent: r.ok };
 }
 
