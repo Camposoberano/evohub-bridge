@@ -170,19 +170,30 @@ export function recuperacaoBloqueada(
 export type RecoveryChainResult = {
   scanned: number;
   due: number;
+  /** entregas históricas reencontradas e registradas sem novo envio */
+  reconciled: number;
   sent: number;
   failed: number;
   /** conversas encerradas como `lost` por silêncio nesta rodada */
   encerradas: number;
 };
 
+/** Resultado de uma tentativa de recuperação.
+ *
+ * `reconciled` significa que a trava de entrega já existia: nenhum conteúdo foi enviado,
+ * mas o estado histórico foi reconstituído para que a cadeia não tente a mesma variação
+ * de novo. */
+export type RecoveryDispatchResult = {
+  state: "sent" | "reconciled" | "failed";
+};
+
 /** Envia de fato. Injetado pra manter este módulo livre de import circular com
- *  funil-control.ts e testável sem rede. Devolve true se a mensagem saiu. */
+ *  funil-control.ts e testável sem rede. */
 export type RecoveryDispatcher = (
   conversation: Json,
   cwConvId: number,
   variation: number,
-) => Promise<boolean>;
+) => Promise<RecoveryDispatchResult>;
 
 /**
  * Varre os funis terminados e dispara a recuperação vencida.
@@ -199,7 +210,14 @@ export async function pumpRecoveryChain(
   now = Date.now(),
   maxPorRodada = 5,
 ): Promise<RecoveryChainResult> {
-  const result = { scanned: 0, due: 0, sent: 0, failed: 0, encerradas: 0 };
+  const result: RecoveryChainResult = {
+    scanned: 0,
+    due: 0,
+    reconciled: 0,
+    sent: 0,
+    failed: 0,
+    encerradas: 0,
+  };
   if (!withinRecoveryHours(now)) return result;
 
   // `paused` entra junto: funil que parou no meio e passou da janela nunca mais anda, e
@@ -431,7 +449,9 @@ export async function pumpRecoveryChain(
         .eq("id", conversationId)
         .maybeSingle();
       if (!conv) continue;
-      if (await dispatch(conv as Json, cwConvId, variation)) result.sent++;
+      const outcome = await dispatch(conv as Json, cwConvId, variation);
+      if (outcome.state === "sent") result.sent++;
+      else if (outcome.state === "reconciled") result.reconciled++;
       else result.failed++;
     } catch (e) {
       result.failed++;

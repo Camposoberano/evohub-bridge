@@ -100,7 +100,7 @@ Deno.test("venda ganha não recebe recuperação", async () => {
   const { db } = banco({ outcome: "won" });
   const r = await pumpRecoveryChain(db, () => {
     enviados++;
-    return Promise.resolve(true);
+    return Promise.resolve({ state: "sent" as const });
   }, now);
   assertEquals(enviados, 0);
   assertEquals(r.due, 0);
@@ -110,7 +110,7 @@ Deno.test("venda perdida também não recebe", async () => {
   let enviados = 0;
   await pumpRecoveryChain(banco({ outcome: "lost" }).db, () => {
     enviados++;
-    return Promise.resolve(true);
+    return Promise.resolve({ state: "sent" as const });
   }, now);
   assertEquals(enviados, 0);
 });
@@ -119,7 +119,7 @@ Deno.test("conversa aberta continua recebendo", async () => {
   let enviados = 0;
   await pumpRecoveryChain(banco({ outcome: "open" }).db, () => {
     enviados++;
-    return Promise.resolve(true);
+    return Promise.resolve({ state: "sent" as const });
   }, now);
   assertEquals(enviados, 1);
 });
@@ -130,7 +130,7 @@ Deno.test("erro ao ler desfechos PARA a rodada, não vira lista vazia", async ()
   await assertRejects(() =>
     pumpRecoveryChain(banco({ outcome: "won", erroConversas: true }).db, () => {
       enviados++;
-      return Promise.resolve(true);
+      return Promise.resolve({ state: "sent" as const });
     }, now)
   );
   assertEquals(enviados, 0, "nenhuma mensagem sai quando não dá pra saber quem já comprou");
@@ -141,7 +141,7 @@ Deno.test("erro ao ler quem está em atendimento também para a rodada", async (
   await assertRejects(() =>
     pumpRecoveryChain(banco({ erroSaidas: true }).db, () => {
       enviados++;
-      return Promise.resolve(true);
+      return Promise.resolve({ state: "sent" as const });
     }, now)
   );
   assertEquals(enviados, 0);
@@ -149,7 +149,7 @@ Deno.test("erro ao ler quem está em atendimento também para a rodada", async (
 
 Deno.test("os desfechos são consultados em lotes, nunca numa URL só", async () => {
   const { db, conversasPedidas } = banco({});
-  await pumpRecoveryChain(db, () => Promise.resolve(true), now);
+  await pumpRecoveryChain(db, () => Promise.resolve({ state: "sent" as const }), now);
   assertEquals(conversasPedidas.length >= 1, true);
   for (const lote of conversasPedidas) {
     assertEquals(lote.length <= 40, true, "lote grande demais volta a estourar a URL");

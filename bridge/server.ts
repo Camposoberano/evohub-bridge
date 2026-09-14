@@ -1257,8 +1257,9 @@ async function runRecoveryChain() {
         cwConvId,
         variation,
         acct,
+        { automatic: true },
       );
-      return response.ok;
+      return response;
     },
     Date.now(),
     Number.isFinite(teto) && teto > 0 ? teto : 5,
@@ -1443,7 +1444,7 @@ function startFunnelRecoveryLoop() {
       if (
         result.eligible || result.enrolled || maintenance.completed ||
         maintenance.resumed || maintenance.followups || chain?.sent ||
-        chain?.failed || chain?.encerradas
+        chain?.reconciled || chain?.failed || chain?.encerradas
       ) {
         console.log(
           "funnel-recovery:",

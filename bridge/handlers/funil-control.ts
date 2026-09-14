@@ -23,6 +23,7 @@ import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
+import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 
 /**
  * Falha que NÃO adianta repetir — e a frase que explica isso ao atendente.
@@ -511,20 +512,64 @@ export async function handle(req: Request): Promise<Response> {
 // Exportada porque a cadeia automática (shared/recovery-chain.ts) dispara pelo mesmo
 // caminho da macro manual — mesmo claimDelivery, mesmas etiquetas, mesmo evento. Duas
 // implementações de "mandar recuperação" divergiriam na primeira mudança.
+type AutomaticRecoveryOptions = { automatic: true };
+
+export function dispatchRecovery(
+  db: Db,
+  conv: Json,
+  cwConvId: number,
+  variation: number,
+  acct: CwAcct,
+): Promise<Response>;
+export function dispatchRecovery(
+  db: Db,
+  conv: Json,
+  cwConvId: number,
+  variation: number,
+  acct: CwAcct,
+  options: AutomaticRecoveryOptions,
+): Promise<RecoveryDispatchResult>;
 export async function dispatchRecovery(
   db: Db,
   conv: Json,
   cwConvId: number,
   variation: number,
   acct: CwAcct,
-): Promise<Response> {
+  options?: AutomaticRecoveryOptions,
+): Promise<Response | RecoveryDispatchResult> {
+  const automatic = options?.automatic === true;
   const resolved = await resolveChannelAndContact(db, conv);
   if (!resolved) {
+    if (automatic) return { state: "failed" };
     return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
   }
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
   if (!await claimDelivery(db, claimKey, "recovery")) {
+    // A cadeia conhece as recuperações pela tabela de eventos, mas a trava de entrega é
+    // durável. Quando o evento já expirou, reconstituí-lo evita que cada rodada tente a
+    // mesma variação e deixe uma nota privada repetida na conversa (caso 1342).
+    if (automatic) {
+      const { error } = await db.from("events").insert({
+        source: "recovery",
+        event_type: "recovery_sent",
+        payload: {
+          conversation_id: conv.id,
+          chatwoot_conversation_id: cwConvId,
+          variation,
+          channel,
+          reconciled_from_delivery: true,
+        },
+      });
+      if (error) {
+        console.error(
+          `recovery: não foi possível reconciliar ${conv.id} variação ${variation}:`,
+          error,
+        );
+        return { state: "failed" };
+      }
+      return { state: "reconciled" };
+    }
     await nota(
       cwConvId,
       `ℹ️ *Recuperação ${variation} não repetida* — esta variação já foi enviada para o contato via ${channel}.`,
@@ -584,6 +629,7 @@ export async function dispatchRecovery(
         `✅ *Recuperação ${variation} enviada por TEMPLATE* (${sent.template}) — a janela ${win.tipo} estava fechada. Quando o cliente tocar num botão a janela reabre e o conteúdo completo pode ser enviado.`,
         acct,
       );
+      if (automatic) return { state: "sent" };
       return json({
         ok: true,
         action: `recuperacao-${variation}`,
@@ -648,6 +694,7 @@ export async function dispatchRecovery(
       `✅ *Recuperação ${variation} enviada via ${channel}* — aguardando resposta do cliente.`,
       acct,
     );
+    if (automatic) return { state: "sent" };
     return json({
       ok: true,
       action: `recuperacao-${variation}`,
@@ -686,6 +733,7 @@ export async function dispatchRecovery(
           acct,
         );
       }
+      if (automatic) return { state: "failed" };
       return json({
         ok: false,
         terminal: true,
@@ -693,6 +741,7 @@ export async function dispatchRecovery(
         error: detail,
       }, 422);
     }
+    if (automatic) return { state: "failed" };
     return json({
       ok: false,
       action: `recuperacao-${variation}`,
