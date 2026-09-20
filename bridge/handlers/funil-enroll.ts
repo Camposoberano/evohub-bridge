@@ -21,6 +21,7 @@ import {
   isContactBlocked,
   isContactExcludedFromAutomation,
 } from "../shared/lead-block.ts";
+import { iscasAtivas } from "../shared/iscas.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -80,13 +81,15 @@ const MENU_ROWS: Botao[] = [
   { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
 ];
 
-function closingList(gancho: { text: string; row: Botao } | null): Peca {
-  const sections = gancho
-    ? [{ title: "Continuar", rows: [gancho.row] }, {
-      title: "Tire sua dúvida",
-      rows: MENU_ROWS,
-    }]
-    : [{ title: "Tire sua dúvida", rows: MENU_ROWS }];
+function closingList(
+  gancho: { text: string; row: Botao } | null,
+  extras: { title?: string; rows: Botao[] }[] = [],
+): Peca {
+  const sections = [
+    ...(gancho ? [{ title: "Continuar", rows: [gancho.row] }] : []),
+    ...extras,
+    { title: "Tire sua dúvida", rows: MENU_ROWS },
+  ];
   return {
     offset: 0,
     kind: "list",
@@ -300,7 +303,12 @@ function fase5(): Peca[] {
         text:
           "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
         row: { id: "f5_local", title: "📍 Vou informar" },
-      }) as Peca,
+      }, iscasAtivas().length
+        ? [{
+          title: "Material grátis",
+          rows: iscasAtivas().map((i) => ({ id: i.botao, title: i.titulo })),
+        }]
+        : []) as Peca,
       offset: 490,
     },
   ];

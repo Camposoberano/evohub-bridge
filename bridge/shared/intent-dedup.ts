@@ -48,3 +48,23 @@ export async function claimDailyIntent(
 export async function releaseDailyIntent(db: DbClient, key: string): Promise<void> {
   await db.from("deliveries").delete().eq("delivery_id", key);
 }
+
+// Dedup diário genérico (mesma mecânica do claimDailyIntent, mas para qualquer tag fora do
+// enum CommercialIntent — ex.: entrega de isca digital). Solta com releaseDailyIntent.
+export async function claimDailyTag(
+  db: DbClient,
+  channelId: string,
+  contactId: string,
+  tag: string,
+): Promise<{ claimed: boolean; key: string }> {
+  const key = `daily:${tag}:${channelId}:${normalizeContactId(contactId)}:${brtDay()}`;
+  const { error } = await db.from("deliveries").insert({
+    delivery_id: key,
+    source: "daily-tag",
+  });
+  if (!error) return { claimed: true, key };
+  if ((error as { code?: string }).code === "23505") {
+    return { claimed: false, key };
+  }
+  throw error;
+}

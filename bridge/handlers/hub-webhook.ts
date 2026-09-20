@@ -47,9 +47,11 @@ import {
 import { toVoiceOgg } from "../shared/audio.ts";
 import {
   claimDailyIntent,
+  claimDailyTag,
   type CommercialIntent,
   releaseDailyIntent,
 } from "../shared/intent-dedup.ts";
+import { type Isca, iscaPorBotao } from "../shared/iscas.ts";
 import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
@@ -2815,6 +2817,100 @@ async function handleSaudacao(
   }
 }
 
+// Entrega de isca digital (lead magnet): manda o PDF do slot, aplica a etiqueta de interesse
+// e NÃO pausa o funil. Só WhatsApp (uazapi + oficial) — o clique já chega roteado por
+// handleMenuClick nos dois webhooks. Registra no Chatwoot e em messages como os demais envios.
+async function handleIscaSequence(
+  db: Db,
+  channel: Json,
+  from: string,
+  isca: Isca,
+  acct?: CwAcct,
+): Promise<void> {
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) throw new Error("canal sem credenciais para enviar isca");
+
+  const { data: media } = await db.from("funnel_media").select("url")
+    .eq("funnel", "mega-sorgo").eq("slot", isca.slot).eq("active", true)
+    .limit(1).maybeSingle();
+  const link = media?.url as string | undefined;
+  if (!link) throw new Error(`isca "${isca.id}" sem PDF ativo no slot ${isca.slot}`);
+
+  const { data: contact } = await db.from("contacts").select("id").eq(
+    "channel_id",
+    channel.id,
+  ).eq("external_contact_id", from).maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
+      "contact_id",
+      contact.id,
+    ).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+
+  const registro = `[isca ${isca.id}] ${isca.filename}`;
+  const r = await sendMeta(token, `${phone}/messages`, {
+    messaging_product: "whatsapp",
+    to: from,
+    type: "document",
+    document: { link, filename: isca.filename, caption: isca.legenda },
+  });
+  const metaId = (r.data as Json)?.messages
+    ? (((r.data as Json).messages as Json[])[0]?.id as string)
+    : null;
+
+  let cwMsgId: number | null = null;
+  if (conv?.chatwoot_conversation_id) {
+    try {
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content: registro, messageType: "outgoing" },
+        acct,
+      );
+      cwMsgId = (cw?.id as number) ?? null;
+    } catch (e) {
+      console.warn("isca: registro Chatwoot falhou", String(e).slice(0, 150));
+    }
+  }
+
+  await db.from("messages").insert({
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: "document",
+    content: registro,
+    meta_message_id: metaId,
+    chatwoot_message_id: cwMsgId,
+    status: r.ok ? "sent" : "failed",
+    sent_at: new Date().toISOString(),
+  });
+
+  if (!r.ok || !metaId) {
+    throw new Error(
+      `Meta não confirmou a isca (${r.status}): ${
+        JSON.stringify(r.data).slice(0, 200)
+      }`,
+    );
+  }
+
+  // etiqueta de interesse — canal de follow-up; se falhar, não derruba a entrega já feita.
+  if (conv?.chatwoot_conversation_id) {
+    try {
+      const cwId = conv.chatwoot_conversation_id as number;
+      const atuais = await getConversationLabels(cwId, acct);
+      if (!atuais.includes(isca.etiqueta)) {
+        await setConversationLabels(cwId, [...atuais, isca.etiqueta], acct);
+      }
+    } catch (e) {
+      console.warn("isca: etiqueta falhou", String(e).slice(0, 120));
+    }
+  }
+}
+
 export async function handleMenuClick(
   db: Db,
   channel: Json,
@@ -2822,6 +2918,19 @@ export async function handleMenuClick(
   menuId: string,
   acct?: CwAcct,
 ): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+  const isca = iscaPorBotao(menuId);
+  if (isca) {
+    const daily = await claimDailyTag(db, String(channel.id), from, isca.botao);
+    if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
+    try {
+      await handleIscaSequence(db, channel, from, isca, acct);
+      return { sent: true };
+    } catch (error) {
+      await releaseDailyIntent(db, daily.key);
+      throw error;
+    }
+  }
+
   const intentByMenu: Record<string, CommercialIntent> = {
     menu_preco: "preco",
     menu_depoimento: "video",
