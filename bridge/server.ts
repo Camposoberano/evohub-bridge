@@ -327,8 +327,9 @@ const version = {
     "catchup-heartbeat-e-varredura-profunda",
     "etiqueta-trava-disparo",
     "pediu-humano-pausa-e-alerta",
+    "isca-digital-fim-funil",
   ],
-  build: "2026-09-14-pediu-humano",
+  build: "2026-09-20-isca-digital",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
