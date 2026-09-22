@@ -4,6 +4,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { ISCAS, iscasAtivas, matchIsca } from "../shared/iscas.ts";
 import { claimDailyTag, releaseDailyIntent } from "../shared/intent-dedup.ts";
+import {
+  normalizeHybridButtonReply,
+  normalizeHybridMenuClick,
+} from "../shared/hybrid-menu.ts";
 import { FASES } from "../handlers/funil-enroll.ts";
 
 Deno.test("matchIsca separa Sim, Não e ignora desconhecido", () => {
@@ -18,6 +22,17 @@ Deno.test("botões Sim e Não começam com menu_ (invariante de roteamento)", ()
   for (const i of iscasAtivas()) {
     assertEquals(i.botaoSim.startsWith("menu_"), true, `${i.id}: botaoSim`);
     assertEquals(i.botaoNao.startsWith("menu_"), true, `${i.id}: botaoNao`);
+  }
+});
+
+Deno.test("no uazapi o título do botão volta pro id (Sim e Não)", () => {
+  // A resposta de botão na uazapi chega como o TÍTULO; hybrid-menu mapeia de volta pro id.
+  // Sem isso o "Quero o material" não roteia e o PDF nunca sai no canal do funil (6836).
+  for (const i of iscasAtivas()) {
+    assertEquals(normalizeHybridButtonReply(i.tituloSim), i.botaoSim, `${i.id} Sim`);
+    assertEquals(normalizeHybridButtonReply(i.tituloNao), i.botaoNao, `${i.id} Não`);
+    assertEquals(normalizeHybridMenuClick(i.tituloSim), i.botaoSim, `${i.id} Sim menu`);
+    assertEquals(normalizeHybridMenuClick(i.tituloNao), i.botaoNao, `${i.id} Não menu`);
   }
 });
 

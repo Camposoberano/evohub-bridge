@@ -29,7 +29,9 @@ export const ISCAS: Isca[] = [
   {
     id: "silagem",
     botaoSim: "menu_isca_silagem",
-    tituloSim: "Sim, quero 📩",
+    // título ÚNICO: no uazapi a resposta de botão volta como o título e é mapeada de volta
+    // pro id em hybrid-menu.ts. "Sim, quero" colidiria com o botão de abertura da fase 5.
+    tituloSim: "Quero o material 📩",
     botaoNao: "menu_isca_nao_silagem",
     tituloNao: "Agora não",
     pergunta:

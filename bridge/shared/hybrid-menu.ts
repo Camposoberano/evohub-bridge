@@ -50,6 +50,8 @@ export function normalizeHybridMenuClick(
     [/\b(nutricao|bromatologia|laudo)\b/, "menu_nutricao"],
     [/\b(video|resultado|depoimento)\b/, "menu_depoimento"],
     [/\b(cicero|duvida|interesse|atendente)\b/, "menu_humano"],
+    [/\bquero o material\b/, "menu_isca_silagem"],
+    [/\bagora nao\b/, "menu_isca_nao_silagem"],
   ];
   return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ?? value;
 }
@@ -73,6 +75,8 @@ export function normalizeHybridButtonReply(
     "pix": "pag_pix",
     "cartao": "pag_cartao",
     "boleto": "pag_boleto",
+    "quero o material": "menu_isca_silagem",
+    "agora nao": "menu_isca_nao_silagem",
   };
   return replies[normalized];
 }
