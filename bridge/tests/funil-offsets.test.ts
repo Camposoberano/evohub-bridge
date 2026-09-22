@@ -59,6 +59,7 @@ Deno.test("peça que usa slot do catálogo declara mediaDay 0", () => {
     "preco_4kg",
     "preco_10kg",
     "preco_20kg",
+    "isca_silagem_capa",
   ];
   FASES.forEach((fase, i) => {
     for (const p of fase()) {

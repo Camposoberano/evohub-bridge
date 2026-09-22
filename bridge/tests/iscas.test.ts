@@ -1,33 +1,33 @@
-// Iscas digitais (lead magnets): registro reutilizável + dedup diário + presença no fim do
-// funil. O clique só é roteado nos dois webhooks (hub e uazapi) se o id começa com "menu_" —
-// por isso há um teste travando esse invariante.
+// Iscas digitais (lead magnets): registro reutilizável + dedup diário + oferta no fim do
+// funil (imagem + Sim/Não). O clique só é roteado nos dois webhooks (hub e uazapi) se o id
+// começa com "menu_" — por isso há um teste travando esse invariante.
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { ISCAS, iscaPorBotao, iscasAtivas } from "../shared/iscas.ts";
+import { ISCAS, iscasAtivas, matchIsca } from "../shared/iscas.ts";
 import { claimDailyTag, releaseDailyIntent } from "../shared/intent-dedup.ts";
 import { FASES } from "../handlers/funil-enroll.ts";
 
-Deno.test("iscaPorBotao resolve conhecido e ignora desconhecido", () => {
-  const silagem = iscaPorBotao("menu_isca_silagem");
-  assertEquals(silagem?.id, "silagem");
-  assertEquals(iscaPorBotao("menu_preco"), undefined);
-  assertEquals(iscaPorBotao("qualquer"), undefined);
+Deno.test("matchIsca separa Sim, Não e ignora desconhecido", () => {
+  assertEquals(matchIsca("menu_isca_silagem")?.acao, "sim");
+  assertEquals(matchIsca("menu_isca_nao_silagem")?.acao, "nao");
+  assertEquals(matchIsca("menu_isca_silagem")?.isca.id, "silagem");
+  assertEquals(matchIsca("menu_preco"), undefined);
+  assertEquals(matchIsca("qualquer"), undefined);
 });
 
-Deno.test("todo botão de isca começa com menu_ (invariante de roteamento)", () => {
+Deno.test("botões Sim e Não começam com menu_ (invariante de roteamento)", () => {
   for (const i of iscasAtivas()) {
-    assertEquals(
-      i.botao.startsWith("menu_"),
-      true,
-      `isca ${i.id}: botão ${i.botao} não roteia sem prefixo menu_`,
-    );
+    assertEquals(i.botaoSim.startsWith("menu_"), true, `${i.id}: botaoSim`);
+    assertEquals(i.botaoNao.startsWith("menu_"), true, `${i.id}: botaoNao`);
   }
 });
 
-Deno.test("cada isca tem slot, filename e etiqueta", () => {
+Deno.test("cada isca tem capa, PDF, etiqueta e recusa", () => {
   for (const i of ISCAS) {
+    assertEquals(i.capaSlot.length > 0, true);
     assertEquals(i.slot.length > 0, true);
     assertEquals(i.filename.length > 0, true);
     assertEquals(i.etiqueta.length > 0, true);
+    assertEquals(i.recusaMsg.length > 0, true);
   }
 });
 
@@ -45,21 +45,32 @@ Deno.test("claimDailyTag: primeira reivindica, segunda no mesmo dia é barrada",
   assertEquals(a.claimed, true);
   const b = await claimDailyTag(db, "chan1", "5599@c.us", "menu_isca_silagem");
   assertEquals(b.claimed, false);
-  assertEquals(a.key, b.key); // mesma chave = mesmo contato/dia
-  await releaseDailyIntent(db, a.key); // não lança
+  assertEquals(a.key, b.key);
+  await releaseDailyIntent(db, a.key);
 });
 
-Deno.test("fim da fase 5 oferece a isca (linha na lista de fechamento)", () => {
+Deno.test("fase 5 oferta a isca (interativo com capa + Sim/Não) antes do fechamento", () => {
   const fase5 = FASES[FASES.length - 1]();
-  const listas = fase5.filter((p) => p.kind === "list");
-  assertEquals(listas.length >= 1, true);
-  const ids = listas.flatMap((p) =>
-    // deno-lint-ignore no-explicit-any
-    ((p as any).sections as { rows: { id: string }[] }[]).flatMap((s) =>
-      s.rows.map((r) => r.id)
-    )
-  );
+  // deno-lint-ignore no-explicit-any
+  const interativos = fase5.filter((p: any) => p.kind === "interactive");
   for (const i of iscasAtivas()) {
-    assertEquals(ids.includes(i.botao), true, `isca ${i.id} não aparece na fase 5`);
+    const oferta = interativos.find((p) =>
+      // deno-lint-ignore no-explicit-any
+      ((p as any).buttons ?? []).some((b: { id: string }) => b.id === i.botaoSim)
+    );
+    assertEquals(Boolean(oferta), true, `isca ${i.id} não é ofertada na fase 5`);
+    // deno-lint-ignore no-explicit-any
+    const p = oferta as any;
+    assertEquals(p.headerSlot, i.capaSlot, "oferta sem a capa como header");
+    assertEquals(p.mediaDay, 0, "capa é do catálogo (day 0)");
+    assertEquals(
+      p.buttons.some((b: { id: string }) => b.id === i.botaoNao),
+      true,
+      "oferta sem botão Não",
+    );
+    // a oferta vem antes do fechamento (lista), que é a última peça
+    const fechamento = fase5.reduce((a, b) => (b.offset > a.offset ? b : a));
+    assertEquals(fechamento.kind, "list");
+    assertEquals(p.offset < fechamento.offset, true, "oferta não vem antes do fechamento");
   }
 });

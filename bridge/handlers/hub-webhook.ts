@@ -51,7 +51,7 @@ import {
   type CommercialIntent,
   releaseDailyIntent,
 } from "../shared/intent-dedup.ts";
-import { type Isca, iscaPorBotao } from "../shared/iscas.ts";
+import { type Isca, matchIsca } from "../shared/iscas.ts";
 import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
@@ -2918,9 +2918,10 @@ export async function handleMenuClick(
   menuId: string,
   acct?: CwAcct,
 ): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
-  const isca = iscaPorBotao(menuId);
-  if (isca) {
-    const daily = await claimDailyTag(db, String(channel.id), from, isca.botao);
+  const iscaMatch = matchIsca(menuId);
+  if (iscaMatch?.acao === "sim") {
+    const { isca } = iscaMatch;
+    const daily = await claimDailyTag(db, String(channel.id), from, isca.botaoSim);
     if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
     try {
       await handleIscaSequence(db, channel, from, isca, acct);
@@ -2955,7 +2956,10 @@ export async function handleMenuClick(
       throw error;
     }
   }
-  const content = MENU_CONTENT[menuId];
+  // "Agora não" da isca cai aqui e usa a mesma cauda de envio de texto do menu.
+  const content = iscaMatch?.acao === "nao"
+    ? iscaMatch.isca.recusaMsg
+    : MENU_CONTENT[menuId];
   if (!content) return { sent: false };
 
   const { data: secret } = await db.from("channel_secrets").select(

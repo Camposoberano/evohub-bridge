@@ -21,7 +21,7 @@ import {
   isContactBlocked,
   isContactExcludedFromAutomation,
 } from "../shared/lead-block.ts";
-import { iscasAtivas } from "../shared/iscas.ts";
+import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -37,7 +37,8 @@ const GAPS_FAST = [0, 70, 70, 70, 70];
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
 // Teto do acesso: a próxima fase começa em ini+FIM_ACESSO, então peça agendada além disso
 // invade a fase seguinte. Exportado pra tests/funil-offsets.test.ts vigiar.
-export const FIM_ACESSO = 520; // último disparo do acesso (lista de fechamento) = +8min40
+export const FIM_ACESSO = 560; // último disparo do acesso (lista de fechamento) = +9min20
+// (a fase 5 ganhou a oferta de isca no offset 490, empurrando o fechamento de 490 p/ 560)
 const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 type Botao = { id: string; title: string };
@@ -81,21 +82,36 @@ const MENU_ROWS: Botao[] = [
   { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
 ];
 
-function closingList(
-  gancho: { text: string; row: Botao } | null,
-  extras: { title?: string; rows: Botao[] }[] = [],
-): Peca {
-  const sections = [
-    ...(gancho ? [{ title: "Continuar", rows: [gancho.row] }] : []),
-    ...extras,
-    { title: "Tire sua dúvida", rows: MENU_ROWS },
-  ];
+function closingList(gancho: { text: string; row: Botao } | null): Peca {
+  const sections = gancho
+    ? [{ title: "Continuar", rows: [gancho.row] }, {
+      title: "Tire sua dúvida",
+      rows: MENU_ROWS,
+    }]
+    : [{ title: "Tire sua dúvida", rows: MENU_ROWS }];
   return {
     offset: 0,
     kind: "list",
     text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌",
     buttonLabel: "Ver opções",
     sections,
+  };
+}
+
+// Oferta de isca digital: imagem (capa do material) + pergunta + botões Sim/Não. O PDF só é
+// enviado quando o cliente toca "Sim" (handleMenuClick -> handleIscaSequence). Vem ANTES do
+// fechamento porque a última peça da fase precisa ser a lista que pede o CEP.
+function ofertaIsca(isca: Isca, offset: number): Peca {
+  return {
+    offset,
+    kind: "interactive",
+    text: isca.pergunta,
+    headerSlot: isca.capaSlot,
+    mediaDay: 0,
+    buttons: [
+      { id: isca.botaoSim, title: isca.tituloSim },
+      { id: isca.botaoNao, title: isca.tituloNao },
+    ],
   };
 }
 
@@ -298,18 +314,16 @@ function fase5(): Peca[] {
       caption:
         "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança.",
     },
+    // Oferta da isca (imagem + Sim/Não). Antes do fechamento porque a última peça precisa
+    // ser a lista que pede o CEP. Sem isca cadastrada, some e o fechamento volta pra 490.
+    ...(iscasAtivas().length ? [ofertaIsca(iscasAtivas()[0], 490)] : []),
     {
       ...closingList({
         text:
           "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
         row: { id: "f5_local", title: "📍 Vou informar" },
-      }, iscasAtivas().length
-        ? [{
-          title: "Material grátis",
-          rows: iscasAtivas().map((i) => ({ id: i.botao, title: i.titulo })),
-        }]
-        : []) as Peca,
-      offset: 490,
+      }) as Peca,
+      offset: iscasAtivas().length ? 560 : 490,
     },
   ];
 }

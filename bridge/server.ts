@@ -328,8 +328,9 @@ const version = {
     "etiqueta-trava-disparo",
     "pediu-humano-pausa-e-alerta",
     "isca-digital-fim-funil",
+    "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-09-20-isca-digital",
+  build: "2026-09-21-isca-oferta",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
