@@ -11,6 +11,18 @@ const PERGUNTA: FlowStep = {
   onTimeout: "lembrete",
 };
 
+const DOCUMENTO_ETIQUETADO: FlowStep = {
+  id: "isca",
+  kind: "media",
+  text: "Sua isca de silagem",
+  media: {
+    type: "document",
+    url: "https://example.test/isca.pdf",
+    fileName: "isca.pdf",
+  },
+  labels: ["interesse-silagem"],
+};
+
 const T0 = Date.parse("2026-08-12T12:00:00.000Z");
 
 // Quem não responde é a maioria — o funil mede de 19% a 79% de resposta por fase. Sem
@@ -35,4 +47,9 @@ Deno.test("step sem timeout espera indefinidamente", () => {
 Deno.test("waitingSince ausente ou invalido nao vence", () => {
   assertEquals(esperaVencida(PERGUNTA, undefined, T0 + 999 * 60_000), false);
   assertEquals(esperaVencida(PERGUNTA, "nao-e-data", T0 + 999 * 60_000), false);
+});
+
+Deno.test("step de documento aceita etiquetas declarativas", () => {
+  assertEquals(DOCUMENTO_ETIQUETADO.media?.type, "document");
+  assertEquals(DOCUMENTO_ETIQUETADO.labels, ["interesse-silagem"]);
 });

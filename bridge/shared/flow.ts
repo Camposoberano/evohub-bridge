@@ -31,6 +31,8 @@ export type FlowStep = {
     url: string;
     fileName?: string;
   };
+  /** etiquetas aplicadas à conversa depois que a saída for aceita pelo provedor */
+  labels?: string[];
   /** kind=buttons — o WhatsApp aceita no máximo 3 */
   buttons?: FlowButton[];
   /** imagem no topo do cartão de botões */

@@ -5,12 +5,18 @@ import {
   stepsUntilWait,
   validateFlow,
 } from "../shared/flow.ts";
+import { msgTypeDoStep, textoDoStep } from "../shared/flow-record.ts";
 
 // Fluxo do jeito que a operação pediu: áudio, pergunta com botões, e caminho diferente
 // conforme a resposta.
 const FLUXO: Flow = {
   steps: [
-    { id: "audio", kind: "media", media: { type: "audio", url: "https://x/a.ogg" } },
+    {
+      id: "audio",
+      kind: "media",
+      media: { type: "audio", url: "https://x/a.ogg" },
+      labels: ["interesse-silagem"],
+    },
     {
       id: "pergunta",
       kind: "buttons",
@@ -87,6 +93,14 @@ Deno.test("sequencia linear segue pela ordem da lista", () => {
 
 Deno.test("fluxo bem montado nao acusa problema", () => {
   assertEquals(validateFlow(FLUXO), []);
+});
+
+Deno.test("etiqueta declarativa nao altera texto nem tipo do step", () => {
+  const step = FLUXO.steps[0];
+  assertEquals(step.labels, ["interesse-silagem"]);
+  assertEquals(textoDoStep(step), "[audio]");
+  assertEquals(msgTypeDoStep(step), "audio");
+  assertEquals(validateFlow({ steps: [step] }), []);
 });
 
 // O defeito grave: A→B→A sem pergunta no meio manda mensagem até a conta cair. Tem que ser

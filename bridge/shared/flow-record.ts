@@ -56,6 +56,7 @@ export function gravadorDeFluxo(
       content: textoDoStep(step),
       outgoing: true,
       acct,
+      labels: step.labels,
       // Sem id do provedor: `ingestInbound` cai na chave de dedupe por conteúdo, o que já
       // impede a mesma peça de entrar duas vezes se o passo for reprocessado.
     });
