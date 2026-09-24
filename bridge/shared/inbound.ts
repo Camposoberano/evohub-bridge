@@ -51,6 +51,7 @@ export type IngestInboundMessage = {
   acct?: CwAcct; // conta Chatwoot do canal (multi-cliente: outra URL/token/account)
   referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
+  labels?: string[]; // etiquetas declarativas aplicadas após uma saída ser aceita
 };
 
 export async function ingestInbound(
@@ -384,6 +385,37 @@ async function ingestInboundClaimed(
       return { inserted: false, reason: "duplicate" };
     }
     throw messageError;
+  }
+
+  // Etiquetas de saída são aplicadas só depois que o provedor aceitou e a linha
+  // correspondente foi persistida. A união torna o callback idempotente; uma
+  // falha no Chatwoot não desfaz a entrega nem a gravação da mensagem.
+  if (
+    msg.outgoing &&
+    msg.labels?.length &&
+    conv.chatwoot_conversation_id
+  ) {
+    try {
+      const currentLabels = await getConversationLabels(
+        conv.chatwoot_conversation_id as number,
+        acct,
+      );
+      await setConversationLabels(
+        conv.chatwoot_conversation_id as number,
+        [
+          ...new Set([
+            ...currentLabels,
+            ...msg.labels.map((label) => label.trim()).filter(Boolean),
+          ]),
+        ],
+        acct,
+      );
+    } catch (error) {
+      console.warn(
+        "inbound: aplicação de etiqueta de saída falhou:",
+        String(error).slice(0, 160),
+      );
+    }
   }
 
   // Decisão 01/07: resposta/clique do cliente NÃO trava o funil. O Cícero recebe a resposta
