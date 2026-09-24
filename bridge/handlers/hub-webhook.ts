@@ -56,6 +56,7 @@ import { parseSocialCommentChanges } from "../shared/social.ts";
 import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { metaErrorDetail } from "../shared/meta-errors.ts";
+import { sendFunnelDocument } from "../shared/document-delivery.ts";
 import { socialPriceActionClaimKey } from "../shared/social-funnel.ts";
 import {
   inferSocialSalesIntent,
@@ -2107,19 +2108,14 @@ async function handlePlantioSequence(
     .eq("funnel", "mega-sorgo").eq("slot", "plantio_pdf").eq("active", true)
     .limit(1).maybeSingle();
   if (pdfMedia?.url) {
-    await envia(
-      {
-        type: "document",
-        document: {
-          link: pdfMedia.url,
-          caption:
-            "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa",
-          filename: "Instrucoes-Plantio-Mega-Sorgo.pdf",
-        },
-      },
-      "[PDF Instruções de Plantio]",
-      "document",
-    );
+    await sendFunnelDocument(db, channel, {
+      to: from,
+      mediaUrl: pdfMedia.url as string,
+      fileName: "Instrucoes-Plantio-Mega-Sorgo.pdf",
+      caption:
+        "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa",
+      registro: "[PDF Instruções de Plantio]",
+    }, acct);
     await pause(3000);
   }
 
@@ -2607,19 +2603,14 @@ async function handleNutricaoSequence(
     .eq("funnel", "mega-sorgo").eq("slot", "nutricao_pdf").eq("active", true)
     .limit(1).maybeSingle();
   if (pdfMedia?.url) {
-    await envia(
-      {
-        type: "document",
-        document: {
-          link: pdfMedia.url,
-          caption:
-            "🧪 *Análise Bromatológica Completa* — Mega Sorgo Santa Elisa\nLaboratório Prado (dez/2025)",
-          filename: "Analise-Bromatologica-Mega-Sorgo.pdf",
-        },
-      },
-      "[PDF Análise Bromatológica]",
-      "document",
-    );
+    await sendFunnelDocument(db, channel, {
+      to: from,
+      mediaUrl: pdfMedia.url as string,
+      fileName: "Analise-Bromatologica-Mega-Sorgo.pdf",
+      caption:
+        "🧪 *Análise Bromatológica Completa* — Mega Sorgo Santa Elisa\nLaboratório Prado (dez/2025)",
+      registro: "[PDF Análise Bromatológica]",
+    }, acct);
     await pause(3000);
   }
 
@@ -2827,88 +2818,20 @@ async function handleIscaSequence(
   isca: Isca,
   acct?: CwAcct,
 ): Promise<void> {
-  const { data: secret } = await db.from("channel_secrets").select(
-    "channel_token",
-  ).eq("channel_id", channel.id).maybeSingle();
-  const token = secret?.channel_token as string | undefined;
-  const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) throw new Error("canal sem credenciais para enviar isca");
-
   const { data: media } = await db.from("funnel_media").select("url")
     .eq("funnel", "mega-sorgo").eq("slot", isca.slot).eq("active", true)
     .limit(1).maybeSingle();
   const link = media?.url as string | undefined;
   if (!link) throw new Error(`isca "${isca.id}" sem PDF ativo no slot ${isca.slot}`);
 
-  const { data: contact } = await db.from("contacts").select("id").eq(
-    "channel_id",
-    channel.id,
-  ).eq("external_contact_id", from).maybeSingle();
-  const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
-      "contact_id",
-      contact.id,
-    ).neq("status", "resolved")
-      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
-    : { data: null };
-
-  const registro = `[isca ${isca.id}] ${isca.filename}`;
-  const r = await sendMeta(token, `${phone}/messages`, {
-    messaging_product: "whatsapp",
+  await sendFunnelDocument(db, channel, {
     to: from,
-    type: "document",
-    document: { link, filename: isca.filename, caption: isca.legenda },
-  });
-  const metaId = (r.data as Json)?.messages
-    ? (((r.data as Json).messages as Json[])[0]?.id as string)
-    : null;
-
-  let cwMsgId: number | null = null;
-  if (conv?.chatwoot_conversation_id) {
-    try {
-      const cw = await createConversationMessage(
-        conv.chatwoot_conversation_id as number,
-        { content: registro, messageType: "outgoing" },
-        acct,
-      );
-      cwMsgId = (cw?.id as number) ?? null;
-    } catch (e) {
-      console.warn("isca: registro Chatwoot falhou", String(e).slice(0, 150));
-    }
-  }
-
-  await db.from("messages").insert({
-    conversation_id: conv?.id ?? null,
-    channel_id: channel.id,
-    direction: "out",
-    msg_type: "document",
-    content: registro,
-    meta_message_id: metaId,
-    chatwoot_message_id: cwMsgId,
-    status: r.ok ? "sent" : "failed",
-    sent_at: new Date().toISOString(),
-  });
-
-  if (!r.ok || !metaId) {
-    throw new Error(
-      `Meta não confirmou a isca (${r.status}): ${
-        JSON.stringify(r.data).slice(0, 200)
-      }`,
-    );
-  }
-
-  // etiqueta de interesse — canal de follow-up; se falhar, não derruba a entrega já feita.
-  if (conv?.chatwoot_conversation_id) {
-    try {
-      const cwId = conv.chatwoot_conversation_id as number;
-      const atuais = await getConversationLabels(cwId, acct);
-      if (!atuais.includes(isca.etiqueta)) {
-        await setConversationLabels(cwId, [...atuais, isca.etiqueta], acct);
-      }
-    } catch (e) {
-      console.warn("isca: etiqueta falhou", String(e).slice(0, 120));
-    }
-  }
+    mediaUrl: link,
+    fileName: isca.filename,
+    caption: isca.legenda,
+    registro: `[isca ${isca.id}] ${isca.filename}`,
+    labels: [isca.etiqueta],
+  }, acct);
 }
 
 export async function handleMenuClick(
