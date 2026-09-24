@@ -330,7 +330,7 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-09-21-isca-oferta-rota",
+  build: "2026-09-24-isca-pdf-hibrido-campanha",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
