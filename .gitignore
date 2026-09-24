@@ -14,6 +14,8 @@ node_modules/
 dist/
 *.log
 ops/backups/
+# listas operacionais de campanha ficam fora do Git
+ops/*.csv
 .DS_Store
 supabase/.branches/
 supabase/.temp/
