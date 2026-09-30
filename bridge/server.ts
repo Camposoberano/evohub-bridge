@@ -335,7 +335,7 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-10-02-provider-echo-canonical-dedup",
+  build: "2026-10-06-funil-comercial-ramificado",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

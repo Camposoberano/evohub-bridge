@@ -1,7 +1,9 @@
 # Retencao de campanhas e logs
 
 **Data:** 29/08/2026  
-**Status:** desenho aprovado, aguardando revisao da especificacao
+**Status:** desenho historico. A retencao do Analytics foi substituida em 03/09/2026 pela
+politica operacional de 48 horas documentada em
+`ops/evohub-supabase-analytics-retention.md`.
 
 ## Objetivo
 
@@ -63,11 +65,11 @@ Excluido:
 
 ### Analytics do Supabase
 
-- Meta de retencao: sete dias para eventos tecnicos `_analytics`.
-- Antes de alterar a infraestrutura, medir por 24 horas a taxa apos a reducao do loop de sync e
-  validar Studio, Auth, Storage, Realtime e bridge.
-- A limpeza ou a configuracao de retencao sera feita pelo mecanismo suportado da plataforma, nunca
-  por `DELETE` manual na tabela interna de Logflare.
+- Politica vigente: 48 horas para a fonte tecnica `cloudflare.logs.prod`.
+- A limpeza inicial aprovada usa `TRUNCATE TABLE ONLY` na tabela identificada da fonte, sem
+  `CASCADE`; a manutencao horaria remove apenas registros vencidos por `timestamp`.
+- A rotina instalada e o procedimento de reversao estao em
+  `ops/evohub-supabase-analytics-retention.md`.
 
 ## Observabilidade
 
@@ -86,5 +88,5 @@ O painel deve mostrar, sem dados pessoais:
 3. Apenas mensagem marcada como `campaign` pode ser removida pelo trabalhador de retencao.
 4. Cada limpeza e rastreavel por lote, quantidade, bytes, sucesso e falha, sem dados pessoais.
 5. Logs do bridge e Chatwoot nao permanecem por mais de 14 dias nem ultrapassam o teto definido.
-6. O Analytics do Supabase tem uma politica de sete dias validada antes de qualquer limpeza.
+6. O Analytics do Supabase conserva somente 48 horas da fonte tecnica definida.
 7. Chatwoot, bridge, campanhas e canais continuam saudaveis durante e apos a ativacao.
