@@ -17,10 +17,17 @@ import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
 import { gravadorDeFluxo } from "../shared/flow-record.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
-import { PACE_PADRAO, type PaceConfig } from "../shared/campaign-pace.ts";
+import { validarContatoAntesDaCampanha } from "../shared/campaign-preflight.ts";
+import {
+  capDoDia,
+  dentroDaJanela,
+  PACE_PADRAO,
+  type PaceConfig,
+} from "../shared/campaign-pace.ts";
 import {
   cancelarCampanha,
   enfileirar,
+  enviadosHoje,
   pausarCampanha,
   resumoDaFila,
   retomarCampanha,
@@ -107,9 +114,30 @@ export async function handle(req: Request): Promise<Response> {
       counts[t.campaignId][t.status]++;
     }
     const official = await resolveWhatsAppChannel();
+    const now = Date.now();
+    const pace: Record<string, Json | null> = {};
+    for (const campaign of state.campaigns) {
+      const cfg = { ...PACE_PADRAO, ...(campaign.pace ?? {}) } as PaceConfig;
+      const sentToday = await enviadosHoje(admin(), campaign.id, now);
+      const capToday = capDoDia(cfg, Date.parse(campaign.createdAt), now);
+      const windowOpen = dentroDaJanela(cfg, now);
+      pace[campaign.id] = {
+        sentToday,
+        capToday,
+        remainingToday: Math.max(0, capToday - sentToday),
+        window: `${cfg.horaInicio}h-${cfg.horaFim}h BRT`,
+        windowOpen,
+        reason: !windowOpen
+          ? "fora-da-janela"
+          : sentToday >= capToday
+          ? "teto-do-dia"
+          : "liberada",
+      };
+    }
     return json({
       campaigns: state.campaigns,
       counts,
+      pace,
       officialChannel: official,
     });
   }
@@ -126,6 +154,12 @@ export async function handle(req: Request): Promise<Response> {
     const language = (body.language as string) ?? "pt_BR";
     if (!template || numbers.length === 0) {
       return json({ error: "template e numbers obrigatórios" }, 400);
+    }
+    if (numbers.length > 1) {
+      return json({
+        error: "disparos em lista não podem usar o envio direto",
+        motivo: "use um fluxo agendado para aplicar fila, ritmo e revalidação por contato",
+      }, 409);
     }
     if (numbers.length > MAX_POR_CHAMADA) {
       return json({
@@ -150,6 +184,30 @@ export async function handle(req: Request): Promise<Response> {
     ).eq("channel_id", ch.id).maybeSingle();
     const token = secret?.channel_token as string | undefined;
     if (!token) return json({ error: "canal sem token" }, 404);
+
+    let preflight;
+    try {
+      const verifierRoute = await getHybridRoute(
+        ch.id,
+        ch.phone_number_id,
+        ch.phone_number ?? "",
+      );
+      preflight = await validarContatoAntesDaCampanha({
+        db: admin(),
+        channelId: ch.id,
+        channelName: ch.name,
+        phone: numbers[0],
+        route: verifierRoute,
+      });
+    } catch (error) {
+      return json({
+        error: "não foi possível revalidar o contato antes do envio",
+        motivo: error instanceof Error ? error.message : String(error),
+      }, 503);
+    }
+    if (!preflight.eligible) {
+      return json({ error: "contato não elegível para envio", motivo: preflight.reason }, 409);
+    }
 
     const camp: Campaign = {
       id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
@@ -278,6 +336,12 @@ export async function handle(req: Request): Promise<Response> {
     if (!text || !numbers.length) {
       return json({ error: "text e numbers obrigatórios" }, 400);
     }
+    if (numbers.length > 1) {
+      return json({
+        error: "disparos em lista não podem usar o envio direto",
+        motivo: "use um fluxo agendado para aplicar fila, ritmo e revalidação por contato",
+      }, 409);
+    }
     if (numbers.length > MAX_POR_CHAMADA) {
       return json({
         error:
@@ -310,6 +374,25 @@ export async function handle(req: Request): Promise<Response> {
     const { data: secret } = await admin().from("channel_secrets")
       .select("channel_token").eq("channel_id", ch.id).maybeSingle();
     const token = secret?.channel_token as string | undefined;
+
+    let preflight;
+    try {
+      preflight = await validarContatoAntesDaCampanha({
+        db: admin(),
+        channelId: ch.id,
+        channelName: ch.name,
+        phone: numbers[0],
+        route,
+      });
+    } catch (error) {
+      return json({
+        error: "não foi possível revalidar o contato antes do envio",
+        motivo: error instanceof Error ? error.message : String(error),
+      }, 503);
+    }
+    if (!preflight.eligible) {
+      return json({ error: "contato não elegível para envio", motivo: preflight.reason }, 409);
+    }
 
     const camp: Campaign = {
       id: "camp_" + new Date().toISOString().replace(/\D/g, "").slice(0, 14),
@@ -423,6 +506,12 @@ export async function handle(req: Request): Promise<Response> {
     if (!flow?.steps?.length || !numbers.length) {
       return json({ error: "flow e numbers obrigatórios" }, 400);
     }
+    if (numbers.length > 1) {
+      return json({
+        error: "envios para listas devem usar a fila e a validação por contato",
+        use_action: "agendar-fluxo",
+      }, 409);
+    }
     if (numbers.length > MAX_POR_CHAMADA) {
       return json({
         error:
@@ -474,6 +563,26 @@ export async function handle(req: Request): Promise<Response> {
         { error: "nenhuma rota de envio disponível para este canal" },
         404,
       );
+    }
+
+    const db = admin();
+    let preflight;
+    try {
+      preflight = await validarContatoAntesDaCampanha({
+        db,
+        channelId: ch.id,
+        channelName: ch.name,
+        phone: numbers[0],
+        route,
+      });
+    } catch (error) {
+      return json({
+        error: "não foi possível revalidar o contato antes do envio",
+        motivo: error instanceof Error ? error.message : String(error),
+      }, 503);
+    }
+    if (!preflight.eligible) {
+      return json({ error: "contato não elegível para envio", motivo: preflight.reason }, 409);
     }
 
     const camp: Campaign = {

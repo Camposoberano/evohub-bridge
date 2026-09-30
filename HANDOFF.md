@@ -220,6 +220,24 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 
 ---
 
+## Campanha Sul Grupo A / 5895 - 24/08/2026
+
+- Relatorio completo: `docs/relatorio-campanha-sul-grupo-a-5895-2026-08-24.md`.
+- Fila da campanha `camp_20260818023357`: 273 enviados, 1 pulado por negociacao em
+  andamento e 1 registro antigo preso em `processing` (nao reenviar automaticamente).
+- O funil ainda nao esta comercialmente encerrado: 153 jornadas aguardam resposta ou
+  timeout; 120 jornadas estao `done`.
+- Base mensuravel: 51 respostas apos 233 aberturas registradas; 33 chegaram ao pedido de
+  dados e 24 responderam depois dele. Nao ha conversao `won`/`pago` registrada.
+- Verificar antes da proxima campanha: envios foram observados apos 20:00 em dois dias,
+  apesar da janela configurada 08:00-20:00; ha diferenca de 40 entre fila enviada e
+  aberturas registradas no historico.
+- Backup operacional criado em `/var/backups/evohub/20260823-050447`, validado por
+  checksums e copiado para fora da VPS. O log bruto `_analytics` de aproximadamente 55 GB
+  foi excluido; nao apagar dados ou WAL sem plano de retencao externo.
+
+---
+
 ## 🟢 Sessão 08/07/2026 — Infra & Anti-perda
 
 ### Estado atual
@@ -239,3 +257,156 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 
 ### Pendente / próximo passo
 - [ ] Nenhuma tarefa de código pendente desta sessão — retomar da lista de pendências (§3 e §8 do HANDOFF)
+
+---
+
+## Sessão 03/09/2026 — Backup e auditoria de retenção
+
+### Ponto de restauração criado
+
+- Backup validado em `/var/backups/evohub/20260903-162030` na VPS Oracle.
+- Conteúdo: dump do banco principal do EvoHub (`postgres`), configuração interna do
+  Supabase sem logs analíticos descartáveis, bancos do Chatwoot e n8n, inventário de
+  containers/volumes e configuração de plataforma.
+- Todos os arquivos passaram por `gzip -t` e `sha256sum -c SHA256SUMS`.
+- Tamanho do ponto: 296 MB. Após a geração, a VPS tinha 105 GB livres (46% em uso).
+- Saúde validada após o backup: Chatwoot, Sidekiq e Supabase DB estavam `running` e
+  `healthy`.
+
+### Auditoria de mídia: fatos confirmados
+
+- `chatwoot-media`: 3.012 objetos não possuem vínculo com `active_storage_blobs` do
+  Chatwoot nem com URLs de `messages`, `clientes`, `conversations`, `customers`,
+  `funnel_media` ou `products` do EvoHub. Tamanho aproximado: 2,53 GB.
+- `soberano-out`: 7.472 arquivos `audio/ogg` com mais de três dias não possuem
+  referência em nenhuma das mesmas fontes. Tamanho aproximado: 3,72 GB.
+- As mídias canônicas ainda referenciadas (vídeos, PDFs, imagens e áudios de funil)
+  foram excluídas dessa lista de candidatos e devem ser preservadas.
+- A remoção anterior de vídeos repetidos permanece concluída: não há anexos restantes
+  do manifesto usado naquela limpeza.
+
+### Causa técnica e decisão pendente
+
+- `bridge/handlers/media-retention.ts` só trata o bucket `chatwoot-media` e usa 365
+  dias como padrão. Já `bridge/shared/audio.ts` grava PTT/OGG temporário em
+  `soberano-out`; por isso esse volume cresceu sem retenção.
+- **Nada desta nova auditoria foi apagado.** Antes de qualquer exclusão, gerar
+  manifesto versionado, executar dry-run e obter autorização explícita para cada lote.
+- Próxima implementação recomendada: política automática de 3 dias apenas para mídia
+  temporária de campanha, cobrindo os dois buckets e ignorando toda chave que ainda
+  seja referenciada por conteúdo/funil.
+
+### Observações operacionais
+
+- Existem alterações locais não publicadas no repositório. Não reverter, sobrescrever
+  ou misturar essas mudanças durante a manutenção de infraestrutura.
+- Limpeza de `public.events`, logs do Nginx e registros quebrados do ActiveStorage deve
+  ser tratada em fases separadas, com janela e aprovação próprias.
+
+### Encerramento em 04/09/2026
+
+- Estado salvo para retomada: backup íntegro, diagnóstico concluído e nenhuma exclusão
+  adicional executada após a auditoria.
+- Retomar pela implementação em dry-run da retenção de três dias, com manifesto e
+  validação de referências antes de solicitar autorização para apagar qualquer lote.
+
+---
+
+## Sessão 06/09/2026 — Canal Instagram David / conta 4
+
+- O canal Instagram ativo `David` no EVO Hub foi reconciliado com o registro local
+  `david inst`, substituindo uma referência antiga de canal inativo.
+- Inbox API criada na conta Chatwoot 4: `55` (`david inst`), com webhook do bridge
+  presente. A inbox antiga `51` da conta 1 foi preservada e não deve ser removida
+  sem uma etapa de migração/validação própria.
+- O token da conta 4 foi validado e armazenado apenas na configuração protegida do
+  bridge; não registrar nem copiar o valor em documentos, logs ou commits.
+- Validação final: EVO Hub `David` = `active`, registro local = `active`, inbox 55
+  pertence à conta 4, token operacional do canal presente.
+- O Facebook `David face` (página Agri fertil) foi reconciliado com a conta Chatwoot 4
+  pela inbox API `56`; canal local, token operacional e webhook foram validados.
+- Há um segundo registro local `david face` ainda em erro, preservado para não apagar
+  histórico sem revisão. Não criar novos canais David: a cota do EVO Hub está completa.
+- Correção futura necessária no bridge: para uma conta Chatwoot secundária com token
+  próprio, o token da própria conta deve prevalecer sobre `CHATWOOT_ADMIN_TOKEN`; hoje
+  o fallback global causa `401` ao criar novas inboxes na conta 4.
+
+---
+
+## Sessão 06-07/09/2026 — Campanhas 5895 Sudeste e 6836 Sul
+
+### Campanha Sudeste / 5895
+
+- ID: `camp_20260906151812`; nome: `sudeste-5895-20260906`.
+- Canal: 5895 (`cf316d59-f6da-4683-adcc-29095a805dde`).
+- Fluxo: 16 etapas copiadas da campanha homologada `camp_20260818023357`.
+- Base bruta por DDD de SP, RJ, MG e ES: 455 contatos.
+- 262 falaram nos 30 dias anteriores; 193 ficaram como candidatos sem entrada recente.
+- 10 bloqueios persistentes/exclusões de automação foram removidos; 183 entraram na fila.
+- Rampa: 50 no primeiro dia, +15/dia, teto 200; janela 08:00-20:00 BRT.
+- Fechamento do primeiro dia: 30 enviados, 153 pendentes, 0 falhas. Primeiro envio
+  às 12:20 e último às 19:52 BRT; a janela foi respeitada.
+- Interação no fechamento: 3 contatos responderam, com 11 mensagens recebidas
+  (3 interativas e 8 textos); 1 fluxo concluído e 29 aguardando.
+- Relatório: `docs/campanha-sudeste-5895-2026-09-06.md`.
+- Não recriar nem duplicar essa campanha. Ela retoma automaticamente às 08:00.
+
+### Campanha Sul / 6836
+
+- A campanha antiga `camp_20260825040341` enviou 70 contatos e mantém 1.950 pausados.
+  Não retomá-la: pela idade, a rampa iria direto ao teto de 100/dia.
+- Resultado histórico dos 70: 11 contatos responderam, 1 `won`, 5 `lost`, 0 falhas.
+- Nova campanha: `camp_20260907034408`; nome: `sul-6836-20260907`.
+- Canal: 6836 (`c48b43ec-83c2-46d8-bb38-d00e2fb9115f`).
+- Fluxo: 16 etapas de apresentação copiadas da campanha antiga do 6836. Não usar a
+  abertura do 5895, porque ela afirma que já houve conversa anterior.
+- A auditoria cruzou os 1.950 números com todos os canais e aceitou equivalência com ou
+  sem nono dígito. Foram excluídos 10 números únicos: 2 com conversa nos 30 dias
+  anteriores e 8 encontrados por etiquetas WhatsApp nas instâncias 5895, 6836 e Mato
+  Grosso. A auditoria das instâncias terminou sem erros.
+- Base final: 1.940 pendentes, 0 enviados, 0 falhas, 0 pulados.
+- Rampa reiniciada: 25 no primeiro dia, +5/dia, teto 100; janela 08:00-20:00 BRT.
+- A execução começa automaticamente às 08:00 de 07/09/2026.
+- Relatório: `docs/campanha-sul-6836-2026-09-07.md`.
+
+### Segurança, recuperação e acompanhamento
+
+- Antes de cada criação, foi salvo backup do `campaigns.json` no bucket privado
+  `soberano-config/backups/<campaign-id>-before.json`.
+- Scripts reproduzíveis: `ops/audit-sudeste-5895.ts` e `ops/start-sul-6836.ts`.
+- O resumo `resumoDaFila` mostra no máximo 1.000 linhas por limite do PostgREST. Para
+  campanhas maiores, usar `count: exact` ou paginação; a contagem exata da Sul é 1.940.
+- Monitorar diariamente enviados, falhas, respostas, recusas e o último horário de envio.
+  A fila deve parar às 20:00. Não tratar fluxo `done` como venda.
+- Contatos marcados `pago`, `não compra`, `bot-off`, em negociação ou com atendimento
+  pendente devem sair de campanhas futuras. A auditoria prévia cobre registros existentes;
+  o sincronismo de etiquetas deve continuar ativo durante a execução.
+
+### Auditoria em 11/09/2026
+
+- Os canais 5895 e 6836 estavam `active`; inboxes Chatwoot 46 e 47, respectivamente.
+- Sudeste/5895 (`camp_20260906151812`) concluiu a fila: 183 enviados, 0 pendentes,
+  0 falhas, 0 pulados e nenhum envio depois das 20:00 em qualquer dia.
+- Resultado observado no 5895: 56 contatos responderam (197 mensagens); 1 `won`,
+  8 `lost`, 9 bloqueados. No fluxo, 130 estão `done` e 53 aguardam em `isca`.
+- Sul/6836 (`camp_20260907034408`) tem 111 enviados, 1.829 pausados, 0 falhas e
+  nenhum envio depois das 20:00. Foram observados 19 contatos respondendo; 22 `lost`,
+  21 bloqueados e nenhum `won` registrado nessa leitura.
+- O último disparo inicial do 6836 ocorreu em 10/09/2026 às 14:58 BRT. Os fluxos dos
+  contatos já enviados continuam processando respostas e timeouts apesar da fila pausada.
+- Não foi encontrada falha de canal nem de entrega que explique a interrupção. Os registros
+  restantes estão explicitamente em `paused`; a origem da pausa não ficou registrada de
+  forma confiável nos eventos/logs disponíveis.
+- Estado para retomada: manter a fila antiga `camp_20260825040341` pausada. Para continuar
+  o Sul, retomar exclusivamente `camp_20260907034408`, após autorização explícita.
+
+## Sessao 11/09/2026 — Notas repetidas de recuperacao Instagram/Facebook
+
+- Auditoria dos seis canais sociais: repeticao a cada cinco minutos no Atendimento IG (#787, #1388, #1896) e Campo Soberano FB (#1349, #2169). Os demais canais nao apresentaram esse aviso repetido no recorte de sete dias.
+- Correcao existente 4d3000e reaproveitada em worktree isolada `.claude/worktrees/codex-social-recovery`, branch `codex/fix-social-recovery`, baseada no codigo de producao c7b4335. Commits de6ccad e 46ec85d.
+- `recovery_blocked` impede nova tentativa automatica da mesma variacao ate uma entrada posterior ao bloqueio. Cadencia normal continua aplicavel. Nota de macro manual limitada atomicamente a uma por 24h; falha de leitura/gravação de bloqueio interrompe a tentativa.
+- Validacao: 299 testes passaram com `deno test --no-check --allow-env --allow-read bridge/tests`; `deno check server.ts` passou.
+- Publicado no SERVIDOR via origin/master: Coolify estava configurado para master (nao main). Deploy t3l5ny8xjrtlagch4q8ky64v concluido, imagem 46ec85d571a02bf32f6fc3f985e1e03940036aa1, container m8qf6ru2x75gukzozpsrssrm-194921003269.
+- Primeira rodada automatica persistiu cinco bloqueios em 11/09 19:51:06–19:51:10 UTC, com um ultimo aviso por conversa. Validacao no container em producao, somente SELECT, simulou agora/+5min/+10min: scanned=5, due=0, sent=0, failed=0, dispatch=0 em todas. Nao foram enviadas mensagens de teste nem apagadas notas.
+- Scripts locais: ops/audit-social-recovery.mjs, ops/verify-social-recovery.mjs, ops/verify-social-recovery-runtime.js. Auditoria original preservada em ops/audit-social-recovery-2026-09-11.json.
+- SSH atual funciona com chave C:/Users/User/.ssh/oracle_ubuntu_2026 e usuario ubuntu@136.248.116.231; a memoria antiga sobre SSH indisponivel esta desatualizada.

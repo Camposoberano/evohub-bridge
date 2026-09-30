@@ -24,6 +24,7 @@ import {
   resolveInboxIdentifier,
   setConversationLabels,
 } from "./chatwoot.ts";
+import { resumeWindowHeldMessages } from "./funnel-queue.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -415,6 +416,16 @@ async function ingestInboundClaimed(
         "inbound: aplicação de etiqueta de saída falhou:",
         String(error).slice(0, 160),
       );
+    }
+  }
+
+  // Nova mensagem reabre a janela Meta e libera apenas peças retidas por esse motivo;
+  // pausas manuais continuam pausadas.
+  if (!msg.outgoing) {
+    try {
+      await resumeWindowHeldMessages(db, String(conv.id));
+    } catch (e) {
+      console.warn("resume de mensagens retidas pela janela falhou:", String(e).slice(0, 160));
     }
   }
 

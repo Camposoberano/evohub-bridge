@@ -11,7 +11,7 @@ import {
 
 type Json = Record<string, unknown>;
 
-async function authenticatedUser(req: Request): Promise<Json | null> {
+export async function authenticatedUser(req: Request): Promise<Json | null> {
   const client = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
     global: {
       headers: { Authorization: req.headers.get("Authorization") ?? "" },

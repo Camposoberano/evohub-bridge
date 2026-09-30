@@ -7,9 +7,27 @@ import { env } from "./env.ts";
 // configurable, so keep the shared client type schema-agnostic.
 export type DbClient = {
   from: (relation: string) => any;
+  schema: (schema: string) => {
+    from: (relation: string) => any;
+    rpc: (functionName: string, args?: Record<string, unknown>) => Promise<any>;
+  };
+  rpc: (functionName: string, args?: Record<string, unknown>) => Promise<any>;
   auth: any;
   storage: any;
 };
+
+/** Tabelas criadas explicitamente em `public` pelas migrations do projeto. */
+export function publicTable(db: DbClient, relation: string): any {
+  return db.schema("public").from(relation);
+}
+
+export function publicRpc(
+  db: DbClient,
+  functionName: string,
+  args?: Record<string, unknown>,
+): Promise<any> {
+  return db.schema("public").rpc(functionName, args);
+}
 
 export function admin(): DbClient {
   return createClient(env("SUPABASE_URL"), env("SUPABASE_SERVICE_ROLE_KEY"), {

@@ -66,7 +66,7 @@ import {
 import { env, optionalEnv } from "./shared/env.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
 import { agendarLoop } from "./shared/loop-guard.ts";
-import { admin, claimDelivery, releaseDelivery } from "./shared/supabase.ts";
+import { admin, claimDelivery, publicTable, releaseDelivery } from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
@@ -86,14 +86,18 @@ import { flowChannelFor, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   campanhasComFila,
+  devolverReserva,
   enviadosHoje,
   marcarEnviado,
   marcarFalha,
   marcarPulado,
-  proximoDaFila,
-  reservarItem,
+  marcarProcessamentosAbandonados,
+  marcarResultadoIncerto,
+  pausarCampanha,
+  reservarProximoItem,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
+import { validarContatoAntesDaCampanha } from "./shared/campaign-preflight.ts";
 import { runFlow } from "./shared/flow-runner.ts";
 import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
@@ -330,7 +334,7 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-09-24-isca-pdf-hibrido-campanha",
+  build: "2026-09-30-campaign-preflight-audit",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1096,10 +1100,13 @@ Deno.serve({ port }, async (req) => {
     // Aceita Bearer OU ?token= de propósito: é rota de diagnóstico manual, e exigir JWT do
     // painel tiraria a possibilidade de consultar pelo terminal. Mesmo padrão do
     // /label-window.
+    if (req.method !== "GET") {
+      return new Response("method not allowed", { status: 405, headers: CORS });
+    }
     if (!diagAutorizado(req, reqUrl)) {
       return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 401,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...CORS, "Content-Type": "application/json" },
       });
     }
     try {
@@ -1137,13 +1144,13 @@ Deno.serve({ port }, async (req) => {
       return new Response(
         JSON.stringify({ channels: diag, uazapi_instances: instList }, null, 2),
         {
-          headers: { "Content-Type": "application/json" },
+          headers: { ...CORS, "Content-Type": "application/json" },
         },
       );
     } catch (e) {
       return new Response(JSON.stringify({ error: String(e).slice(0, 200) }), {
         status: 500,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...CORS, "Content-Type": "application/json" },
       });
     }
   }
@@ -1284,15 +1291,21 @@ function startCampaignQueueLoop() {
   // folga. Duas rodadas simultâneas liam `enviadosHoje` e `ultimoEnvioAt` antes de qualquer
   // uma gravar, as duas decidiam "pode enviar", e o ritmo virava rajada.
   //
-  // Medido em 20/08: três envios em 25s (19:57:47, :55, 20:58:12) e o teto do dia estourado
-  // em 82/80. `reservarItem` não cobre isso — ele impede dois ticks pegarem o MESMO contato,
-  // não dois ticks pegarem contatos diferentes ao mesmo tempo.
+  // A reserva transacional impede duas réplicas de pegar contatos da mesma campanha. Este
+  // bloqueio local também evita ticks sobrepostos e mantém o loop serial dentro do processo.
   let rodando = false;
   const run = async () => {
     if (rodando) return;
     rodando = true;
     try {
       const db = admin();
+      const abandonadas = await marcarProcessamentosAbandonados(db);
+      for (const idAbandonada of abandonadas) {
+        console.error(
+          "campaign-queue: campanha pausada; resultado de envio incerto após worker interrompido",
+          idAbandonada,
+        );
+      }
       const campanhas = await campanhasComFila(db);
       if (!campanhas.length) return;
 
@@ -1311,11 +1324,10 @@ function startCampaignQueueLoop() {
         });
         if (!decisao.enviar) continue;
 
-        const item = await proximoDaFila(db, campaignId);
+        const item = await reservarProximoItem(db, campaignId);
         if (!item) continue;
-        // Reserva antes de enviar: dois ticks não pegam o mesmo contato.
-        if (!await reservarItem(db, item.id)) continue;
 
+        let runFlowIniciado = false;
         try {
           const { data: canal } = await db.from("channels")
             .select(
@@ -1363,18 +1375,82 @@ function startCampaignQueueLoop() {
           }
 
           const ch = await flowChannelFor(db, canal as Record<string, unknown>);
+          let preflight;
+          try {
+            preflight = await validarContatoAntesDaCampanha({
+              db,
+              channelId: String(canal.id),
+              channelName: String(canal.name ?? ""),
+              phone: item.contact_key,
+              route: ch.route,
+            });
+          } catch (error) {
+            const motivo = error instanceof Error
+              ? error.message
+              : String(error);
+            await pausarCampanha(db, campaignId);
+            const { error: holdError } = await publicTable(db, "campaign_queue")
+              .update({
+                status: "paused",
+                last_error: `revalidação indisponível: ${motivo}`.slice(0, 300),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", item.id)
+              .eq("status", "processing");
+            if (holdError) throw holdError;
+            console.warn(
+              "campaign-preflight: fila pausada por falha na validação",
+              campaignId,
+              item.contact_key.slice(-4),
+              motivo,
+            );
+            continue;
+          }
+          if (!preflight.eligible) {
+            await marcarPulado(db, item.id, preflight.reason);
+            console.log(
+              "campaign-preflight: contato pulado",
+              campaignId,
+              item.contact_key.slice(-4),
+              preflight.reason,
+            );
+            continue;
+          }
+
+          const gravador = gravadorDeFluxo(
+            db,
+            canal as Record<string, unknown>,
+            item.contact_key,
+            await accountForChannel(String(canal.id)),
+          );
+          // A decisão inicial evita reservar quando já sabemos que é cedo. Revalidamos
+          // depois da reserva e do preflight: outra réplica pode ter concluído um envio
+          // enquanto este worker aguardava chamadas externas.
+          const [enviadosRecentes, ultimoEnvioRecente] = await Promise.all([
+            enviadosHoje(db, campaignId),
+            ultimoEnvioAt(db, campaignId),
+          ]);
+          const checkedAt = Date.now();
+          const decisaoAtual = podeEnviarAgora({
+            cfg,
+            inicioCampanha: Date.parse(camp.createdAt),
+            enviadosHoje: enviadosRecentes,
+            ultimoEnvioAt: ultimoEnvioRecente,
+            now: checkedAt,
+          });
+          if (!decisaoAtual.enviar) {
+            await devolverReserva(db, item.id);
+            continue;
+          }
+
+          runFlowIniciado = true;
           const r = await runFlow(
             camp.flow,
             ch,
             item.contact_key,
             null,
-            Date.now(),
-            gravadorDeFluxo(
-              db,
-              canal as Record<string, unknown>,
-              item.contact_key,
-              await accountForChannel(String(canal.id)),
-            ),
+            checkedAt,
+            gravador,
           );
           await saveFlowPosition(db, campaignId, item.contact_key, r.position, {
             channelId: String(canal.id),
@@ -1400,7 +1476,19 @@ function startCampaignQueueLoop() {
           const msg = e instanceof Error
             ? e.message
             : (e && typeof e === "object" ? JSON.stringify(e) : String(e));
-          await marcarFalha(db, item, msg);
+          if (runFlowIniciado) {
+            try {
+              await marcarResultadoIncerto(db, item.id, msg);
+            } catch (registroErro) {
+              console.error(
+                "campaign-queue: não foi possível registrar resultado incerto",
+                item.id,
+                registroErro,
+              );
+            }
+          } else {
+            await marcarFalha(db, item, msg);
+          }
           console.error("campaign-queue erro:", item.contact_key.slice(-4), e);
         }
       }

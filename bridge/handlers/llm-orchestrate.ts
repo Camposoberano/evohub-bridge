@@ -550,7 +550,9 @@ function hasProviderKey(provider: string): boolean {
 
 function verifyAuth(req: Request): Response | null {
   const expected = optionalEnv("LLM_ROUTER_API_TOKEN");
-  if (!expected) return null;
+  if (!expected) {
+    return json({ error: "endpoint temporariamente indisponível" }, 503);
+  }
 
   const provided = readBearer(req.headers.get("authorization")) ?? asText(req.headers.get("x-router-token"));
   if (!provided || !timingSafeEqual(expected, provided)) return json({ error: "unauthorized" }, 401);

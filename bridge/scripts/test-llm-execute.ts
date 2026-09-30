@@ -2,10 +2,11 @@
 // Requisitos:
 // - OPENAI_API_KEY presente no ambiente
 // - bridge rodando localmente em http://localhost:8000
-// - opcionalmente LLM_ROUTER_API_TOKEN no ambiente
+// - LLM_ROUTER_API_TOKEN obrigatório para autorizar a chamada
 
 const base = Deno.env.get("BRIDGE_LOCAL_BASE") ?? "http://localhost:8000";
 const token = Deno.env.get("LLM_ROUTER_API_TOKEN") ?? "";
+if (!token) throw new Error("defina LLM_ROUTER_API_TOKEN para executar este smoke test");
 const bundlePath = Deno.env.get("PROMPT_CACHE_BUNDLE_PATH") ?? ".ai-context/PROMPT_CACHE_BUNDLE.md";
 
 let contextPrefix = "";

@@ -71,6 +71,7 @@ import {
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const MAX_WEBHOOK_BODY_BYTES = 4 * 1024 * 1024;
 const WA_MEDIA_TYPES = new Set([
   "image",
   "audio",
@@ -80,12 +81,60 @@ const WA_MEDIA_TYPES = new Set([
 ]);
 const GRAPH_VERSION = optionalEnv("META_GRAPH_VERSION") ?? "v21.0";
 
+async function readBoundedBody(req: Request): Promise<string | Response> {
+  const declaredLength = req.headers.get("content-length");
+  if (declaredLength !== null) {
+    if (!/^\d+$/.test(declaredLength)) {
+      return new Response("invalid content length", { status: 400 });
+    }
+    if (Number(declaredLength) > MAX_WEBHOOK_BODY_BYTES) {
+      return new Response("payload too large", { status: 413 });
+    }
+  }
+
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_WEBHOOK_BODY_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // O limite já foi atingido; não há corpo útil a preservar.
+        }
+        return new Response("payload too large", { status: 413 });
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return new Response("invalid request body", { status: 400 });
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
   }
 
-  const raw = await req.text();
+  const body = await readBoundedBody(req);
+  if (body instanceof Response) return body;
+  const raw = body;
   const sig = req.headers.get("X-Hub-Signature-256");
   const deliveryId = req.headers.get("X-Hub-Delivery-Id");
 

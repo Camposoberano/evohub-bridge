@@ -1,5 +1,5 @@
 // stop-contact — encerra toda automação comercial de um contato de forma idempotente.
-import type { DbClient } from "./supabase.ts";
+import { publicTable, type DbClient } from "./supabase.ts";
 
 type Json = Record<string, unknown>;
 
@@ -52,7 +52,7 @@ export async function stopContactAutomation(
 
   let campaigns = 0;
   if (phone) {
-    const { count } = await db.from("campaign_queue").update({
+    const { count } = await publicTable(db, "campaign_queue").update({
       status: "skipped",
       last_error: "contato marcou não compra",
       updated_at: new Date().toISOString(),
@@ -115,7 +115,7 @@ export async function excludePaidContact(
 
   let campaigns = 0;
   if (phone) {
-    const { count } = await db.from("campaign_queue").update({
+    const { count } = await publicTable(db, "campaign_queue").update({
       status: "skipped",
       last_error: "contato já pago; campanha normal excluída",
       updated_at: new Date().toISOString(),

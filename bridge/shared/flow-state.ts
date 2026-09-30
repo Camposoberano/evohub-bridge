@@ -3,7 +3,7 @@
 // Separado do campaigns.json de propósito: aquele é um arquivo lido e regravado inteiro, e
 // num fluxo interativo cada resposta é uma escrita — duas respostas simultâneas fariam a
 // segunda sobrescrever a primeira, e o lead perderia o lugar na conversa.
-import type { DbClient } from "./supabase.ts";
+import { publicTable, type DbClient } from "./supabase.ts";
 import type { FlowPosition } from "./flow-runner.ts";
 
 export type FlowStateRow = {
@@ -32,7 +32,7 @@ export async function saveFlowPosition(
   position: FlowPosition,
   extra?: { conversationId?: string | null; channelId?: string | null },
 ): Promise<void> {
-  const { error } = await db.from("campaign_flow_state").upsert({
+  const { error } = await publicTable(db, "campaign_flow_state").upsert({
     campaign_id: campaignId,
     contact_key: contactKey(contact),
     conversation_id: extra?.conversationId ?? null,
@@ -62,7 +62,7 @@ export async function claimFlowStep(
   contact: string,
   stepId: string,
 ): Promise<boolean> {
-  const { data, error } = await db.from("campaign_flow_state")
+  const { data, error } = await publicTable(db, "campaign_flow_state")
     .update({ status: "processing", updated_at: new Date().toISOString() })
     .eq("campaign_id", campaignId)
     .eq("contact_key", contactKey(contact))
@@ -84,7 +84,7 @@ export async function findWaitingFlow(
   db: DbClient,
   contact: string,
 ): Promise<FlowStateRow | null> {
-  const { data, error } = await db.from("campaign_flow_state")
+  const { data, error } = await publicTable(db, "campaign_flow_state")
     .select(
       "campaign_id,contact_key,conversation_id,channel_id,step_id,waiting_since,status",
     )
@@ -110,7 +110,7 @@ export async function findExpiredWaits(
   now = Date.now(),
 ): Promise<FlowStateRow[]> {
   const corte = new Date(now - minutosMax * 60_000).toISOString();
-  const { data, error } = await db.from("campaign_flow_state")
+  const { data, error } = await publicTable(db, "campaign_flow_state")
     .select(
       "campaign_id,contact_key,conversation_id,channel_id,step_id,waiting_since,status",
     )

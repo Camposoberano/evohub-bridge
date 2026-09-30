@@ -160,7 +160,12 @@ export async function handle(req: Request): Promise<Response> {
         channel_id: channel.id,
         payload: { conv: cwConvId, type, janela: win.tipo, canal: channel.type },
       }).then(() => {}, () => {});
-      return json({ ok: false, blocked: "janela-fechada", janela: win.tipo });
+      return json({
+        ok: false,
+        blocked: "janela-fechada",
+        awaiting_window: true,
+        janela: win.tipo,
+      });
     }
   }
 

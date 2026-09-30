@@ -124,7 +124,7 @@ export default function Fluxos() {
       .select("id,name,phone_number").eq("type", "whatsapp").order("name");
     setCanais(chs ?? []);
     if (chs?.length && !canalId) setCanalId(chs[0].id);
-    const { data: st } = await supabase.from("campaign_flow_state")
+    const { data: st } = await supabase.schema("public").from("campaign_flow_state")
       .select("campaign_id,contact_key,step_id,status,waiting_since,updated_at")
       .order("updated_at", { ascending: false }).limit(30);
     setEmAndamento(st ?? []);
@@ -153,7 +153,7 @@ export default function Fluxos() {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "start-fluxo",
+          action: "agendar-fluxo",
           name: "painel",
           channel_id: canalId,
           numbers: nums,

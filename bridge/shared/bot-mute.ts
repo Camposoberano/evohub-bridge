@@ -38,6 +38,7 @@ export async function mutedConversationIds(
         .select("id")
         .in("id", lote)
         .not("bot_muted_at", "is", null),
+    10,
   );
   return new Set(data.map((r) => String(r.id)));
 }

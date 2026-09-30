@@ -31,9 +31,47 @@ const requestedFiles = process.argv.slice(2).map((arg) => {
 });
 const files = requestedFiles.length ? requestedFiles : availableFiles;
 
+let connectionUrl;
+try {
+  connectionUrl = new URL(url);
+} catch {
+  console.error("ERRO: SUPABASE_DB_URL não é uma URL PostgreSQL válida");
+  process.exit(1);
+}
+
+const host = connectionUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+const isLoopback = ["localhost", "127.0.0.1", "::1"].includes(host);
+const sslMode = connectionUrl.searchParams.get("sslmode")?.toLowerCase();
+if (sslMode === "disable" && !isLoopback) {
+  console.error("ERRO: sslmode=disable só é permitido para um banco local");
+  process.exit(1);
+}
+
+const rootCert = connectionUrl.searchParams.get("sslrootcert");
+const clientCert = connectionUrl.searchParams.get("sslcert");
+const clientKey = connectionUrl.searchParams.get("sslkey");
+if (Boolean(clientCert) !== Boolean(clientKey)) {
+  console.error("ERRO: sslcert e sslkey precisam ser informados juntos");
+  process.exit(1);
+}
+for (const option of ["sslmode", "sslrootcert", "sslcert", "sslkey"]) {
+  connectionUrl.searchParams.delete(option);
+}
+
+const ssl = sslMode === "disable"
+  ? false
+  : {
+    rejectUnauthorized: true,
+    ...(rootCert && !["system", "default"].includes(rootCert.toLowerCase())
+      ? { ca: readFileSync(rootCert, "utf8") }
+      : {}),
+    ...(clientCert ? { cert: readFileSync(clientCert, "utf8") } : {}),
+    ...(clientKey ? { key: readFileSync(clientKey, "utf8") } : {}),
+  };
+
 const client = new pg.Client({
-  connectionString: url,
-  ssl: url.includes("sslmode=disable") ? false : { rejectUnauthorized: false },
+  connectionString: connectionUrl.toString(),
+  ssl,
 });
 
 await client.connect();

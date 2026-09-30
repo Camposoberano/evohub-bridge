@@ -16,6 +16,9 @@ dist/
 ops/backups/
 # listas operacionais de campanha ficam fora do Git
 ops/*.csv
+# snapshots locais de auditoria e recuperação podem conter identificadores e URLs privados
+ops/audit-social-recovery-2026-09-11.json
+ops/verify-social-recovery-2026-09-11.json
 .DS_Store
 supabase/.branches/
 supabase/.temp/

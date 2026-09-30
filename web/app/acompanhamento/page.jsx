@@ -74,7 +74,7 @@ export default function Acompanhamento() {
 
   // Lista de campanhas vem da própria fila: campanha sem fila não tem o que acompanhar.
   const carregarCampanhas = useCallback(async () => {
-    const { data } = await supabase.from("campaign_queue")
+    const { data } = await supabase.schema("public").from("campaign_queue")
       .select("campaign_id,created_at").order("created_at", { ascending: false }).limit(2000);
     const vistos = new Map();
     for (const r of data ?? []) {
@@ -90,10 +90,10 @@ export default function Acompanhamento() {
     setCarregando(true);
     try {
       const [q, f] = await Promise.all([
-        supabase.from("campaign_queue")
+        supabase.schema("public").from("campaign_queue")
           .select("contact_key,status,sent_at,attempts,last_error")
           .eq("campaign_id", campanhaId).limit(5000),
-        supabase.from("campaign_flow_state")
+        supabase.schema("public").from("campaign_flow_state")
           .select("contact_key,step_id,status,waiting_since,updated_at")
           .eq("campaign_id", campanhaId).limit(5000),
       ]);
