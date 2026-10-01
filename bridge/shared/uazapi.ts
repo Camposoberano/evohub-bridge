@@ -4,6 +4,9 @@ import { env, optionalEnv } from "./env.ts";
 
 const BASE = () => (optionalEnv("UAZAPI_URL") ?? "").replace(/\/+$/, "");
 const ADMIN = () => optionalEnv("UAZAPI_ADMIN_TOKEN") ?? "";
+// Sem limite, uma conexão que não responde pode deixar o worker da fila preso em
+// `processing` e impedir todos os ticks seguintes. O limite cobre cabeçalho e corpo.
+const REQUEST_TIMEOUT_MS = 45_000;
 
 type Json = Record<string, unknown>;
 
@@ -12,13 +15,36 @@ export function uazapiConfigured(): boolean {
 }
 
 async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown }) {
-  const res = await fetch(`${BASE()}${path}`, {
-    method: opts.method ?? "GET",
-    headers: { "Content-Type": "application/json", ...opts.headers },
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-  });
-  const data = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, data };
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE()}${path}`, {
+      method: opts.method ?? "GET",
+      headers: { "Content-Type": "application/json", ...opts.headers },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal: controller.signal,
+    });
+    let data: Json = {};
+    try {
+      data = await res.json();
+    } catch (e) {
+      if (timedOut) {
+        throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms ao ler a resposta`, { cause: e });
+      }
+    }
+    return { ok: res.ok, status: res.status, data };
+  } catch (e) {
+    if (timedOut) {
+      throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms`, { cause: e });
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const adminGet = (path: string) => call(path, { headers: { admintoken: ADMIN() } });

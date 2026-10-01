@@ -334,7 +334,7 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-09-30-campaign-preflight-audit",
+  build: "2026-10-01-embrapa-queue-timeout",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
