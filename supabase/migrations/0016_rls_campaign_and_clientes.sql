@@ -1,6 +1,39 @@
 -- Restringe os dados operacionais usados pelo painel e mantém `clientes` privado.
--- A aplicação é single-tenant: usuários autenticados do painel podem ler o estado
--- da fila; toda escrita e os dados da lista fria passam pelo bridge com service_role.
+-- A aplicação é single-tenant. Apenas usuários explicitamente cadastrados na lista
+-- privada podem ler o estado das campanhas; toda escrita passa pelo bridge.
+
+create schema if not exists app_private;
+revoke all on schema app_private from PUBLIC, anon, authenticated;
+grant usage on schema app_private to service_role;
+
+create table if not exists app_private.dashboard_readers (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  added_at timestamptz not null default pg_catalog.now()
+);
+revoke all on table app_private.dashboard_readers from PUBLIC, anon, authenticated;
+grant all on table app_private.dashboard_readers to service_role;
+
+-- O dashboard ainda não tem gestão de papéis. Preserve o acesso dos usuários
+-- existentes no momento da migração, sem autorizar cadastros futuros.
+insert into app_private.dashboard_readers (user_id)
+select id from auth.users
+on conflict (user_id) do nothing;
+
+create or replace function public.can_read_operational_campaigns()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from app_private.dashboard_readers as reader
+    where reader.user_id = auth.uid()
+  );
+$$;
+revoke all privileges on function public.can_read_operational_campaigns() from PUBLIC, anon;
+grant execute on function public.can_read_operational_campaigns() to authenticated;
 
 do $$
 declare
@@ -20,7 +53,7 @@ begin
         execute format('drop policy %I on %I.%I', policy_name, schema_name, 'campaign_queue');
       end loop;
       execute format(
-        'create policy campaign_queue_authenticated_read on %I.%I for select to authenticated using (true)',
+        'create policy campaign_queue_authorized_read on %I.%I for select to authenticated using (public.can_read_operational_campaigns())',
         schema_name,
         'campaign_queue'
       );
@@ -38,7 +71,7 @@ begin
         execute format('drop policy %I on %I.%I', policy_name, schema_name, 'campaign_flow_state');
       end loop;
       execute format(
-        'create policy campaign_flow_state_authenticated_read on %I.%I for select to authenticated using (true)',
+        'create policy campaign_flow_state_authorized_read on %I.%I for select to authenticated using (public.can_read_operational_campaigns())',
         schema_name,
         'campaign_flow_state'
       );
