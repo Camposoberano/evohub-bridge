@@ -295,6 +295,7 @@ const version = {
     "report-auth-token-or-jwt",
     "msg-type-alias-normalization",
     "outbound-echo-dedup",
+    "provider-echo-canonical-dedup",
     "first-response-trigger",
     "message-funnel-link",
     "outcome-label-pago-nao-compra",
@@ -334,7 +335,7 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
   ],
-  build: "2026-10-02-funnel-no-duplicate-media",
+  build: "2026-10-02-provider-echo-canonical-dedup",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
