@@ -314,6 +314,7 @@ async function ingestInboundClaimed(
         content: conteudoParaChatwoot,
         messageType: "outgoing",
         attachments,
+        alreadySent: true,
       },
       acct,
     );

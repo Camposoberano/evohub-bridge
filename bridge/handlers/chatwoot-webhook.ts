@@ -97,6 +97,8 @@ function isOutgoing(p: Json): boolean {
 }
 
 export async function handleOutgoing(db: Db, p: Json) {
+  const attributes = (p.content_attributes ?? {}) as Json;
+  if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") return;
   const conversation = (p.conversation ?? {}) as Json;
   const inbox = (p.inbox ?? {}) as Json;
   const cwConversationId = (conversation.id ?? p.conversation_id) as
@@ -642,7 +644,8 @@ async function reportOutgoingException(db: Db, p: Json, error: unknown) {
   const inbox = (p.inbox ?? {}) as Json;
   const cwConversationId = (conversation.id ?? p.conversation_id) as number | undefined;
   const cwInboxId = (inbox.id ?? p.inbox_id) as number | undefined;
-  if (cwMsgId) {
+  const uncertain = error instanceof Error && error.name === "UncertainDeliveryError";
+  if (cwMsgId && !uncertain) {
     await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
   }
   if (!cwConversationId || !cwInboxId) return;
@@ -653,7 +656,9 @@ async function reportOutgoingException(db: Db, p: Json, error: unknown) {
   const noteAcct = acct.adminToken ? { ...acct, token: acct.adminToken } : acct;
   const detail = (error instanceof Error ? error.message : String(error)).slice(0, 240);
   await createConversationMessage(cwConversationId, {
-    content: `Falha interna ao enviar. O envio foi liberado para nova tentativa. ${detail}`,
+    content: uncertain
+      ? `Envio sem confirmação. Não reenviar automaticamente: conferir a entrega antes de tentar novamente. ${detail}`
+      : `Falha interna ao enviar. O envio foi liberado para nova tentativa. ${detail}`,
     messageType: "outgoing",
     private: true,
   }, noteAcct).catch(() => {});

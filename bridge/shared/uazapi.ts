@@ -35,6 +35,9 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
       if (timedOut) {
         throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms ao ler a resposta`, { cause: e });
       }
+      if (res.ok && opts.method === "POST" && path.startsWith("/send/")) {
+        throw new Error("UAZAPI aceitou a requisição mas devolveu resposta ilegível", { cause: e });
+      }
     }
     return { ok: res.ok, status: res.status, data };
   } catch (e) {

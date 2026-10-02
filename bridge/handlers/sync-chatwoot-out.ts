@@ -139,6 +139,7 @@ export async function handle(req: Request): Promise<Response> {
           private: false,
           content,
           attachments,
+          content_attributes: m.content_attributes,
           conversation: { id: cwConvId },
           inbox: { id: cwInboxId },
         };
@@ -168,6 +169,8 @@ export function recentOutgoingCandidates(
 ): SyncCandidate[] {
   const byId = new Map<number, SyncCandidate>();
   for (const message of messages) {
+    const attributes = (message.content_attributes ?? {}) as Json;
+    if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") continue;
     if (!isOutgoing(message) || message.private === true) continue;
     const created = createdAtMs(message.created_at);
     if (created && created < cutoffMs) continue;

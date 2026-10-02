@@ -313,6 +313,7 @@ export async function createConversationMessage(
     content: string;
     messageType: "incoming" | "outgoing";
     attachments?: ChatwootAttachment[];
+    alreadySent?: boolean;
     private?: boolean; // nota privada (só o time vê) — alertas tipo "janela fechada, envio bloqueado"
   },
   acct: CwAcct = envAcct(),
@@ -330,6 +331,7 @@ export async function createConversationMessage(
       form.set("message_type", input.messageType);
       form.set("private", isPrivate ? "true" : "false");
       form.set("content_type", "text");
+      if (input.alreadySent) form.set("content_attributes[bridge_already_sent]", "true");
       for (const attachment of attachments) {
         const blob = new Blob([arrayBufferFromBytes(attachment.bytes)], {
           type: attachment.contentType,
@@ -363,7 +365,7 @@ export async function createConversationMessage(
     message_type: input.messageType,
     private: isPrivate,
     content_type: "text",
-    content_attributes: {},
+    content_attributes: input.alreadySent ? { bridge_already_sent: true } : {},
   });
   let res = await fetch(url, {
     method: "POST",

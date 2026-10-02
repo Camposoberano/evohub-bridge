@@ -186,6 +186,13 @@ export type SendResult = {
   via: "uazapi" | "official";
 };
 
+export class UncertainDeliveryError extends Error {
+  constructor(cause: unknown) {
+    super("Provedor não confirmou o envio; segunda rota e repetição automática bloqueadas", { cause });
+    this.name = "UncertainDeliveryError";
+  }
+}
+
 // Uazapi trabalha com número telefônico. IDs numéricos da Meta (LID/BSUID) também
 // podem ter 10-15 dígitos, mas não são números e não devem sair pela rota híbrida.
 // O projeto opera no Brasil, então aceitamos apenas E.164 brasileiro válido.
@@ -206,6 +213,7 @@ export async function hybridSendText(
       text,
     });
     if (!r.ok) {
+      if (r.status >= 500 || r.status === 408) throw new UncertainDeliveryError(`HTTP ${r.status}`);
       console.warn("hybrid text falhou, fallback oficial:", r.status);
       await recordRouteEvent(route, "fallback_requested", "text", to, r.status);
       return null;
@@ -213,9 +221,8 @@ export async function hybridSendText(
     await recordRouteEvent(route, "send_success", "text", to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
-    console.warn("hybrid text erro, fallback:", String(e).slice(0, 100));
-    await recordRouteEvent(route, "fallback_requested", "text", to, 0);
-    return null;
+    await recordRouteEvent(route, "send_uncertain", "text", to, 0);
+    throw new UncertainDeliveryError(e);
   }
 }
 
@@ -250,6 +257,7 @@ export async function hybridSendMedia(
     );
     const r = await uazInstPost(endpoint, route.token, body);
     if (!r.ok) {
+      if (r.status >= 500 || r.status === 408) throw new UncertainDeliveryError(`HTTP ${r.status}`);
       console.warn(
         "hybrid media falhou, fallback oficial:",
         r.status,
@@ -267,9 +275,8 @@ export async function hybridSendMedia(
     await recordRouteEvent(route, "send_success", mediaType, to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
-    console.warn("hybrid media erro, fallback:", String(e).slice(0, 100));
-    await recordRouteEvent(route, "fallback_requested", mediaType, to, 0);
-    return null;
+    await recordRouteEvent(route, "send_uncertain", mediaType, to, 0);
+    throw e instanceof UncertainDeliveryError ? e : new UncertainDeliveryError(e);
   }
 }
 
@@ -289,6 +296,7 @@ export async function hybridSendMenu(
       buildHybridMenuPayload(to, text, buttons, imageUrl),
     );
     if (!r.ok) {
+      if (r.status >= 500 || r.status === 408) throw new UncertainDeliveryError(`HTTP ${r.status}`);
       console.warn(
         "hybrid menu falhou, fallback oficial:",
         r.status,
@@ -306,9 +314,8 @@ export async function hybridSendMenu(
     await recordRouteEvent(route, "send_success", "interactive", to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
-    console.warn("hybrid menu erro, fallback:", String(e).slice(0, 100));
-    await recordRouteEvent(route, "fallback_requested", "interactive", to, 0);
-    return null;
+    await recordRouteEvent(route, "send_uncertain", "interactive", to, 0);
+    throw new UncertainDeliveryError(e);
   }
 }
 
@@ -329,6 +336,7 @@ export async function hybridSendList(
       buildHybridListPayload(to, text, sections, buttonLabel, footerText),
     );
     if (!r.ok) {
+      if (r.status >= 500 || r.status === 408) throw new UncertainDeliveryError(`HTTP ${r.status}`);
       console.warn(
         "hybrid list falhou, fallback oficial:",
         r.status,
@@ -340,15 +348,14 @@ export async function hybridSendList(
     await recordRouteEvent(route, "send_success", "list", to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
-    console.warn("hybrid list erro, fallback:", String(e).slice(0, 100));
-    await recordRouteEvent(route, "fallback_requested", "list", to, 0);
-    return null;
+    await recordRouteEvent(route, "send_uncertain", "list", to, 0);
+    throw new UncertainDeliveryError(e);
   }
 }
 
 async function recordRouteEvent(
   route: HybridRoute,
-  eventType: "send_success" | "fallback_requested",
+  eventType: "send_success" | "fallback_requested" | "send_uncertain",
   messageType: string,
   recipient: string,
   status: number,
