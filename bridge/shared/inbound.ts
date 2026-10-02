@@ -34,6 +34,38 @@ export type { MsgType };
 // bastante pra não casar duas mensagens de texto idênticas enviadas de propósito (ex:
 // "Oi!" mandado duas vezes em conversas diferentes -- aqui já filtrado por conversation_id).
 const ECHO_MERGE_WINDOW_MS = 30_000;
+// ID can ser confirmado pelo eco depois do timeout do provedor; como a chave é exata,
+// uma janela maior não confunde dois envios intencionais da mesma mídia.
+const PROVIDER_ECHO_WINDOW_MS = 10 * 60_000;
+
+// A mesma mensagem pode voltar com dois IDs diferentes na coexistência:
+// `wamid.<base64>` da API oficial e `<telefone>:CE...` no eco da UAZAPI. O payload
+// base64 do WAMID contém o identificador CE original. Só aceitamos o token CE no fim
+// do ID direto/decodificado; não tentamos deduplicar mídia apenas por tipo ou horário.
+export function providerEchoKey(value?: string): string | null {
+  const id = value?.trim();
+  if (!id) return null;
+
+  const direct = id.match(/(?:^|:)(CE[A-F0-9]{16,})$/i);
+  if (direct) return direct[1].toUpperCase();
+  if (!id.toLowerCase().startsWith("wamid.")) return null;
+
+  let encoded = id.slice("wamid.".length)
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  if (!/^[A-Z0-9+/]*={0,2}$/i.test(encoded)) return null;
+  encoded = encoded.replace(/=+$/, "");
+  if (!encoded || encoded.length % 4 === 1) return null;
+  encoded += "=".repeat((4 - encoded.length % 4) % 4);
+
+  try {
+    const decoded = atob(encoded).replace(/[\x00-\x20\x7f-\x9f]+$/g, "");
+    const suffix = decoded.match(/(?:^|[^A-Z0-9])(CE[A-F0-9]{16,})$/i);
+    return suffix?.[1].toUpperCase() ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export type InboundAttachment = ChatwootAttachment & {
   sourceUrl?: string;
@@ -65,10 +97,17 @@ export async function ingestInbound(
   // webhook bate no claim, recebe "duplicate" e a mensagem do cliente some pra sempre.
   // Medido em 29/08: 73 mensagens perdidas em 24h, 59 delas mídia, por falha transitória
   // (Chatwoot 502 e download de mídia 404) depois do claim.
-  const claimKey = msg.metaMessageId
-    ? `wa-${channel.id}-${msg.metaMessageId}`
-    : await fallbackInboundDeliveryKey(channel, msg);
-  const claimSource = msg.metaMessageId ? "wa" : "wa-fallback";
+  const echoKey = msg.outgoing ? providerEchoKey(msg.metaMessageId) : null;
+  const claimKey = echoKey
+    ? `wa-echo-${channel.id}-${echoKey}`
+    : msg.metaMessageId
+      ? `wa-${channel.id}-${msg.metaMessageId}`
+      : await fallbackInboundDeliveryKey(channel, msg);
+  const claimSource = echoKey
+    ? "wa-echo-canonical"
+    : msg.metaMessageId
+      ? "wa"
+      : "wa-fallback";
   if (!(await claimDelivery(db, claimKey, claimSource))) {
     return {
       inserted: false,
@@ -92,6 +131,7 @@ async function ingestInboundClaimed(
 ): Promise<{ inserted: boolean; reason?: string; message_id?: string }> {
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
+  const echoKey = msg.outgoing ? providerEchoKey(msg.metaMessageId) : null;
 
   const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
   const inboxId = await resolveInboxIdentifier(
@@ -261,12 +301,49 @@ async function ingestInboundClaimed(
     if (recentDup) return { inserted: false, reason: "duplicate-recent-text" };
   }
 
-  // Echo de saída (coexistência). Quando o payload do provedor não traz wasSentByApi, a
-  // mensagem que o próprio bridge acabou de enviar volta pelo webhook e vira uma SEGUNDA linha
-  // em messages -- medido em 6,5% das linhas do relatório, inflando "Enviadas" e daily_metrics.
-  // Aqui a linha já gravada pelo envio absorve o echo (completa o meta_message_id, que o
-  // caminho de envio nem sempre tem) em vez de duplicar. Só texto: echo de mídia sem legenda
-  // não tem conteúdo para casar com segurança.
+  // Echo de saída (coexistência). Primeiro casamos por identidade do provedor — inclusive
+  // WAMID x ID CE da UAZAPI — para não criar outra bolha no Chatwoot para a mesma mídia.
+  // O claim canônico acima serializa IDs equivalentes e cobre webhooks simultâneos.
+  let providerEchoMatch: Json | null = null;
+  if (echoKey) {
+    const now = Date.now();
+    const { data: recentOutbound, error: recentOutboundError } = await db
+      .from("messages")
+      .select("id,meta_message_id,chatwoot_message_id,media_url")
+      .eq("channel_id", channel.id)
+      .eq("conversation_id", conv.id)
+      .eq("direction", "out")
+      .eq("msg_type", normalizeMsgType(msg.msgType))
+      .not("meta_message_id", "is", null)
+      .gte(
+        "sent_at",
+        new Date(now - PROVIDER_ECHO_WINDOW_MS).toISOString(),
+      )
+      .lte(
+        "sent_at",
+        new Date(now + PROVIDER_ECHO_WINDOW_MS).toISOString(),
+      )
+      .order("sent_at", { ascending: false })
+      .limit(100);
+    if (recentOutboundError) throw recentOutboundError;
+    providerEchoMatch = ((recentOutbound ?? []) as Json[]).find((candidate) =>
+      providerEchoKey(String(candidate.meta_message_id ?? "")) === echoKey
+    ) ?? null;
+
+    // A mensagem original já aparece no Chatwoot: manter essa única linha. Se o
+    // registro original ficou sem ID de mensagem no Chatwoot, deixamos o eco anexado
+    // completar o histórico e vinculamos seu ID à linha existente abaixo.
+    if (providerEchoMatch?.chatwoot_message_id || (providerEchoMatch && skip)) {
+      return {
+        inserted: false,
+        reason: "duplicate-echo-provider-id",
+        message_id: providerEchoMatch.id as string,
+      };
+    }
+  }
+
+  // Compatibilidade para ecos de texto cujo ID não dá para normalizar: conteúdo idêntico,
+  // na mesma conversa e janela curta, ainda pode ser absorvido sem duplicar a linha.
   if (msg.outgoing && msg.content.trim()) {
     const { data: echoDup, error: echoDupError } = await db.from("messages")
       .select("id,meta_message_id")
@@ -362,6 +439,26 @@ async function ingestInboundClaimed(
   const chatwootMediaUrl = cwMsg
     ? firstAttachmentUrl(cwMsg)
     : (msg.attachments?.[0]?.sourceUrl ?? null);
+
+  if (providerEchoMatch) {
+    const patch: Json = {};
+    if (cwMsg?.id) patch.chatwoot_message_id = cwMsg.id;
+    if (!providerEchoMatch.media_url && chatwootMediaUrl) {
+      patch.media_url = chatwootMediaUrl;
+    }
+    if (Object.keys(patch).length > 0) {
+      const { error: mergeError } = await db.from("messages")
+        .update(patch)
+        .eq("id", providerEchoMatch.id);
+      if (mergeError) throw mergeError;
+    }
+    return {
+      inserted: false,
+      reason: "merged-echo-provider-id",
+      message_id: providerEchoMatch.id as string,
+    };
+  }
+
   if (isUnmappedMsgType(msg.msgType)) {
     // Tipo cru sem alias conhecido: cai em "unknown" mesmo assim, mas fica no log pra virar
     // entrada nova em ALIASES de bridge/shared/msg-type.ts em vez de continuar sumindo.
