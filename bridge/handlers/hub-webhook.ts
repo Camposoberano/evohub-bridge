@@ -23,8 +23,17 @@ import {
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { registrarPedidoHumano } from "../shared/pedido-humano.ts";
-import { ehPrimeiraMensagem } from "../shared/funil-pausa.ts";
-import { textoDeAncoragem } from "../shared/ancoragem-preco.ts";
+import {
+  OPCOES_DE_USO,
+  classificarIntencaoComercial,
+  extrairAreaHectares,
+  isAreaAcimaDosPacotes,
+  pacotePorId,
+  registrarEventoComercial,
+  textoCondicaoComercial,
+  textoPerguntaUso,
+  usoPorResposta,
+} from "../shared/funil-comercial.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
@@ -57,13 +66,17 @@ import { maybeAutoReplySocialComment } from "../shared/social-autoreply.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { metaErrorDetail } from "../shared/meta-errors.ts";
 import { sendFunnelDocument } from "../shared/document-delivery.ts";
-import { socialPriceActionClaimKey } from "../shared/social-funnel.ts";
+import {
+  inferSocialPriceReplyFromPrompts,
+  socialPriceActionClaimKey,
+} from "../shared/social-funnel.ts";
 import {
   inferSocialSalesIntent,
   salesContactImageFallback,
   salesWhatsAppUrl,
   SOCIAL_INFO_TEXT,
   socialContactText,
+  inferSocialMenuAction,
   socialSalesClaimKey,
   type SocialSalesIntent,
 } from "../shared/social-sales.ts";
@@ -407,14 +420,27 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
         // hora, em qualquer fase, sem esperar o roteiro chegar lá.
-        if (menuClick?.id.startsWith("menu_")) {
+        if (
+          menuClick?.id.startsWith("menu_") &&
+          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+        ) {
           try {
+            if (menuClick.id === "menu_preco") {
+              await recordInboundCommercialIntent(
+                db, channel as Json, from, "preco", String(m.id ?? "") || null,
+              );
+            } else if (menuClick.id === "menu_uso") {
+              await recordInboundCommercialIntent(
+                db, channel as Json, from, "interesse_geral", String(m.id ?? "") || null,
+              );
+            }
             await handleMenuClick(
               db,
               channel as Json,
               from,
               menuClick.id,
               acct,
+              String(m.id ?? "") || undefined,
             );
           } catch (e) {
             console.error("handleMenuClick erro:", e);
@@ -424,7 +450,9 @@ async function handleWhatsApp(db: Db, p: Json) {
         if (
           menuClick &&
           (menuClick.id.startsWith("preco_") ||
-            menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_"))
+            menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_") ||
+            menuClick.id.startsWith("uso_")) &&
+          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
         ) {
           try {
             await handlePrecoClick(
@@ -433,13 +461,17 @@ async function handleWhatsApp(db: Db, p: Json) {
               from,
               menuClick.id,
               acct,
+              String(m.id ?? ""),
             );
           } catch (e) {
             console.error("handlePrecoClick erro:", e);
           }
         }
         // botões da sequência de plantio (plantio_1..plantio_10).
-        if (menuClick?.id.startsWith("plantio_")) {
+        if (
+          menuClick?.id.startsWith("plantio_") &&
+          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+        ) {
           try {
             await handlePlantioClick(
               db,
@@ -453,7 +485,10 @@ async function handleWhatsApp(db: Db, p: Json) {
           }
         }
         // botões da sequência nutricional (nutricao_1..nutricao_10).
-        if (menuClick?.id.startsWith("nutricao_")) {
+        if (
+          menuClick?.id.startsWith("nutricao_") &&
+          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+        ) {
           try {
             await handleNutricaoClick(
               db,
@@ -549,8 +584,24 @@ async function handleWhatsApp(db: Db, p: Json) {
               }
             }
 
+            const commercialIntent = classificarIntencaoComercial(intentText);
+            if (commercialIntent) {
+              await recordInboundCommercialIntent(
+                db,
+                channel as Json,
+                from,
+                commercialIntent,
+                String(m.id ?? m.message_id ?? "") || null,
+              );
+            }
             const detectedIntent = isPrecoIntent(intentText)
               ? "preço"
+              : commercialIntent === "duvida_tecnica"
+              ? "duvida-tecnica"
+              : commercialIntent === "uso"
+              ? "uso"
+              : commercialIntent === "interesse_geral"
+              ? "interesse-geral"
               : isVideoIntent(intentText)
               ? "vídeo"
               : isPlantioIntent(intentText)
@@ -558,13 +609,9 @@ async function handleWhatsApp(db: Db, p: Json) {
               : isNutricaoIntent(intentText)
               ? "nutrição"
               : null;
-            // Lead que ABRE a conversa perguntando o preço veio do anúncio: a pergunta
-            // pronta é o que o anúncio oferece, e ela diz "me interessei", não "quero
-            // fechar". Esse recebe a ancoragem e SEGUE no funil -- pausar aqui mataria a
-            // sequência antes da apresentação, que é justamente o que ele precisa ver antes
-            // do número. Quem pergunta depois já viu a apresentação e está avaliando: aí o
-            // preço vai e o funil espera a reação.
-            let aberturaDeAnuncio = false;
+            // Qualquer intenção comercial interrompe a sequência agendada para não atravessar
+            // a conversa. Se a primeira mensagem do anúncio pedir preço, o seletor de área
+            // também deve aparecer agora, em vez de apenas prometer um menu futuro.
             if (detectedIntent) {
               const { data: _ct } = await db.from("contacts").select("id").eq(
                 "channel_id",
@@ -578,34 +625,13 @@ async function handleWhatsApp(db: Db, p: Json) {
                   { ascending: false },
                 ).limit(1).maybeSingle();
                 if (_cv) {
-                  aberturaDeAnuncio = isPrecoIntent(intentText) &&
-                    await ehPrimeiraMensagem(db, _cv.id as string);
-                  if (!aberturaDeAnuncio) {
-                    await autoPauseFunil(_cv.id as string, detectedIntent);
-                  }
+                  await autoPauseFunil(_cv.id as string, detectedIntent, {
+                    comPrazo: false,
+                  });
                 }
               }
             }
-            if (aberturaDeAnuncio) {
-              // Responde sem entregar o valor: procedência, frete e desconto por volume.
-              // O número vem depois, quando a apresentação já tiver feito o trabalho dela.
-              try {
-                const { data: _sec } = await db.from("channel_secrets")
-                  .select("channel_token").eq("channel_id", channel.id)
-                  .maybeSingle();
-                const _tok = _sec?.channel_token as string | undefined;
-                if (_tok) {
-                  await sendMeta(_tok, "me/messages", {
-                    recipient: { id: from },
-                    message: { text: textoDeAncoragem() },
-                    messaging_type: "RESPONSE",
-                  });
-                  console.log("ancoragem de preço enviada (abertura de anúncio):", from.slice(-4));
-                }
-              } catch (e) {
-                console.error("ancoragem erro:", String(e).slice(0, 140));
-              }
-            } else if (isPrecoIntent(intentText)) {
+            if (isPrecoIntent(intentText)) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -615,13 +641,28 @@ async function handleWhatsApp(db: Db, p: Json) {
                   "intent",
                 )
               ) {
-                await handleMenuClick(
-                  db,
-                  channel as Json,
-                  from,
-                  "menu_preco",
-                  acct,
-                );
+                const hectares = extrairAreaHectares(intentText);
+                if (hectares !== null && isAreaAcimaDosPacotes(intentText)) {
+                  const origem = channel.type === "facebook" || channel.type === "instagram"
+                    ? "social"
+                    : "whatsapp";
+                  await handleHumanRequest(db, channel as Json, from, origem, acct, {
+                    tipo_pedido: "cotacao_area_livre",
+                    area_hectares: hectares,
+                    uso: usoPorResposta(intentText),
+                    regiao_uf: extrairUF(intentText),
+                    message_id: String(m.id ?? m.message_id ?? "") || null,
+                  });
+                } else {
+                  await handleMenuClick(
+                    db,
+                    channel as Json,
+                    from,
+                    "menu_preco",
+                    acct,
+                    String(m.id ?? m.message_id ?? "") || undefined,
+                  );
+                }
                 // nota privada com o gatilho (transcrição do áudio ou frase) — contexto pro atendente.
                 if (transcricao) {
                   const { data: ct } = await db.from("contacts").select("id")
@@ -722,7 +763,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
-            } else if (isDuvidaTecnicaIntent(intentText)) {
+            } else if (commercialIntent === "duvida_tecnica") {
               // Pergunta técnica (espaçamento, densidade, irrigação, que animal come):
               // não existe resposta pronta e chutar sobre plantio queima a confiança de
               // quem entende de terra. Então o bot cala e chama gente — que é melhor que
@@ -744,7 +785,54 @@ async function handleWhatsApp(db: Db, p: Json) {
                   transcricao ?? intentText,
                   Boolean(transcricao),
                   acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
                 );
+              }
+            } else if (commercialIntent === "uso") {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (await claimDelivery(db, `intent-uso-${channel.id}-${from}-${intentKey}`, "intent")) {
+                const detectedUse = intentText.match(/silagem|ensilagem|silo/i)
+                  ? "uso_silagem"
+                  : intentText.match(/pastejo|pasto|pastoreio|pastorear/i)
+                  ? "uso_pastejo"
+                  : "uso_outro";
+                await handleUsoSelecionado(
+                  db,
+                  channel as Json,
+                  from,
+                  detectedUse,
+                  undefined,
+                  acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
+              }
+            } else if (commercialIntent === "interesse_geral") {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (await claimDelivery(db, `intent-interesse-${channel.id}-${from}-${intentKey}`, "intent")) {
+                await handleMenuClick(
+                  db,
+                  channel as Json,
+                  from,
+                  "menu_uso",
+                  acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
+              }
+            } else if (isAreaAcimaDosPacotes(intentText)) {
+              const hectares = extrairAreaHectares(intentText);
+              if (hectares !== null) {
+                const origem = channel.type === "facebook" || channel.type === "instagram"
+                  ? "social"
+                  : "whatsapp";
+                await handleHumanRequest(db, channel as Json, from, origem, acct, {
+                  tipo_pedido: "cotacao_area_livre",
+                  area_hectares: hectares,
+                  uso: usoPorResposta(intentText),
+                  regiao_uf: extrairUF(intentText),
+                  message_id: String(m.id ?? m.message_id ?? "") || null,
+                });
               }
             }
           } catch (e) {
@@ -809,39 +897,17 @@ async function avisarDuvidaTecnica(
   pergunta: string,
   veioDeAudio: boolean,
   acct: CwAcct | undefined,
+  messageId?: string,
 ): Promise<void> {
-  const { data: contact } = await db.from("contacts").select("id")
-    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-  if (!contact) return;
-  const { data: conv } = await db.from("conversations")
-    .select("id,chatwoot_conversation_id")
-    .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-  if (!conv) return;
-
-  await autoPauseFunil(conv.id as string, "duvida-tecnica");
-
-  const cwId = conv.chatwoot_conversation_id as number | null;
-  if (!cwId) return;
-  const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
-  if (assignee > 0) {
-    try {
-      await assignConversation(cwId, assignee, acct);
-    } catch (e) {
-      console.warn("duvida-tecnica: atribuição falhou:", String(e).slice(0, 120));
-    }
-  }
-  try {
-    await createConversationMessage(cwId, {
-      content: `🌱 *DÚVIDA TÉCNICA — precisa de resposta humana*\n\n${
-        veioDeAudio ? "🎙️ (áudio transcrito) " : ""
-      }"${pergunta.slice(0, 400)}"\n\nO funil foi pausado pra não atropelar a pergunta. Responda e retome com a macro *▶️ Retomar Funil*.`,
-      messageType: "outgoing",
-      private: true,
-    }, acct);
-  } catch (e) {
-    console.warn("duvida-tecnica: nota falhou:", String(e).slice(0, 120));
-  }
+  const origem = channel.type === "facebook" || channel.type === "instagram"
+    ? "social"
+    : "whatsapp";
+  await handleHumanRequest(db, channel, from, origem, acct, {
+    tipo_pedido: "duvida_tecnica",
+    veio_de_audio: veioDeAudio,
+    pergunta: pergunta.slice(0, 400),
+    message_id: messageId ?? null,
+  });
 }
 
 // Extrai o id+título da opção clicada (botão ou item de lista) de uma msg interactive.
@@ -864,11 +930,10 @@ function interactiveReplyId(m: Json): { id: string; title: string } | null {
   return null;
 }
 
-// Conteúdo do menu de ação (funil Mega Sorgo) — preço é real (igual já usado manualmente pelo
-// Cícero); plantio/nutrição/depoimento são placeholder até o material real chegar.
+// Conteúdo de fallback do menu de ação; preço sempre segue para cotação por pacote.
 const MENU_CONTENT: Record<string, string> = {
   menu_preco:
-    "🌱 *Tabela de preços — Mega Sorgo Santa Elisa®*\n\n📦 2 kg — R$ 179,90 (cobre 0,5 hectare)\n📦 4 kg — R$ 341,62 (cobre 1 hectare)\n📦 10 kg — de R$ 899,00 por R$ 764,15 (cobre 2 hectares)\n📦 20 kg — R$ 1.437,90 (cobre até 4 hectares)\n\n🚚 Frete grátis pra todo o Brasil!",
+    "🚚 Frete grátis e descontos progressivos conforme a quantidade — que podem chegar a 30% em pedidos acima de 100 kg. Escolha o pacote e o Cícero confirma o valor exato para o seu pedido.",
   menu_plantio:
     "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
   menu_nutricao:
@@ -878,78 +943,43 @@ const MENU_CONTENT: Record<string, string> = {
   menu_humano: "🧑‍🌾 Já te conectei com o Cícero, ele te chama em breve!",
 };
 
-// ── Sequência de PREÇO (v2, 02/07): imagem -> tabela c/ validade dinâmica -> botões ─────────
-// Material real do Cícero (promoção Safra-Safrinha). Validade SEMPRE hoje+5 dias (o formato
-// antigo usava data fixa e ficava vencida no ar). Descontos reais: 2kg sem / 4kg 5% / 10kg 15% / 20kg 20%.
-const PRECO_VALIDADE_DIAS = 5;
-
-function precoValidade(): string {
-  const d = new Date(Date.now() + PRECO_VALIDADE_DIAS * 24 * 60 * 60 * 1000);
-  const brt = new Date(d.getTime() - 3 * 3600 * 1000);
-  return `${String(brt.getUTCDate()).padStart(2, "0")}/${
-    String(brt.getUTCMonth() + 1).padStart(2, "0")
-  }/${brt.getUTCFullYear()}`;
+// O bot identifica pacote/área, mas não expõe preço: o valor exato depende da quantidade
+// negociada. O Cícero confirma a cotação após o cliente solicitar atendimento.
+function cotacaoCard(pacote: string, cobre: string): string {
+  return `🌱 *Opção de ${pacote} — atende ${cobre}*\n\n🚚 *Frete grátis.*\n💸 Desconto progressivo conforme a quantidade, podendo chegar a *30% em pedidos acima de 100 kg*.\n\nO Cícero confirma o valor exato para o seu pedido.`;
 }
 
-// Cartão de preço POR PACOTE (decisão 02/07: tabelona completa confunde e atrasa a venda —
-// pergunta a ÁREA primeiro e entrega só o preço certo). Card + pagamento; frete vai em
-// mensagem separada; fechamento com botões.
-// Card enxuto (decisão 02/07 v4): foco em "X kg atende Y hectares" + preço + desconto E
-// frete grátis SEMPRE juntos como promoção. Pagamento vai em mensagem DEDICADA (confiança).
-function precoCard(
-  pacote: string,
-  cobre: string,
-  precoDe: string | null,
-  precoPor: string,
-  off: string | null,
-): string {
-  const linhaPreco = precoDe
-    ? `💰 De ${precoDe} por *${precoPor}*`
-    : `💰 *${precoPor}*`;
-  const promo = off
-    ? `💸 *${off} de desconto + FRETE GRÁTIS* — tudo dentro da promoção!`
-    : `💸 *FRETE GRÁTIS* dentro da promoção!`;
-  return `🌱 *Pacote de ${pacote} — atende ${cobre}*\n\n${linhaPreco}\n${promo}\n📅 Promoção válida até *${precoValidade()}*`;
-}
-
-const PAGAMENTO_MSG = "💳 *Formas de pagamento — como o senhor preferir:*\n\n" +
-  "▪️ *PIX direto com a empresa* (no CNPJ) — rápido, sem burocracia\n\n" +
-  "▪️ *Cartão de crédito ou débito*\n" +
-  "*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n" +
-  "Compra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. " +
-  "Se não chegar, o Mercado Pago devolve seu dinheiro. Segurança total pro senhor comprar tranquilo.\n\n" +
-  "▪️ *Boleto*\n" +
-  "Também pelo site, com a Garantia Mercado Pago.\n" +
-  "_Liberação do pedido em 2 dias após a confirmação do pagamento._";
-
-const FRETE_MSG =
-  "🚚 *FRETE GRÁTIS para todo o Brasil!*\n\n📦 Enviamos por Correios ou transportadora, com código de rastreio pro senhor acompanhar a entrega.";
-
-// função (não constante!): a validade é hoje+5 e precisa ser calculada NO ENVIO, não no boot.
 function tamanhoCard(id: string): string | null {
   switch (id) {
     case "tam_2kg":
-      return precoCard(
-        "2 kg",
-        "½ hectare (meio hectare)",
-        null,
-        "R$ 179,90",
-        null,
-      );
+      return cotacaoCard("2 kg", "até ½ hectare");
     case "tam_4kg":
-      return precoCard("4 kg", "1 hectare", "R$ 359,60", "R$ 341,62", "5%");
+      return cotacaoCard("4 kg", "até 1 hectare");
     case "tam_10kg":
-      return precoCard("10 kg", "2 hectares", "R$ 899,00", "R$ 764,15", "15%");
+      return cotacaoCard("10 kg", "até 2 hectares");
     case "tam_20kg":
-      return precoCard(
-        "20 kg",
-        "até 4 hectares",
-        "R$ 1.798,00",
-        "R$ 1.437,90",
-        "20%",
-      );
+      return cotacaoCard("20 kg", "até 4 hectares");
+    case "tam_mais20kg":
+      return cotacaoCard("acima de 20 kg", "área sob consulta");
     default:
       return null;
+  }
+}
+
+function tamanhoLabel(id: string): string {
+  switch (id) {
+    case "tam_2kg":
+      return "2 kg (até ½ hectare)";
+    case "tam_4kg":
+      return "4 kg (1 hectare)";
+    case "tam_10kg":
+      return "10 kg (2 hectares)";
+    case "tam_20kg":
+      return "20 kg (4 hectares)";
+    case "tam_mais20kg":
+      return "acima de 20 kg / 4 hectares";
+    default:
+      return id;
   }
 }
 
@@ -976,46 +1006,44 @@ async function handlePrecoSequence(
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  // Fluxo v5.2 (04/07): banner -> lista de área -> imagem pacote -> card -> frete -> botões.
+  // O preço não pode ser comparado sem volume: abrir diretamente a seleção de área.
   const pecas: { body: Json; registro: string; tipo: string }[] = [];
-  // 1) banner promoção (funnel_media slot 'preco'; sem mídia -> pula)
-  const { data: media } = await db.from("funnel_media").select("url,caption")
-    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true).limit(1)
-    .maybeSingle();
-  if (media?.url) {
-    pecas.push({
-      tipo: "image",
-      body: {
-        type: "image",
-        image: { link: media.url, caption: "Vou te passar os valores! 👇" },
-      },
-      registro: "[imagem promoção]",
-    });
-  }
-  // 2) escolhas visíveis: reply buttons convertem melhor que uma lista fechada.
+  // Lista aberta: área e pacote correspondente nos três tamanhos aprovados.
   pecas.push({
     tipo: "interactive",
     body: {
       type: "interactive",
       interactive: {
-        type: "button",
+        type: "list",
         body: {
-          text:
-            "📐 *Qual área o senhor pretende plantar?*\n\nToque abaixo e eu já mostro o pacote certo, o valor e o desconto.",
+          text: `📐 *Qual área você pretende plantar?*\n\n${textoCondicaoComercial()}\n\nPara áreas acima de 4 hectares, informe a área real na conversa para o Cícero calcular o volume.`,
         },
         action: {
-          buttons: [
-            { type: "reply", reply: { id: "tam_2kg", title: "Meio hectare" } },
-            { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
-            {
-              type: "reply",
-              reply: { id: "preco_area_maior", title: "2 hectares ou mais" },
-            },
-          ],
+          button: "Escolher pacote",
+          sections: [{
+            title: "Pacotes e volumes",
+            rows: [
+              {
+                id: "tam_4kg",
+                title: "1 hectare",
+                description: "4 kg; frete grátis; valor confirmado pelo Cícero.",
+              },
+              {
+                id: "tam_10kg",
+                title: "2 hectares",
+                description: "10 kg; frete grátis; valor confirmado pelo Cícero.",
+              },
+              {
+                id: "tam_20kg",
+                title: "4 hectares",
+                description: "20 kg; frete grátis; valor confirmado pelo Cícero.",
+              },
+            ],
+          }],
         },
       },
     },
-    registro: "📐 Qual o tamanho da área? [½ ha / 1 ha / 2 ha / 4+ ha]",
+    registro: "📐 Selecione a área [1 ha → 4 kg / 2 ha → 10 kg / 4 ha → 20 kg] para pedir cotação",
   });
 
   const { data: contact } = await db.from("contacts").select("id").eq(
@@ -1082,33 +1110,332 @@ async function handleSocialPrecoSequence(
   channel: Json,
   from: string,
 ): Promise<void> {
-  const { data: media } = await db.from("funnel_media").select("url")
-    .eq("funnel", "mega-sorgo").eq("slot", "preco").eq("active", true)
-    .limit(1).maybeSingle();
-  const pieces: { type: string; payload: Json }[] = [];
-  if (media?.url) {
-    pieces.push({
-      type: "image",
-      payload: {
-        media_url: media.url,
-        caption: "Vou te passar os valores! 👇",
-      },
-    });
-  }
-  pieces.push({
+  const pieces: { type: string; payload: Json }[] = [{
     type: "interactive",
     payload: {
-      text:
-        "📐 Qual área o senhor pretende plantar?\n\nEscolha abaixo e eu já mostro o pacote certo, o valor e o desconto.",
+      text: `📐 Qual área você pretende plantar? 1 hectare = 4 kg, 2 hectares = 10 kg e 4 hectares = 20 kg. ${textoCondicaoComercial()} Para áreas acima de 4 hectares, informe a área na conversa para calcularmos o volume.`,
       buttons: [
-        { id: "tam_2kg", title: "Meio hectare" },
         { id: "tam_4kg", title: "1 hectare" },
-        { id: "preco_area_maior", title: "2 hectares ou mais" },
+        { id: "tam_10kg", title: "2 hectares" },
+        { id: "tam_20kg", title: "4 hectares" },
       ],
     },
-  });
+  }];
 
   await sendSocialPieces(db, channel, from, pieces);
+}
+
+async function recordCommercialEvent(
+  db: Db,
+  channel: Json,
+  conversationId: string | null,
+  eventType: string,
+  details: Record<string, unknown> = {},
+  attribution: {
+    origin?: "automatico" | "humano" | "cliente";
+    messageId?: string | null;
+  } = {},
+): Promise<void> {
+  try {
+    await registrarEventoComercial(db, {
+      channelId: String(channel.id),
+      conversationId,
+      eventType,
+      origin: attribution.origin ?? "automatico",
+      messageId: attribution.messageId,
+      details,
+    });
+  } catch (error) {
+    // Telemetria não deve impedir uma resposta ao cliente; a decisão de mídia, por outro
+    // lado, só acontece depois de uma leitura sem erro do slot explícito.
+    console.warn("sales-funnel event:", eventType, String(error).slice(0, 140));
+  }
+}
+
+export async function recordInboundCommercialIntent(
+  db: Db,
+  channel: Json,
+  from: string,
+  intent: string,
+  messageId?: string | null,
+): Promise<void> {
+  if (messageId) {
+    try {
+      const claimed = await claimDelivery(
+        db,
+        `commercial-intent-${channel.id}-${messageId}-${intent}`,
+        "sales-funnel-intent",
+      );
+      if (!claimed) return;
+    } catch (error) {
+      console.warn("sales-funnel intent claim:", String(error).slice(0, 120));
+      return;
+    }
+  }
+  try {
+    const conversation = await resolveSocialConversation(db, channel, from);
+    await recordCommercialEvent(
+      db,
+      channel,
+      (conversation?.id as string | undefined) ?? null,
+      "intencao_identificada",
+      { intent },
+      { origin: "cliente", messageId: messageId ?? null },
+    );
+  } catch (error) {
+    console.warn("sales-funnel intent event:", String(error).slice(0, 120));
+  }
+}
+
+function extrairUF(text: string): string | null {
+  const match = text.toUpperCase().match(
+    /\b(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)\b/,
+  );
+  return match?.[1] ?? null;
+}
+
+async function inferSocialReplyFromRecentPrompt(
+  db: Db,
+  channelId: string,
+  externalContactId: string,
+  reply: string,
+  replyAt?: string,
+): Promise<string | null> {
+  const { data: contact, error: contactError } = await db.from("contacts")
+    .select("id").eq("channel_id", channelId)
+    .eq("external_contact_id", externalContactId).maybeSingle();
+  if (contactError || !contact?.id) return null;
+  const { data: conversation, error: conversationError } = await db
+    .from("conversations").select("id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (conversationError || !conversation?.id) return null;
+  let query = db.from("messages").select("content,sent_at")
+    .eq("conversation_id", conversation.id).eq("direction", "out")
+    .eq("msg_type", "interactive")
+    .order("sent_at", { ascending: false }).limit(10);
+  if (replyAt) query = query.lte("sent_at", replyAt);
+  const { data: prompts, error: promptError } = await query;
+  if (promptError) return null;
+  const at = Date.parse(replyAt ?? new Date().toISOString());
+  const validPrompts = (prompts ?? []).filter((prompt: Json) => {
+    const promptAt = Date.parse(String(prompt.sent_at ?? ""));
+    return prompt.content && Number.isFinite(promptAt) && at >= promptAt &&
+      at - promptAt <= 24 * 60 * 60_000;
+  }).map((prompt: Json) => String(prompt.content));
+  return inferSocialPriceReplyFromPrompts(reply, validPrompts);
+}
+
+async function sendWhatsAppPiece(
+  db: Db,
+  channel: Json,
+  from: string,
+  body: Json,
+  content: string,
+  msgType: string,
+  acct?: CwAcct,
+): Promise<boolean> {
+  const { data: secret } = await db.from("channel_secrets").select(
+    "channel_token",
+  ).eq("channel_id", channel.id).maybeSingle();
+  const token = secret?.channel_token as string | undefined;
+  const phone = channel.phone_number_id as string | undefined;
+  if (!token || !phone) return false;
+  const response = await sendMeta(token, `${phone}/messages`, {
+    messaging_product: "whatsapp",
+    to: from,
+    ...body,
+  });
+  const metaId = (response.data as Json)?.messages
+    ? (((response.data as Json).messages as Json[])[0]?.id as string)
+    : null;
+  if (!response.ok || !metaId) return false;
+
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from)
+    .maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id,chatwoot_conversation_id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  let chatwootMessageId: number | null = null;
+  if (conv?.chatwoot_conversation_id) {
+    try {
+      const cw = await createConversationMessage(
+        conv.chatwoot_conversation_id as number,
+        { content, messageType: "outgoing" },
+        acct,
+      );
+      chatwootMessageId = (cw?.id as number) ?? null;
+    } catch (error) {
+      console.warn("commercial message Chatwoot:", String(error).slice(0, 120));
+    }
+  }
+  const { error } = await db.from("messages").insert({
+    conversation_id: conv?.id ?? null,
+    channel_id: channel.id,
+    direction: "out",
+    msg_type: msgType,
+    content,
+    meta_message_id: metaId,
+    chatwoot_message_id: chatwootMessageId,
+    status: "sent",
+    sent_at: new Date().toISOString(),
+  });
+  if (error) console.warn("commercial message log:", String(error).slice(0, 120));
+  return true;
+}
+
+async function handleUsoQuestion(
+  db: Db,
+  channel: Json,
+  from: string,
+  actionScope?: string,
+  acct?: CwAcct,
+): Promise<void> {
+  const buttons = OPCOES_DE_USO.map((option) => ({
+    id: option.id,
+    title: option.title,
+  }));
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from)
+    .maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await sendSocialPieces(db, channel, from, [{
+      type: "interactive",
+      payload: { text: textoPerguntaUso(), buttons },
+    }], actionScope);
+  } else {
+    const replies = buttons.map((button) => ({
+      type: "reply",
+      reply: { id: button.id, title: button.title },
+    }));
+    const sent = await sendWhatsAppPiece(
+      db,
+      channel,
+      from,
+      {
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: textoPerguntaUso() },
+          action: { buttons: replies },
+        },
+      },
+      `${textoPerguntaUso()} [Silagem / Pastejo / Outro uso]`,
+      "interactive",
+      acct,
+    );
+    if (!sent) throw new Error("Meta não confirmou pergunta de uso");
+  }
+  await recordCommercialEvent(
+    db,
+    channel,
+    (conv?.id as string | undefined) ?? null,
+    "pergunta_uso_enviada",
+  );
+}
+
+async function handleUsoSelecionado(
+  db: Db,
+  channel: Json,
+  from: string,
+  actionId: string,
+  actionScope?: string,
+  acct?: CwAcct,
+  eventMessageId?: string,
+): Promise<void> {
+  const use = usoPorResposta(actionId);
+  if (!use) return;
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from)
+    .maybeSingle();
+  const { data: conv } = contact
+    ? await db.from("conversations").select("id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+    : { data: null };
+  await recordCommercialEvent(
+    db,
+    channel,
+    (conv?.id as string | undefined) ?? null,
+    "uso_informado",
+    { uso: use },
+    { origin: "cliente", messageId: eventMessageId ?? null },
+  );
+
+  // Só slots dedicados, revisados por finalidade, podem ser prova. O catálogo não tem um
+  // campo de aprovação; nomes explícitos + ativo + URL segura + legenda impedem cair na
+  // seleção genérica de vídeo que já provocou rajadas repetidas.
+  const proofSlot = `prova_${use}_aprovada`;
+  const proofResult = await db.from("funnel_media").select("url,caption,type")
+    .eq("funnel", "mega-sorgo").eq("slot", proofSlot).eq("active", true)
+    .limit(1).maybeSingle();
+  const proof = !proofResult.error && proofResult.data
+    ? proofResult.data as Json
+    : null;
+  const url = String(proof?.url ?? "");
+  const caption = String(proof?.caption ?? "").trim();
+  const mediaType = String(proof?.type ?? "").toLowerCase();
+  let proofSent = false;
+  if (
+    /^https:\/\//i.test(url) && caption &&
+    (mediaType === "image" || mediaType === "video")
+  ) {
+    if (channel.type === "facebook" || channel.type === "instagram") {
+      await sendSocialPieces(db, channel, from, [{
+        type: mediaType,
+        payload: { media_url: url, caption },
+      }], actionScope ? `${actionScope}:proof` : undefined);
+      proofSent = true;
+    } else {
+      const body = mediaType === "image"
+        ? { type: "image", image: { link: url, caption } }
+        : { type: "video", video: { link: url, caption } };
+      proofSent = await sendWhatsAppPiece(
+        db,
+        channel,
+        from,
+        body,
+        `[prova ${use}] ${caption}`,
+        mediaType,
+        acct,
+      );
+    }
+  }
+  if (proofSent) {
+    await recordCommercialEvent(
+      db,
+      channel,
+      (conv?.id as string | undefined) ?? null,
+      "prova_enviada",
+      { uso: use, slot: proofSlot, media_type: mediaType },
+      { origin: "automatico", messageId: eventMessageId ?? null },
+    );
+  } else if (proofResult.error) {
+    console.warn("prova comercial indisponível:", String(proofResult.error).slice(0, 120));
+  }
+
+  if (!proofSent) {
+    const useText = use === "silagem" ? "silagem" : use === "pastejo" ? "pastejo" : "essa finalidade";
+    const text = `Entendi: o senhor pretende usar para ${useText}. Vou te mostrar as opções de área e volume.`;
+    if (channel.type === "facebook" || channel.type === "instagram") {
+      await sendSocialPieces(db, channel, from, [{ type: "text", payload: { content: text } }], actionScope ? `${actionScope}:context` : undefined);
+    } else {
+      await sendWhatsAppPiece(db, channel, from, { type: "text", text: { body: text } }, text, "text", acct);
+    }
+  }
+  if (channel.type === "facebook" || channel.type === "instagram") {
+    await handleSocialPrecoSequence(db, channel, from);
+  } else {
+    await handlePrecoSequence(db, channel, from, acct);
+  }
 }
 
 async function sendSocialPieces(
@@ -1169,15 +1496,31 @@ export async function handleSocialPrecoClick(
   const actionScope = actionEventId
     ? `social-price-action:${actionEventId}`
     : undefined;
+  if (id.startsWith("uso_")) {
+    await handleUsoSelecionado(db, channel, from, id, actionScope, undefined, actionEventId);
+    return;
+  }
+  if (id.startsWith("preco_area_livre:")) {
+    const hectares = Number(id.slice("preco_area_livre:".length));
+    if (Number.isFinite(hectares) && hectares > 4) {
+      await handleHumanRequest(db, channel, from, "social", undefined, {
+        tipo_pedido: "cotacao_area_livre",
+        area_hectares: hectares,
+        regiao_uf: null,
+        message_id: actionEventId ?? null,
+      });
+    }
+    return;
+  }
   if (id === "preco_tamanho") {
     await sendSocialPieces(db, channel, from, [{
       type: "interactive",
       payload: {
-        text: "📐 Qual outra área o senhor quer calcular?",
+        text: "📐 Escolha a área: 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
         buttons: [
-          { id: "tam_2kg", title: "Meio hectare" },
           { id: "tam_4kg", title: "1 hectare" },
-          { id: "preco_area_maior", title: "2 hectares ou mais" },
+          { id: "tam_10kg", title: "2 hectares" },
+          { id: "tam_20kg", title: "4 hectares" },
         ],
       },
     }], actionScope);
@@ -1185,15 +1528,64 @@ export async function handleSocialPrecoClick(
   }
   if (id === "preco_area_maior") {
     await sendSocialPieces(db, channel, from, [{
-      type: "interactive",
+      type: "text",
       payload: {
-        text: "🌱 Perfeito. Qual destas áreas fica mais próxima?",
-        buttons: [
-          { id: "tam_10kg", title: "2 hectares" },
-          { id: "tam_20kg", title: "4 hectares ou mais" },
-        ],
+        content: "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.",
       },
     }], actionScope);
+    return;
+  }
+  if (id.startsWith("preco_cotar_")) {
+    const selectedPackage = id.slice("preco_cotar_".length);
+    const pacote = pacotePorId(selectedPackage);
+    const packageLabel = tamanhoLabel(selectedPackage);
+    const conversation = await resolveSocialConversation(db, channel, from);
+    const pedido = await registrarPedidoHumano(db, {
+      conversationId: (conversation?.id as string | undefined) ?? null,
+      channelId: String(channel.id),
+      chatwootConversationId:
+        (conversation?.chatwoot_conversation_id as number | undefined) ?? null,
+      origem: "social",
+      contato: from,
+      contexto: {
+        tipo_pedido: "cotacao",
+        pacote_id: pacote?.id ?? selectedPackage,
+        pacote_kg: pacote?.quilos ?? null,
+        area_hectares: pacote?.area ?? null,
+        regiao_uf: null,
+      },
+    });
+    const text = pedido.registrado
+      ? `✅ Seu pedido de cotação de ${packageLabel} foi registrado para atendimento. O valor será confirmado conforme quantidade e região. ${textoCondicaoComercial()}`
+      : "Não consegui confirmar o registro automático da cotação agora. Envie sua região nesta conversa e a equipe poderá conferir o pedido; não vou informar preço sem confirmar o pacote e o frete.";
+    await recordCommercialEvent(db, channel, (conversation?.id as string | undefined) ?? null, "cotacao_solicitada", {
+      pacote_id: pacote?.id ?? selectedPackage,
+      pacote_kg: pacote?.quilos ?? null,
+      area_hectares: pacote?.area ?? null,
+      encaminhado: pedido.registrado,
+    }, { origin: "cliente", messageId: actionEventId ?? null });
+    await sendSocialPieces(db, channel, from, [{
+      type: "text",
+      payload: { content: text },
+    }], actionScope);
+    const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+    if (pedido.registrado && assignee > 0 && conversation?.chatwoot_conversation_id) {
+      const acct = await accountForChannel(channel.id as string);
+      await assignConversation(
+        conversation.chatwoot_conversation_id as number,
+        assignee,
+        acct,
+      );
+    }
+    if (pedido.registrado) {
+      await markSocialLead(
+        db,
+        channel,
+        from,
+        ["lead-quente"],
+        `Cliente pediu cotação do pacote ${packageLabel}. Confirmar preço para a quantidade e região; não enviar tabela geral.`,
+      );
+    }
     return;
   }
   if (id === "preco_pagamento") {
@@ -1215,9 +1607,9 @@ export async function handleSocialPrecoClick(
     pag_pix:
       "💰 PIX direto com a empresa, no CNPJ. O Cícero vai enviar a chave para concluir o pedido.",
     pag_cartao:
-      "💳 Cartão de crédito ou débito pelo site, com a Garantia Mercado Pago. O Cícero vai enviar o link para concluir.",
+      "💳 O Cícero vai enviar o link de pagamento pelo site. Antes de confirmar, confira no checkout as condições e quais proteções se aplicam à sua compra.",
     pag_boleto:
-      "📄 Boleto pelo site, com a Garantia Mercado Pago. A liberação ocorre após a confirmação do pagamento.",
+      "📄 O Cícero vai enviar o link para gerar o boleto. O checkout informa o prazo de confirmação e as condições aplicáveis.",
     preco_comprar:
       "🤝 Fechado! O Cícero vai chamar em instantes para concluir o pedido.",
   };
@@ -1244,28 +1636,16 @@ export async function handleSocialPrecoClick(
 
   const card = tamanhoCard(id);
   if (!card) return;
-  const imgSlot = `preco_${id.replace("tam_", "")}`;
-  const { data: image } = await db.from("funnel_media").select("url,caption")
-    .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true)
-    .limit(1).maybeSingle();
   const pieces: { type: string; payload: Json }[] = [];
-  if (image?.url) {
-    pieces.push({
-      type: "image",
-      payload: { media_url: image.url, caption: image.caption ?? "" },
-    });
-  }
   pieces.push(
     { type: "text", payload: { content: card } },
-    { type: "text", payload: { content: FRETE_MSG } },
     {
       type: "interactive",
       payload: {
-        text: "Posso garantir o seu? 👇",
+        text: "Quer que o Cícero confirme o valor exato deste pacote?",
         buttons: [
-          { id: "preco_comprar", title: "Quero garantir" },
-          { id: "preco_pagamento", title: "Pagamento" },
-          { id: "preco_tamanho", title: "Outra área" },
+          { id: `preco_cotar_${id}`, title: "Pedir cotação" },
+          { id: "preco_tamanho", title: "Outro pacote" },
         ],
       },
     },
@@ -1389,13 +1769,21 @@ export async function handleSocialSalesIntent(
             .eq("contact_id", ct.id).neq("status", "resolved")
             .order("opened_at", { ascending: false }).limit(1).maybeSingle()
           : { data: null };
-        await registrarPedidoHumano(db, {
+        const pedido = await registrarPedidoHumano(db, {
           conversationId: (cv?.id as string | undefined) ?? null,
           channelId: String(channel.id),
           chatwootConversationId: (cv?.chatwoot_conversation_id as number | undefined) ?? null,
           origem: "social",
           contato: from,
         });
+        await recordCommercialEvent(
+          db,
+          channel,
+          (cv?.id as string | undefined) ?? null,
+          "pedido_atendimento",
+          { encaminhado: pedido.registrado, tipo_pedido: "atendimento" },
+          { origin: "cliente", messageId },
+        );
       }
     } else {
       await sendSocialPieces(db, channel, from, [{
@@ -1405,6 +1793,7 @@ export async function handleSocialSalesIntent(
           sections: [{
             rows: [
               { id: "menu_preco", title: "Ver preço" },
+              { id: "menu_uso", title: "Escolher finalidade" },
               { id: "menu_depoimento", title: "Ver vídeos" },
               { id: "menu_plantio", title: "Como plantar" },
               { id: "menu_nutricao", title: "Ver nutrição" },
@@ -1435,7 +1824,12 @@ export async function handlePrecoClick(
   from: string,
   id: string,
   acct?: CwAcct,
+  _actionEventId?: string,
 ): Promise<void> {
+  if (id.startsWith("uso_")) {
+    await handleUsoSelecionado(db, channel, from, id, undefined, acct, _actionEventId);
+    return;
+  }
   const { data: secret } = await db.from("channel_secrets").select(
     "channel_token",
   ).eq("channel_id", channel.id).maybeSingle();
@@ -1519,6 +1913,58 @@ export async function handlePrecoClick(
     return;
   }
 
+  if (id.startsWith("preco_cotar_")) {
+    const selectedPackage = id.slice("preco_cotar_".length);
+    const pacote = pacotePorId(selectedPackage);
+    const packageLabel = tamanhoLabel(selectedPackage);
+    const pedido = await registrarPedidoHumano(db, {
+      conversationId: (conv?.id as string | undefined) ?? null,
+      channelId: String(channel.id),
+      chatwootConversationId:
+        (conv?.chatwoot_conversation_id as number | undefined) ?? null,
+      origem: "whatsapp",
+      contato: from,
+      contexto: {
+        tipo_pedido: "cotacao",
+        pacote_id: pacote?.id ?? selectedPackage,
+        pacote_kg: pacote?.quilos ?? null,
+        area_hectares: pacote?.area ?? null,
+        regiao_uf: null,
+      },
+    });
+    const text = pedido.registrado
+      ? `✅ Seu pedido de cotação de ${packageLabel} foi registrado para atendimento. O valor será confirmado conforme quantidade e região. ${textoCondicaoComercial()}`
+      : "Não consegui confirmar o registro automático da cotação agora. Envie sua região nesta conversa para a equipe conferir o pedido; não vou informar preço sem confirmar o pacote e o frete.";
+    await recordCommercialEvent(db, channel, (conv?.id as string | undefined) ?? null, "cotacao_solicitada", {
+      pacote_id: pacote?.id ?? selectedPackage,
+      pacote_kg: pacote?.quilos ?? null,
+      area_hectares: pacote?.area ?? null,
+      encaminhado: pedido.registrado,
+    }, { origin: "cliente", messageId: _actionEventId ?? null });
+    await envia({ type: "text", text: { body: text } }, text, "text");
+    const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+    if (pedido.registrado && assignee > 0 && conv?.chatwoot_conversation_id) {
+      await assignConversation(
+        conv.chatwoot_conversation_id as number,
+        assignee,
+        acct,
+      );
+    }
+    if (pedido.registrado) {
+      await registra(
+        `🔥 LEAD PEDIU COTAÇÃO do pacote ${packageLabel}. Confirmar preço para quantidade e região; não enviar tabela geral.`,
+        true,
+      );
+    }
+    return;
+  }
+
+  if (id === "preco_area_maior") {
+    const text = "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.";
+    await envia({ type: "text", text: { body: text } }, text, "text");
+    return;
+  }
+
   if (id === "pag_pix") {
     await envia(
       {
@@ -1544,7 +1990,7 @@ export async function handlePrecoClick(
         type: "text",
         text: {
           body:
-            "💳 *Cartão de crédito ou débito*\n\n*Pelo site, com a Garantia Mercado Pago* 🛡️ — o banco oficial do Mercado Livre.\n\nCompra 100% protegida: o pagamento só é liberado pra gente *depois que o senhor recebe a semente*. Se não chegar, o Mercado Pago devolve seu dinheiro.\n\nO Cícero vai te enviar o link do site pra concluir!",
+            "💳 *Cartão de crédito ou débito*\n\nO Cícero vai te enviar o link do site. Antes de confirmar, confira no checkout as condições e quais proteções se aplicam à sua compra.",
         },
       },
       "Cartão de crédito/débito via Mercado Pago",
@@ -1563,7 +2009,7 @@ export async function handlePrecoClick(
         type: "text",
         text: {
           body:
-            "📄 *Boleto bancário*\n\nTambém pelo site, com a *Garantia Mercado Pago* 🛡️.\n\n_Liberação do pedido em 2 dias após a confirmação do pagamento._\n\nO Cícero vai te enviar o link pra gerar o boleto!",
+            "📄 *Boleto bancário*\n\nO Cícero vai te enviar o link para gerar o boleto. O checkout informa o prazo de confirmação e as condições aplicáveis.",
         },
       },
       "Boleto via Mercado Pago",
@@ -1609,23 +2055,19 @@ export async function handlePrecoClick(
         type: "interactive",
         interactive: {
           type: "button",
-          body: { text: "📐 *Qual área o senhor quer calcular?*" },
+          body: {
+            text: "📐 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
+          },
           action: {
             buttons: [
-              {
-                type: "reply",
-                reply: { id: "tam_2kg", title: "Meio hectare" },
-              },
               { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
-              {
-                type: "reply",
-                reply: { id: "preco_area_maior", title: "2 hectares ou mais" },
-              },
+              { type: "reply", reply: { id: "tam_10kg", title: "2 hectares" } },
+              { type: "reply", reply: { id: "tam_20kg", title: "4 hectares" } },
             ],
           },
         },
       },
-      "📐 Me diz o tamanho da área [½ ha / 1 ha / 2 ha / 4+ ha]",
+      "📐 Selecione a área [1 ha / 2 ha / 4 ha] e o pacote correspondente",
       "interactive",
     );
     return;
@@ -1637,348 +2079,64 @@ export async function handlePrecoClick(
         type: "interactive",
         interactive: {
           type: "button",
-          body: { text: "🌱 *Perfeito. Qual destas áreas fica mais próxima?*" },
+          body: {
+            text: "🌱 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
+          },
           action: {
             buttons: [
+              { type: "reply", reply: { id: "tam_4kg", title: "1 hectare" } },
               { type: "reply", reply: { id: "tam_10kg", title: "2 hectares" } },
-              {
-                type: "reply",
-                reply: { id: "tam_20kg", title: "4 hectares ou mais" },
-              },
+              { type: "reply", reply: { id: "tam_20kg", title: "4 hectares" } },
             ],
           },
         },
       },
-      "Qual área? [2 hectares / 4 hectares ou mais]",
+      "Selecione a área [1 ha / 2 ha / 4 ha] e o pacote correspondente",
       "interactive",
     );
     return;
   }
 
-  // Clique na área -> 4 tempos: imagem pacote -> card texto -> frete -> botões (pagamento virou botão).
+  // Clique no pacote -> descrição sem preço -> cotação humana sob solicitação.
   const card = tamanhoCard(id);
   if (card) {
-    const pause = (ms: number) => new Promise((res) => setTimeout(res, ms));
-    // imagem do pacote (funnel_media slot preco_2kg/preco_4kg/preco_10kg/preco_20kg)
-    const imgSlot = `preco_${id.replace("tam_", "")}`;
-    const { data: imgMedia } = await db.from("funnel_media").select(
-      "url,caption",
-    )
-      .eq("funnel", "mega-sorgo").eq("slot", imgSlot).eq("active", true).limit(
-        1,
-      ).maybeSingle();
-    if (imgMedia?.url) {
-      await envia(
-        {
-          type: "image",
-          image: {
-            link: imgMedia.url,
-            caption: (imgMedia.caption as string) || "",
-          },
-        },
-        `[imagem ${imgSlot}]`,
-        "image",
-      );
-      await pause(2500);
-    }
     await envia({ type: "text", text: { body: card } }, card, "text");
-    await pause(2500);
-    await envia({ type: "text", text: { body: FRETE_MSG } }, FRETE_MSG, "text");
-    await pause(2500);
     await envia(
       {
         type: "interactive",
         interactive: {
           type: "button",
-          body: { text: "Posso garantir o seu? 👇" },
+          body: { text: "Quer que o Cícero confirme o valor exato deste pacote?" },
           action: {
             buttons: [
               {
                 type: "reply",
-                reply: { id: "preco_comprar", title: "🛒 Quero garantir" },
+                reply: { id: `preco_cotar_${id}`, title: "Pedir cotação" },
               },
               {
                 type: "reply",
-                reply: { id: "preco_pagamento", title: "💳 Pagamento" },
-              },
-              {
-                type: "reply",
-                reply: { id: "preco_tamanho", title: "📦 Outra área" },
+                reply: { id: "preco_tamanho", title: "Outro pacote" },
               },
             ],
           },
         },
       },
-      "Posso garantir o seu? [🛒 Quero garantir / 💳 Pagamento / 📦 Outra área]",
+      "Quer cotação exata? [Pedir cotação / Outro pacote]",
       "interactive",
     );
   }
 }
 
-// ── Sequência de VÍDEOS (5 vídeos com pausa entre eles) ─────────────────────
-const VIDEO_CAPTIONS: Record<string, string> = {
-  video_1:
-    "🌿 *VÍDEO 01 — O que é o Mega Sorgo Santa Elisa?*\n\n✅ Semente de *alto rendimento* que produz silagem e pastagem de qualidade o ano inteiro\n✅ Cresce rápido, rebrota forte e aguenta seca\n\n👉 _Assista e descubra por que milhares de produtores já plantam:_\nhttps://youtu.be/Q7IDP7PuYd4",
-  video_2:
-    "🌾 *VÍDEO 02 — Como plantar o Mega Sorgo Santa Elisa*\n\n✅ Plantio *simples*, sem segredo — até quem nunca plantou consegue\n✅ Dicas de *espaçamento, época ideal e adubação*\n\n👉 _Veja o passo a passo completo:_\nhttps://youtu.be/mkzRsa8RaKw",
-  video_3:
-    "📊 *VÍDEO 03 — Resultados reais no campo*\n\n✅ Produtores mostram *na prática* o que colheram\n✅ Comparativo com milho e outras forrageiras — os números impressionam\n\n👉 _Confira os resultados com os próprios olhos:_\nhttps://youtu.be/J6xJyYDukhw",
-  video_4:
-    "🌽 *VÍDEO 04 — Silagem com qualidade e volume o ano inteiro*\n\n✅ *Até 3 cortes por safra* — alta produção de massa verde\n✅ Versatilidade: serve pra silagem, pastejo direto e fenação\n\n👉 _Veja como garantir volume na sua propriedade:_\nhttps://youtu.be/Z-HrHiMsUIE",
-  video_5:
-    "🛡️ *VÍDEO 05 — Gaste menos e produza mais!*\n\n✅ *Resistência natural* a cigarrinha, lagarta e pulgão — menos veneno, menos custo\n✅ Redução real nos gastos com silagem e pastagem\n\n👉 _Descubra como economizar na sua produção:_\nhttps://youtu.be/rbfOQBoRX5Y",
-};
-// Pausa entre vídeos (ms): tempo de cada vídeo + margem pra carregar.
-// v1: 3:00 | v2: 2:30 | v3: 1:50 | v4: 2:50 | v5: fim
-const VIDEO_PAUSES_MS = [180_000, 150_000, 110_000, 170_000];
-// No social, esperas longas deixam a sequência vulnerável a deploy/restart do
-// bridge. Mantemos cadência curta e concluímos os cinco envios em menos de 1 min.
-const SOCIAL_VIDEO_PAUSES_MS = [10_000, 10_000, 10_000, 10_000];
-
+// A antiga rajada de cinco vídeos foi retirada; o menu de vídeo agora pergunta o uso e
+// só pode avançar para uma única mídia dedicada, se houver uma peça ativa e revisada.
 export async function handleVideoSequence(
   db: Db,
   channel: Json,
   from: string,
   acct?: CwAcct,
 ): Promise<void> {
-  if (channel.type === "facebook" || channel.type === "instagram") {
-    await handleSocialVideoSequence(db, channel, from);
-    return;
-  }
-  const { data: secret } = await db.from("channel_secrets").select(
-    "channel_token",
-  ).eq("channel_id", channel.id).maybeSingle();
-  const token = secret?.channel_token as string | undefined;
-  const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return;
-  const msgPath = `${phone}/messages`;
-  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-  const { data: contact } = await db.from("contacts").select("id").eq(
-    "channel_id",
-    channel.id,
-  ).eq("external_contact_id", from).maybeSingle();
-  const { data: conv } = contact
-    ? await db.from("conversations").select("id,chatwoot_conversation_id").eq(
-      "contact_id",
-      contact.id,
-    ).neq("status", "resolved")
-      .order("opened_at", { ascending: false }).limit(1).maybeSingle()
-    : { data: null };
-
-  const registra = async (
-    texto: string,
-    priv = false,
-  ): Promise<number | null> => {
-    if (!conv?.chatwoot_conversation_id) return null;
-    try {
-      const cw = await createConversationMessage(
-        conv.chatwoot_conversation_id as number,
-        { content: texto, messageType: "outgoing", private: priv },
-        acct,
-      );
-      return (cw?.id as number) ?? null;
-    } catch {
-      return null;
-    }
-  };
-  const envia = async (body: Json, registro: string, tipo: string) => {
-    const r = await sendMeta(token, msgPath, {
-      messaging_product: "whatsapp",
-      to: from,
-      ...body,
-    });
-    const metaId = (r.data as Json)?.messages
-      ? (((r.data as Json).messages as Json[])[0]?.id as string)
-      : null;
-    if (!r.ok || !metaId) {
-      const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(
-        `Meta não confirmou item de vídeo (${r.status}): ${detail}`,
-      );
-    }
-    const cwMsgId = await registra(registro);
-    await db.from("messages").insert({
-      conversation_id: conv?.id ?? null,
-      channel_id: channel.id,
-      direction: "out",
-      msg_type: tipo,
-      content: registro,
-      meta_message_id: metaId,
-      chatwoot_message_id: cwMsgId,
-      status: r.ok ? "sent" : "failed",
-      sent_at: new Date().toISOString(),
-    });
-  };
-
-  // intro
-  await envia(
-    {
-      type: "text",
-      text: {
-        body:
-          "📹 *Preparei 5 vídeos curtos pra você conhecer o Mega Sorgo Santa Elisa!*\n\nÉ rápido — cada um mostra um ponto importante pra sua decisão.\n\nVou mandar um por um, assista com calma 👇",
-      },
-    },
-    "📹 Preparei 5 vídeos curtos — vou mandar um por um",
-    "text",
-  );
-  await pause(3000);
-
-  // busca vídeos do funnel_media (slots video_1..video_5)
-  const slots = ["video_1", "video_2", "video_3", "video_4", "video_5"];
-  const { data: videos } = await db.from("funnel_media").select(
-    "slot,url,caption",
-  )
-    .eq("funnel", "mega-sorgo").in("slot", slots).eq("active", true);
-
-  const videoMap = new Map(
-    (videos ?? []).map((v: Json) => [v.slot as string, v]),
-  );
-
-  for (const [i, slot] of slots.entries()) {
-    const media = videoMap.get(slot) as Json | undefined;
-    const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
-
-    if (media?.url) {
-      const r = await sendMeta(token, msgPath, {
-        messaging_product: "whatsapp",
-        to: from,
-        type: "video",
-        video: { link: media.url, caption },
-      });
-      if (r.ok) {
-        const metaId = (r.data as Json)?.messages
-          ? (((r.data as Json).messages as Json[])[0]?.id as string)
-          : null;
-        const cwMsgId = await registra(
-          `[vídeo ${i + 1}] ${caption.slice(0, 80)}...`,
-        );
-        await db.from("messages").insert({
-          conversation_id: conv?.id ?? null,
-          channel_id: channel.id,
-          direction: "out",
-          msg_type: "video",
-          content: `[vídeo ${i + 1}]`,
-          meta_message_id: metaId,
-          chatwoot_message_id: cwMsgId,
-          status: "sent",
-          sent_at: new Date().toISOString(),
-        });
-      } else {
-        // fallback: vídeo grande demais ou erro -> envia caption como texto
-        await envia({ type: "text", text: { body: caption } }, caption, "text");
-      }
-    } else {
-      await envia({ type: "text", text: { body: caption } }, caption, "text");
-    }
-    if (i < slots.length - 1) await pause(VIDEO_PAUSES_MS[i]);
-  }
-
-  // CTA final
-  await pause(4000);
-  await envia(
-    {
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: {
-          text:
-            "✅ *Esses são os 5 pontos que todo produtor precisa saber antes de plantar!*\n\nQuer saber o preço e as condições especiais da promoção?",
-        },
-        action: {
-          buttons: [
-            {
-              type: "reply",
-              reply: { id: "menu_preco", title: "💰 Ver preço" },
-            },
-            {
-              type: "reply",
-              reply: { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
-            },
-          ],
-        },
-      },
-    },
-    "✅ 5 pontos importantes! [💰 Ver preço / 🧑‍🌾 Falar com Cícero]",
-    "interactive",
-  );
-
-  await registra(
-    "🎬 *Sequência de 5 vídeos enviada automaticamente.* Cliente pediu informações.",
-    true,
-  );
+  await handleUsoQuestion(db, channel, from, undefined, acct);
 }
-
-async function handleSocialVideoSequence(
-  db: Db,
-  channel: Json,
-  from: string,
-): Promise<void> {
-  const pause = (ms: number) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
-  await sendSocialPieces(db, channel, from, [{
-    type: "text",
-    payload: {
-      content:
-        "📹 Preparei 5 vídeos curtos para você conhecer o Mega Sorgo Santa Elisa!\n\nCada um mostra um ponto importante para sua decisão. Vou mandar um por um 👇",
-    },
-  }]);
-  await pause(3000);
-
-  const slots = ["video_1", "video_2", "video_3", "video_4", "video_5"];
-  const { data: videos } = await db.from("funnel_media")
-    .select("slot,url,caption")
-    .eq("funnel", "mega-sorgo").in("slot", slots).eq("active", true);
-  const videoMap = new Map((videos ?? []).map((video: Json) => [
-    video.slot as string,
-    video,
-  ]));
-
-  for (const [index, slot] of slots.entries()) {
-    const media = videoMap.get(slot) as Json | undefined;
-    const caption = (media?.caption as string) || VIDEO_CAPTIONS[slot] || "";
-    if (media?.url) {
-      try {
-        await sendSocialPieces(db, channel, from, [{
-          type: "video",
-          payload: { media_url: media.url, caption },
-        }]);
-      } catch (error) {
-        console.warn(
-          `vídeo social ${slot} falhou; enviando texto e continuando:`,
-          String(error).slice(0, 180),
-        );
-        await sendSocialPieces(db, channel, from, [{
-          type: "text",
-          payload: { content: caption },
-        }]);
-      }
-    } else {
-      await sendSocialPieces(db, channel, from, [{
-        type: "text",
-        payload: { content: caption },
-      }]);
-    }
-    if (index < slots.length - 1) {
-      await pause(SOCIAL_VIDEO_PAUSES_MS[index]);
-    }
-  }
-
-  await pause(4000);
-  await sendSocialPieces(db, channel, from, [{
-    type: "interactive",
-    payload: {
-      text:
-        "✅ Esses são os 5 pontos que todo produtor precisa saber antes de plantar!\n\nQuer saber o preço e as condições especiais da promoção?",
-      buttons: [
-        { id: "menu_preco", title: "Ver preço" },
-        { id: "menu_humano", title: "Falar com Cícero" },
-      ],
-    },
-  }]);
-}
-
 // ── Sequência COMO PLANTAR (PDF + lista de resumos) ─────────────────────────
 const PLANTIO_RESUMOS: Record<string, string> = {
   plantio_inicio: "🌱 *Como começar o plantio*\n\n" +
@@ -1998,15 +2156,14 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Primeiro corte: geralmente entre *90 e 110 dias*\n" +
     "• Corte com matéria seca entre *30% e 35%*\n" +
     "• Partículas de *1,25 a 1,75 cm*\n" +
-    "• Produtividade esperada: de *45 a 90 toneladas/ha*, conforme solo e manejo\n" +
-    "• Com adubação adequada, apresenta rebrote vigoroso.",
+    "• Produtividade e possibilidade de rebrote variam por material e condições de cultivo.\n" +
+    "• Use dados de campo comparáveis antes de estimar produção para sua área.",
   plantio_1: "🌱 *Especificações da Semente*\n\n" +
     "• Recomendação: *5 kg por hectare*\n" +
-    "• Altura: chega de *4 a 5 metros*\n" +
     "• Plantio: de *setembro a março* (safra e safrinha)\n" +
     "• Proteína: *8%*\n" +
-    "• Aguenta bem a seca e não tomba fácil\n" +
-    "• Faz *até 3 rebrotes* — irrigado, rebrota por 2 anos",
+    "• Altura, tolerância a estresse e número de cortes dependem da cultivar e do manejo.\n" +
+    "• Confirme as características do lote na ficha técnica do Santa Elisa.",
 
   plantio_2: "📏 *Espaçamento e Plantio em Linha*\n\n" +
     "• Use *4 a 5 kg/ha* (já conta 20-30% a mais pra compensar perdas)\n" +
@@ -2031,31 +2188,25 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Na semeadura: *20 a 40 kg/ha de Nitrogênio*\n" +
     "• Fósforo e Potássio: conforme análise do solo\n" +
     "• Solo fraco: mais adubo. Solo bom: menos adubo\n" +
-    "• Potássio no sulco ou a lanço antes do plantio\n" +
-    "• Meta: *35 a 70 toneladas/ha* de massa verde",
+    "• Potássio no sulco ou a lanço antes do plantio, conforme recomendação técnica\n" +
+    "• Não use uma meta de produção sem dados de campo da sua região.",
 
   plantio_6: "🔄 *Adubação de Cobertura*\n\n" +
     "• Fórmula *20-00-20*: aplicar *200 kg/ha*\n" +
     "• Quando: *25 a 35 dias* após o plantio, a lanço\n" +
-    "• Silagem: pode fazer *até 2 coberturas*\n" +
-    "• A mesma adubação serve pro *rebrote*\n" +
-    "• Quanto mais adubo, mais produz — é proporcional",
+    "• Número de coberturas e adubação do rebrote dependem da análise do solo e do manejo\n" +
+    "• Mais adubo não garante mais produção; siga a recomendação técnica para a área.",
 
   plantio_7: "🌿 *Controle de Daninhas (Mato)*\n\n" +
     "• Limpe a área *antes* do plantio\n" +
-    "• ⚠️ Herbicida anterior: espere *35 dias* antes de plantar\n" +
-    "• Herbicida liberado pro sorgo: *Atrazina* (3 a 4 litros)\n" +
-    "• Funciona antes ou depois da planta nascer\n" +
-    "• ❌ Não use em solo arenoso antes da planta nascer\n" +
-    "• Sempre com *receituário agronômico*",
+    "• Identifique as espécies e o estágio das plantas daninhas\n" +
+    "• Use somente produto registrado para a cultura e a situação da área, conforme bula\n" +
+    "• Confirme produto, dose e momento com agrônomo; não há dose única segura para toda área.",
 
   plantio_8: "🐛 *Pragas e Tratamento de Sementes*\n\n" +
-    "• Trate a semente *antes* de plantar — protege nos primeiros 30 dias\n" +
-    "• Principais pragas: *cigarrinha, lagarta, pulgão, percevejo*\n" +
-    "• Inseticidas: Clotianidina, Thiamethoxam, Imidacloprid\n" +
-    "• Fungicidas: Metalaxil, Tiabendazol, Captana\n" +
-    "• Aos *45 dias*: vistorie toda a lavoura\n" +
-    "• Faça pulverização preventiva — depois fica difícil entrar com máquina",
+    "• Monitore a lavoura e identifique a praga antes de decidir o controle\n" +
+    "• Tratamento de sementes e pulverização dependem de diagnóstico e produto registrado\n" +
+    "• Siga a bula e a orientação de um agrônomo; evite aplicação preventiva sem recomendação.",
 
   plantio_9: "✂️ *Ponto de Corte e Silagem*\n\n" +
     "• Corte quando a matéria seca estiver entre *30 e 35%*\n" +
@@ -2066,13 +2217,14 @@ const PLANTIO_RESUMOS: Record<string, string> = {
     "• Use *inoculante* pra uma boa fermentação",
 
   plantio_10: "📊 *Produtividade e Rebrote*\n\n" +
-    "• Safra normal, solo bom: *70 a 90 toneladas/ha*\n" +
-    "• Solo mais fraco: *45 a 60 toneladas/ha*\n" +
-    "• A silagem de sorgo equivale a *72-92%* da de milho\n" +
-    "• Após o corte: *rebrota vigorosa* em 90-100 dias com adubação\n" +
+    "• Rendimento e rebrote variam conforme híbrido, clima, solo, época e manejo\n" +
+    "• Compare sorgo e milho com dados medidos na mesma região e base de cálculo\n" +
     "• Pode fazer *pastejo direto* — entrada dos animais com 70-80 cm de altura\n" +
-    "• Acompanhe da semente até a colheita — faz toda a diferença!",
+    "• Use a ficha técnica e dados de campo do material para planejar sua área.",
 };
+
+const PLANTIO_DISCLAIMER =
+  "ℹ️ Referências gerais: doses e calendário variam por região, cultivar e análise do solo. Confirme a ficha técnica do Santa Elisa com um agrônomo.";
 
 async function handlePlantioSequence(
   db: Db,
@@ -2208,8 +2360,9 @@ export async function handlePlantioClick(
   id: string,
   acct?: CwAcct,
 ): Promise<void> {
-  const resumo = PLANTIO_RESUMOS[id];
-  if (!resumo) return;
+  const resumoBase = PLANTIO_RESUMOS[id];
+  if (!resumoBase) return;
+  const resumo = `${PLANTIO_DISCLAIMER}\n\n${resumoBase}`;
   if (channel.type === "facebook" || channel.type === "instagram") {
     await sendSocialPieces(db, channel, from, [
       { type: "text", payload: { content: resumo } },
@@ -2487,32 +2640,28 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Matéria Seca: *32,91%* (ideal é entre 30-35%)\n" +
     "• Umidade: *67,09%*\n" +
     "• pH: *4,13* (ótimo! Silagem bem fermentada)\n\n" +
-    "👉 Quanto mais perto de 33% de matéria seca, melhor a qualidade da silagem.\n" +
-    "pH abaixo de 4,2 = fermentação excelente!",
+    "👉 São resultados da amostra do laudo; a avaliação da silagem depende do conjunto dos parâmetros e do uso previsto.",
 
   nutricao_2: "💪 *Proteína*\n\n" +
     "• Proteína Bruta (PB): *9,65%* da matéria seca\n" +
     "• Proteína Solúvel: *51,09%* da PB\n" +
     "• Aminoácidos Totais: *80,93%* da PB\n" +
     "• Lisina: *3,11%* | Metionina: *1,66%*\n\n" +
-    "👉 Proteína bruta *acima de 9%* é excelente pra sorgo!\n" +
-    "O gado aproveita bem — a proteína é de alta qualidade.",
+    "👉 A proteína é um dos dados da amostra; a adequação depende dos demais ingredientes e da dieta do rebanho.",
 
   nutricao_3: "⚡ *Energia — NDT (Nutrientes Digestíveis Totais)*\n\n" +
     "• NDT: *65,22%* (método OARDC)\n" +
     "• Energia Líquida Lactação: *1,48 Mcal/kg*\n" +
     "• Energia Líquida Ganho: *0,95 Mcal/kg*\n" +
     "• Energia Líquida Manutenção: *1,55 Mcal/kg*\n\n" +
-    "👉 NDT acima de 65% = *alta energia*.\n" +
-    "Mais energia na silagem = mais leite e mais engorda!",
+    "👉 Use estes valores da amostra para formular a dieta com um profissional; eles não preveem sozinhos a produção de leite ou carne.",
 
   nutricao_4: "🌾 *Fibras*\n\n" +
     "• FDN (Fibra em Detergente Neutro): *49,94%*\n" +
     "• FDA (Fibra em Detergente Ácido): *32,31%*\n" +
     "• Lignina: *3,40%* (7,06% do FDN)\n" +
     "• FDN efetivo (aFDNmo): *48,14%*\n\n" +
-    "👉 FDN abaixo de 50% = gado come mais e rumina melhor.\n" +
-    "FDA baixo = mais digestível. Lignina baixa = fibra macia!",
+    "👉 Os resultados de fibra devem ser interpretados junto com a dieta completa, o volumoso e a categoria animal.",
 
   nutricao_5: "🧪 *Minerais*\n\n" +
     "• Cinza (Matéria Mineral): *6,24%*\n" +
@@ -2521,8 +2670,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Magnésio: *0,18%*\n" +
     "• Potássio: *1,55%*\n" +
     "• Enxofre: *0,14%*\n\n" +
-    "👉 Minerais dentro da faixa ideal.\n" +
-    "Cálcio e fósforo equilibrados = osso forte e boa produção.",
+    "👉 Compare estes valores com a exigência da categoria animal e os demais componentes da dieta.",
 
   nutricao_6: "🧈 *Gordura (Extrato Etéreo)*\n\n" +
     "• Extrato Etéreo (EE): *3,10%*\n" +
@@ -2530,8 +2678,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Linoleico (ômega 6): *43,01%* dos AG\n" +
     "• Oleico (ômega 9): *23,83%* dos AG\n" +
     "• Linolênico (ômega 3): *8,81%* dos AG\n\n" +
-    "👉 Gordura boa = mais energia pro animal.\n" +
-    "Perfil de ômega favorável pra saúde do rebanho!",
+    "👉 Este perfil descreve a amostra analisada; não determina sozinho o efeito na saúde ou no desempenho do rebanho.",
 
   nutricao_7: "🔄 *Digestibilidade da Fibra (DFDN)*\n\n" +
     "• Em 12 horas: *25,63%*\n" +
@@ -2539,8 +2686,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Em 30 horas: *56,31%*\n" +
     "• Em 48 horas: *60,64%*\n" +
     "• Em 240 horas (máxima): *70,57%*\n\n" +
-    "👉 Mais de *60% em 48h* = fibra altamente digestível.\n" +
-    "O gado aproveita a maior parte do que come!",
+    "👉 A digestibilidade depende do método e da amostra; avalie o resultado junto com a dieta completa.",
 
   nutricao_8: "🧫 *Fermentação da Silagem*\n\n" +
     "• pH: *4,13* ✅ (excelente!)\n" +
@@ -2548,8 +2694,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Ácido Acético: *1,73%* (normal)\n" +
     "• Ácido Propiônico: *0,44%* (baixo = sem deterioração)\n" +
     "• Amônia (NH3): *0,68%* (muito baixo = proteína preservada)\n\n" +
-    "👉 Silagem com fermentação *nota 10*.\n" +
-    "Pouca amônia = proteína conservada, sem perda!",
+    "👉 Estes indicadores são da amostra examinada; a fermentação pode variar entre lotes e silos.",
 
   nutricao_9: "🥛 *Produção Estimada por Tonelada de MS*\n\n" +
     "• Leite: *1.535 kg* por tonelada de matéria seca\n" +
@@ -2557,8 +2702,7 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Amido: *17,31%* (fonte de energia rápida)\n" +
     "• Digestibilidade do Amido em 7h: *73,93%*\n" +
     "• Açúcar: *4,06%*\n\n" +
-    "👉 Cada tonelada de MS produz mais de *1.500 litros de leite*!\n" +
-    "Retorno real do investimento na silagem.",
+    "👉 A produção indicada é uma estimativa associada à amostra, não uma garantia de leite ou carne por tonelada. O resultado depende da dieta total, dos animais e do manejo.",
 
   nutricao_10: "📊 *Comparativo — Mega Sorgo vs Referência*\n\n" +
     "• PB: *9,65%* (ref: 5,80-9,00%) ✅ *Acima*\n" +
@@ -2568,9 +2712,11 @@ const NUTRICAO_RESUMOS: Record<string, string> = {
     "• Lignina: *3,40%* (ref: 2,43-4,43%) ✅ *Baixa*\n" +
     "• Amido: *17,31%* (ref: 19,2-41,9%)\n" +
     "• Leite/ton MS: *1.535 kg*\n\n" +
-    "👉 *Proteína acima da média*, energia alta, fibra digestível.\n" +
-    "Resultado comprovado em laboratório! 🏆",
+    "👉 As análises são do laudo desta amostra. Compare com referências do mesmo método e base antes de tirar conclusões para outras áreas.",
 };
+
+const NUTRICAO_DISCLAIMER =
+  "ℹ️ Valores do laudo do Laboratório Prado (amostra de dez/2025); não garantem o resultado de toda lavoura ou dieta. Use a ficha completa com um zootecnista ou nutricionista animal.";
 
 async function handleNutricaoSequence(
   db: Db,
@@ -2691,8 +2837,9 @@ export async function handleNutricaoClick(
   id: string,
   acct?: CwAcct,
 ): Promise<void> {
-  const resumo = NUTRICAO_RESUMOS[id];
-  if (!resumo) return;
+  const resumoBase = NUTRICAO_RESUMOS[id];
+  if (!resumoBase) return;
+  const resumo = `${NUTRICAO_DISCLAIMER}\n\n${resumoBase}`;
   if (channel.type === "facebook" || channel.type === "instagram") {
     await sendSocialPieces(db, channel, from, [
       { type: "text", payload: { content: resumo } },
@@ -2883,13 +3030,125 @@ async function handleIscaSequence(
   }, acct);
 }
 
+export async function handleHumanRequest(
+  db: Db,
+  channel: Json,
+  from: string,
+  origem: "whatsapp" | "social",
+  acct?: CwAcct,
+  contexto: Record<string, unknown> = { tipo_pedido: "atendimento" },
+): Promise<boolean> {
+  const conversation = await resolveSocialConversation(db, channel, from);
+  const pedido = await registrarPedidoHumano(db, {
+    conversationId: (conversation?.id as string | undefined) ?? null,
+    channelId: String(channel.id),
+    chatwootConversationId:
+      (conversation?.chatwoot_conversation_id as number | undefined) ?? null,
+    origem,
+    contato: from,
+    contexto,
+  });
+  const tipoPedido = String(contexto.tipo_pedido ?? "atendimento");
+  const area = Number(contexto.area_hectares);
+  const textoRegistrado = tipoPedido === "duvida_tecnica"
+    ? "✅ Registrei sua dúvida para o Cícero confirmar com segurança. O funil ficará pausado enquanto a equipe verifica a resposta."
+    : tipoPedido === "cotacao_area_livre"
+    ? `✅ Registrei sua solicitação para ${area} hectares. O Cícero confirma o volume e a cotação exata.${contexto.regiao_uf ? " Região anotada: " + String(contexto.regiao_uf) + "." : " Envie também seu município e UF para confirmar o frete."}`
+    : "✅ Seu pedido foi registrado para atendimento. O Cícero vai conferir sua necessidade e, se for cotação, confirma o valor conforme quantidade e região.";
+  const textoFalha = tipoPedido === "duvida_tecnica"
+    ? "Recebi sua dúvida, mas não consegui confirmar o encaminhamento automático. Ela está visível nesta conversa; por segurança, não vou arriscar uma resposta técnica sem confirmação."
+    : "Não consegui confirmar o encaminhamento automático agora. Para garantir, envie a quantidade e sua região nesta conversa e peça novamente o atendimento.";
+  const text = pedido.registrado ? textoRegistrado : textoFalha;
+  await recordCommercialEvent(
+    db,
+    channel,
+    (conversation?.id as string | undefined) ?? null,
+    "pedido_atendimento",
+    contexto,
+    {
+      origin: "cliente",
+      messageId: String(contexto.message_id ?? "") || null,
+    },
+  );
+
+  if (pedido.registrado && conversation?.chatwoot_conversation_id) {
+    const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+    if (assignee > 0) {
+      try {
+        await assignConversation(
+          conversation.chatwoot_conversation_id as number,
+          assignee,
+          acct,
+        );
+      } catch (error) {
+        console.warn("pedido humano: atribuição falhou:", String(error).slice(0, 120));
+      }
+    }
+    try {
+      await createConversationMessage(
+        conversation.chatwoot_conversation_id as number,
+        {
+          content: `🧑‍🌾 Cliente pediu atendimento. Contexto: ${JSON.stringify(contexto).slice(0, 500)}.`,
+          messageType: "outgoing",
+          private: true,
+        },
+        acct,
+      );
+    } catch (error) {
+      console.warn("pedido humano: nota privada falhou:", String(error).slice(0, 120));
+    }
+    if (origem === "social") {
+      await markSocialLead(db, channel, from, ["lead-quente", "pediu-contato"], "Cliente pediu atendimento humano; confirmar necessidade, quantidade e região.");
+    }
+  }
+  if (origem === "social") {
+    await sendSocialPieces(db, channel, from, [{
+      type: "text",
+      payload: { content: text },
+    }]);
+    return pedido.registrado;
+  }
+  return await sendWhatsAppPiece(
+    db,
+    channel,
+    from,
+    { type: "text", text: { body: text } },
+    text,
+    "text",
+    acct,
+  );
+}
+
 export async function handleMenuClick(
   db: Db,
   channel: Json,
   from: string,
   menuId: string,
   acct?: CwAcct,
+  inboundMessageId?: string,
 ): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+  if (menuId === "menu_uso") {
+    const daily = await claimDailyTag(db, String(channel.id), from, "uso");
+    if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
+    try {
+      await handleUsoQuestion(db, channel, from, undefined, acct);
+      return { sent: true };
+    } catch (error) {
+      await releaseDailyIntent(db, daily.key);
+      throw error;
+    }
+  }
+  if (menuId === "menu_humano") {
+    const origem = channel.type === "facebook" || channel.type === "instagram"
+      ? "social"
+      : "whatsapp";
+    return {
+      sent: await handleHumanRequest(db, channel, from, origem, acct, {
+        tipo_pedido: "atendimento",
+        ...(inboundMessageId ? { message_id: inboundMessageId } : {}),
+      }),
+    };
+  }
   const iscaMatch = matchIsca(menuId);
   if (iscaMatch?.acao === "sim") {
     const { isca } = iscaMatch;
@@ -3134,7 +3393,7 @@ async function handleMessenger(db: Db, p: Json) {
       });
 
       if (
-        /^(?:menu_(?:preco|depoimento|plantio|nutricao)|preco_|tam_|pag_|plantio_|nutricao_)/
+        /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
           .test(actionId)
       ) {
         const claimed = await claimDelivery(
@@ -3147,7 +3406,12 @@ async function handleMessenger(db: Db, p: Json) {
           "social-price-action",
         );
         if (claimed && actionId.startsWith("menu_")) {
-          await handleMenuClick(db, channel as Json, sender, actionId, acct);
+          if (actionId === "menu_preco") {
+            await recordInboundCommercialIntent(db, channel as Json, sender, "preco", inboundEventId);
+          } else if (actionId === "menu_uso") {
+            await recordInboundCommercialIntent(db, channel as Json, sender, "interesse_geral", inboundEventId);
+          }
+          await handleMenuClick(db, channel as Json, sender, actionId, acct, inboundEventId);
         } else if (claimed && actionId.startsWith("plantio_")) {
           await handlePlantioClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed && actionId.startsWith("nutricao_")) {
@@ -3177,13 +3441,79 @@ async function handleMessenger(db: Db, p: Json) {
           "contact",
         );
       } else if (!actionId) {
-        await handleSocialSalesIntent(
+        const inferredReply = await inferSocialReplyFromRecentPrompt(
           db,
-          channel as Json,
+          String(channel.id),
           sender,
           text,
-          inboundEventId,
+          message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : undefined,
         );
+        const menuAction = inferSocialMenuAction(text);
+        const commercialIntent = classificarIntencaoComercial(text);
+        if (commercialIntent) {
+          await recordInboundCommercialIntent(
+            db, channel as Json, sender, commercialIntent, inboundEventId,
+          );
+        }
+        if (inferredReply) {
+          const claimed = await claimDelivery(
+            db,
+            socialPriceActionClaimKey(String(channel.id), inboundEventId, inferredReply),
+            "social-price-action",
+          );
+          if (claimed) {
+            await handleSocialPrecoClick(
+              db,
+              channel as Json,
+              sender,
+              inferredReply,
+              inboundEventId,
+            );
+          }
+        } else if (menuAction) {
+          const claimed = await claimDelivery(
+            db,
+            socialPriceActionClaimKey(String(channel.id), inboundEventId, menuAction),
+            "social-menu-action",
+          );
+          if (claimed) {
+            if (menuAction === "menu_preco") {
+              await recordInboundCommercialIntent(db, channel as Json, sender, "preco", inboundEventId);
+            } else if (menuAction === "menu_uso") {
+              await recordInboundCommercialIntent(db, channel as Json, sender, "interesse_geral", inboundEventId);
+            }
+            await handleMenuClick(db, channel as Json, sender, menuAction, acct, inboundEventId);
+          }
+        } else if (commercialIntent === "preco") {
+          await handleMenuClick(db, channel as Json, sender, "menu_preco", acct, inboundEventId);
+        } else if (commercialIntent === "uso") {
+          const use = usoPorResposta(text);
+          if (use) {
+            await handleSocialPrecoClick(
+              db,
+              channel as Json,
+              sender,
+              `uso_${use}`,
+              inboundEventId,
+            );
+          }
+        } else if (commercialIntent === "interesse_geral") {
+          await handleMenuClick(db, channel as Json, sender, "menu_uso", acct, inboundEventId);
+        } else if (commercialIntent === "duvida_tecnica") {
+          await handleHumanRequest(db, channel as Json, sender, "social", acct, {
+            tipo_pedido: "duvida_tecnica",
+            pergunta: text.slice(0, 400),
+            message_id: inboundEventId,
+          });
+        } else {
+          await handleSocialSalesIntent(
+            db,
+            channel as Json,
+            sender,
+            text,
+            inboundEventId,
+          );
+        }
       }
     }
   }

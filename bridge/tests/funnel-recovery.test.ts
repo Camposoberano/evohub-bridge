@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  canSendSilentFollowup,
   canAutoResume,
   rebasePausedSchedule,
   silentFollowupAt,
@@ -111,4 +112,22 @@ Deno.test("outcome 'open' nao impede o auto-resume; won e lost impedem", () => {
   assertEquals(canAutoResume({ ...base, outcome: null }), true);
   assertEquals(canAutoResume({ ...base, outcome: "won" }), false);
   assertEquals(canAutoResume({ ...base, outcome: "lost" }), false);
+});
+
+Deno.test("follow-up só sai sem resposta recente, pedido humano, responsável ou desfecho", () => {
+  const now = Date.parse("2026-10-05T18:00:00.000Z");
+  const base = {
+    now,
+    lastInboundAt: now - 13 * 60 * 60_000,
+    lastMainOutAt: now - 12 * 60 * 60_000,
+    outcome: "open",
+  };
+  assertEquals(canSendSilentFollowup(base), true);
+  assertEquals(canSendSilentFollowup({ ...base, assignee: "42" }), false);
+  assertEquals(canSendSilentFollowup({ ...base, assignee: "team:9" }), false);
+  assertEquals(canSendSilentFollowup({ ...base, humanRequested: true }), false);
+  assertEquals(canSendSilentFollowup({ ...base, outcome: "won" }), false);
+  assertEquals(canSendSilentFollowup({ ...base, outcome: "lost" }), false);
+  assertEquals(canSendSilentFollowup({ ...base, lastInboundAt: now - 11 * 60 * 60_000 }), false);
+  assertEquals(canSendSilentFollowup({ ...base, lastInboundAt: now - 73 * 60 * 60_000 }), false);
 });

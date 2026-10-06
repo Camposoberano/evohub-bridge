@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  detectarUsoComercial,
   isDuvidaTecnicaIntent,
+  isInteresseComercialIntent,
   isPlantioIntent,
   isPrecoIntent,
 } from "../shared/intent.ts";
@@ -70,4 +72,14 @@ Deno.test("as frases reais nao eram cobertas por isPlantioIntent", () => {
   assertEquals(isPlantioIntent("E pra quais animais esse mega sorgo serve??"), false);
   // contraprova: quando a palavra existe, plantio continua sendo o dono
   assertEquals(isPlantioIntent("como plantar o sorgo"), true);
+});
+
+Deno.test("interesse geral nao presume o uso", () => {
+  assertEquals(isInteresseComercialIntent("Tenho interesse, pode me explicar?"), true);
+  assertEquals(isInteresseComercialIntent("quanto custa?"), false);
+  assertEquals(isInteresseComercialIntent("qual o espacamento?"), false);
+  assertEquals(detectarUsoComercial("quero usar para silagem"), "silagem");
+  assertEquals(detectarUsoComercial("vou colocar no pastejo"), "pastejo");
+  assertEquals(detectarUsoComercial("outra finalidade"), "outro");
+  assertEquals(detectarUsoComercial("tenho interesse"), null);
 });

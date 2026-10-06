@@ -65,6 +65,7 @@ Deno.test("primeiro clique grava pediu_humano", async () => {
     chatwootConversationId: 2504,
     origem: "whatsapp",
     contato: "5519998887777",
+    contexto: { pacote: "10 kg (2 hectares)", origem_evento: "cotacao" },
   });
   assertEquals(r.registrado, true);
   assertEquals(estado.eventos.map((e) => e.event_type), ["pediu_humano"]);
@@ -73,6 +74,8 @@ Deno.test("primeiro clique grava pediu_humano", async () => {
   assertEquals(p.origem, "whatsapp");
   // o alerta sai por WhatsApp: leva só o fim do número, não o número inteiro
   assertEquals(p.contato, "…7777");
+  assertEquals(p.pacote, "10 kg (2 hectares)");
+  assertEquals(p.origem_evento, "cotacao");
 });
 
 Deno.test("clicar de novo na mesma janela não vira segundo alerta", async () => {
@@ -82,7 +85,7 @@ Deno.test("clicar de novo na mesma janela não vira segundo alerta", async () =>
     channelId: "ch",
     origem: "whatsapp",
   });
-  assertEquals(r.registrado, false);
+  assertEquals(r.registrado, true);
   assertEquals(r.motivo, "repetido");
   assertEquals(estado.eventos.length, 0);
 });

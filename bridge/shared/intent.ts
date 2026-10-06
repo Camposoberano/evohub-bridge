@@ -44,6 +44,30 @@ export function isDuvidaTecnicaIntent(text: string): boolean {
   return DUVIDA_TECNICA_RE.test(t);
 }
 
+const INTERESSE_COMERCIAL_RE =
+  /(\binteressad[oa]s?\b|\btenho\s+interesse\b|\bquero\s+(saber|conhecer|informac\w*|comprar|adquirir)\b|\bmais\s+informac\w*\b|\bfale\s+mais\b|\bme\s+explica\b|\bconhecer\s+melhor\b|\bme\s+manda\s+(informac\w*|material)\b)/;
+
+/** Sinal explícito de interesse geral, sem inferir produto, uso ou problema do produtor. */
+export function isInteresseComercialIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim() || PRECO_RE.test(t) || DUVIDA_TECNICA_RE.test(t)) return false;
+  return INTERESSE_COMERCIAL_RE.test(t);
+}
+
+export type UsoComercial = "silagem" | "pastejo" | "outro";
+
+/** Reconhece somente um uso explicitamente mencionado pelo produtor. */
+export function detectarUsoComercial(text: string): UsoComercial | null {
+  const t = fold(text ?? "");
+  if (!t.trim()) return null;
+  if (/\b(silagem|ensilagem|silo)\b/.test(t)) return "silagem";
+  if (/\b(pastejo|pasto|pastoreio|pastorear)\b/.test(t)) return "pastejo";
+  if (/\b(outro uso|outra finalidade|outra utilizacao|outro)\b/.test(t)) {
+    return "outro";
+  }
+  return null;
+}
+
 // Só dispara se a palavra "vídeo" (ou "video", "vídeos", "videos") aparecer na frase.
 const VIDEO_RE = /\bvideos?\b/;
 

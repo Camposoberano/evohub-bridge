@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|preco_|tam_|pag_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
+    /^(menu_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
       .test(value)
   ) {
     return value;
@@ -49,6 +49,10 @@ export function normalizeHybridMenuClick(
     [/\b(plantar|plantio)\b/, "menu_plantio"],
     [/\b(nutricao|bromatologia|laudo)\b/, "menu_nutricao"],
     [/\b(video|resultado|depoimento)\b/, "menu_depoimento"],
+    [/\b(silagem)\b/, "uso_silagem"],
+    [/\b(pastejo|pasto)\b/, "uso_pastejo"],
+    [/\b(outro uso|outra finalidade)\b/, "uso_outro"],
+    [/\b(uso|finalidade)\b/, "menu_uso"],
     [/\b(cicero|duvida|interesse|atendente)\b/, "menu_humano"],
     [/\bquero o material\b/, "menu_isca_silagem"],
     [/\bagora nao\b/, "menu_isca_nao_silagem"],
@@ -64,11 +68,21 @@ export function normalizeHybridButtonReply(
     .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
     .toLowerCase();
   const replies: Record<string, string> = {
+    "silagem": "uso_silagem",
+    "pastejo": "uso_pastejo",
+    "pasto": "uso_pastejo",
+    "outro": "uso_outro",
+    "outro uso": "uso_outro",
+    "outra finalidade": "uso_outro",
     "meio hectare": "tam_2kg",
     "1 hectare": "tam_4kg",
+    "1 hectare 4 kg": "tam_4kg",
     "2 hectares ou mais": "preco_area_maior",
     "2 hectares": "tam_10kg",
+    "2 hectares 10 kg": "tam_10kg",
+    "4 hectares": "tam_20kg",
     "4 hectares ou mais": "tam_20kg",
+    "4 hectares 20 kg": "tam_20kg",
     "quero garantir": "preco_comprar",
     "pagamento": "preco_pagamento",
     "outra area": "preco_tamanho",

@@ -9,6 +9,10 @@ import {
 } from "../shared/intent.ts";
 import { isAuthedCronOrUser } from "../shared/report-auth.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
+import {
+  summarizeFunilComercial,
+  type FunilComercialSummary,
+} from "../shared/funil-comercial-relatorio.ts";
 
 type Json = Record<string, unknown>;
 
@@ -49,7 +53,7 @@ export async function handle(req: Request): Promise<Response> {
   const fimUTC = new Date(new Date(inicioUTC).getTime() + 86400000).toISOString();
 
   const { data: msgs } = await db.from("messages")
-    .select("id,conversation_id,direction,msg_type,content,status,sent_at")
+    .select("id,conversation_id,direction,msg_type,content,status,sent_at,funnel,scheduled_message_id")
     .gte("sent_at", inicioUTC)
     .lt("sent_at", fimUTC)
     .order("sent_at", { ascending: true });
@@ -99,6 +103,44 @@ export async function handle(req: Request): Promise<Response> {
   );
   const enrolledSet = new Set(
     (seqRows ?? []).map((s: Json) => String(s.conversation_id)),
+  );
+
+  const { data: commercialEvents, error: commercialEventsError } = await db
+    .from("events").select("event_type,channel_id,received_at,payload")
+    .eq("source", "sales-funnel")
+    .gte("received_at", inicioUTC).lt("received_at", fimUTC)
+    .order("received_at", { ascending: true }).limit(5_000);
+  if (commercialEventsError) throw commercialEventsError;
+  const proofHistoryStart = new Date(
+    Date.parse(inicioUTC) - 30 * 24 * 60 * 60_000,
+  ).toISOString();
+  const { data: priorProofEvents, error: priorProofError } = await db
+    .from("events").select("event_type,channel_id,received_at,payload")
+    .eq("source", "sales-funnel").eq("event_type", "prova_enviada")
+    .gte("received_at", proofHistoryStart).lt("received_at", inicioUTC)
+    .limit(5_000);
+  if (priorProofError) throw priorProofError;
+  const commercialConversationIds = [...new Set(
+    (commercialEvents ?? []).map((event: Json) =>
+      String((event.payload as Json | undefined)?.conversation_id ?? "")
+    ).filter(Boolean),
+  )];
+  const commercialOutcomes = commercialConversationIds.length
+    ? await consultaEmLotes<Json>(
+      commercialConversationIds,
+      (lote) => db.from("conversations")
+        .select("id,outcome,outcome_value_cents").in("id", lote),
+    )
+    : [];
+  const funnelMessagesWithoutScheduleLink = (msgs ?? []).filter((message: Json) =>
+    message.direction === "out" && Boolean(message.funnel) &&
+    !message.scheduled_message_id
+  ).length;
+  const commercialSummary = summarizeFunilComercial(
+    (commercialEvents ?? []) as Json[],
+    commercialOutcomes,
+    funnelMessagesWithoutScheduleLink,
+    [...((priorProofEvents ?? []) as Json[]), ...((commercialEvents ?? []) as Json[])],
   );
 
   const convMap = new Map<string, Json>();
@@ -296,6 +338,7 @@ export async function handle(req: Request): Promise<Response> {
     botEntregouPreco,
     intentPreco, intentVideo, intentPlantio, intentNutricao,
     funilEnroll, funilPedidoPreco, funilPagamento,
+    commercial: commercialSummary,
     semResposta, msgsIgnoradas, reacoesNegativas, perguntasSemIntent,
     conversas, recomendacoes,
   });
@@ -435,6 +478,7 @@ interface ReportData {
   totalIn: number; totalOut: number; totalFailed: number;
   intentPreco: number; intentVideo: number; intentPlantio: number; intentNutricao: number;
   funilEnroll: number; funilPedidoPreco: number; funilPagamento: number; botEntregouPreco: number;
+  commercial: FunilComercialSummary;
   semResposta: { conv: string; contato: string; msg: string; ts: string }[];
   msgsIgnoradas: { conv: string; contato: string; msg: string; ts: string }[];
   reacoesNegativas: { conv: string; contato: string; msg: string; contexto: string }[];
@@ -465,6 +509,15 @@ function renderHTML(data: string, r: ReportData): string {
       <div class="funil-step"><div class="funil-num">${r.funilPagamento}</div><div class="funil-label">Pagamento</div></div>
     </div>
   `;
+  const commercialChannelsHTML = r.commercial.byChannel.length
+    ? r.commercial.byChannel.map((channel) => `
+      <tr><td>${esc(channel.channelId)}</td><td>${channel.intents}</td><td>${channel.uses}</td><td>${channel.proofs}</td><td>${channel.responsesAfterProof}</td><td>${channel.quotes}</td><td>${channel.humanRequests}</td><td>${channel.humanResponses}</td></tr>
+    `).join("")
+    : `<tr><td colspan="8">Nenhum evento comercial registrado neste dia.</td></tr>`;
+  const revenueLabel = new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+  }).format(r.commercial.revenueCents / 100);
 
   const semRespostaHTML = r.semResposta.length === 0
     ? `<p style="color:#27ae60">✅ Todas as conversas tiveram resposta do bot</p>`
@@ -573,6 +626,27 @@ function renderHTML(data: string, r: ReportData): string {
 </div>
 
 <div class="section">
+  <h2>🧭 Jornada Comercial (eventos atribuídos)</h2>
+  <div class="intents">
+    <div class="intent"><div class="num">${r.commercial.intents}</div><div class="label">Intenções identificadas</div></div>
+    <div class="intent"><div class="num">${r.commercial.uses}</div><div class="label">Finalidade informada</div></div>
+    <div class="intent"><div class="num">${r.commercial.proofs}</div><div class="label">Provas enviadas</div></div>
+    <div class="intent"><div class="num">${r.commercial.responsesAfterProof}</div><div class="label">Intenção comercial após prova</div></div>
+    <div class="intent"><div class="num">${r.commercial.quotes}</div><div class="label">Cotações solicitadas</div></div>
+    <div class="intent"><div class="num">${r.commercial.humanRequests}</div><div class="label">Pedidos de atendimento</div></div>
+    <div class="intent"><div class="num">${r.commercial.humanResponses}</div><div class="label">Respostas humanas observadas</div></div>
+    <div class="intent"><div class="num">${r.commercial.firstHumanResponsesAfterQuote}</div><div class="label">1ª resposta humana após cotação</div></div>
+    <div class="intent"><div class="num">${r.commercial.won}</div><div class="label">Vendas confirmadas</div></div>
+    <div class="intent"><div class="num">${r.commercial.lost}</div><div class="label">Perdidas</div></div>
+    <div class="intent"><div class="num">${r.commercial.open}</div><div class="label">Em aberto com evento comercial</div></div>
+    <div class="intent"><div class="num">${esc(revenueLabel)}</div><div class="label">Receita confirmada</div></div>
+  </div>
+  <p style="font-size:.82rem;color:#666;margin:12px 0">Atribuição incompleta: ${r.commercial.attributionIncomplete} evento(s) sem conversa, canal ou ID de mensagem. Mensagens de funil sem vínculo à fila: ${r.commercial.funnelMessagesWithoutScheduleLink}.</p>
+  <h3 style="font-size:.9rem;margin:12px 0 8px">Por canal (ID interno)</h3>
+  <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:.82rem"><thead><tr><th>Canal</th><th>Intenções</th><th>Usos</th><th>Provas</th><th>Intenção após prova</th><th>Cotações</th><th>Atendimentos</th><th>Respostas humanas</th></tr></thead><tbody>${commercialChannelsHTML}</tbody></table></div>
+</div>
+
+<div class="section">
   <h2>🎯 Intents Disparadas</h2>
   <div class="intents">
     <div class="intent"><div class="num">${r.intentPreco}</div><div class="label">💰 Preço</div></div>
@@ -612,6 +686,7 @@ function exportar() {
     txt += "  " + c.querySelector('.num').textContent + " " + c.querySelector('.label').textContent + "\\n";
   });
   txt += "\\nFUNIL: Entraram: ${r.funilEnroll} → Preço: ${r.funilPedidoPreco} → Pagamento: ${r.funilPagamento}\\n";
+  txt += "\\nJORNADA COMERCIAL: Intenções: ${r.commercial.intents} | Finalidades: ${r.commercial.uses} | Provas: ${r.commercial.proofs} | Intenções após prova: ${r.commercial.responsesAfterProof} | Cotações: ${r.commercial.quotes} | Pedidos humanos: ${r.commercial.humanRequests} | Respostas humanas: ${r.commercial.humanResponses} | Vendas: ${r.commercial.won} | Receita: ${revenueLabel}\\n";
   txt += "\\nSTATUS: Converteu: ${countByStatus.converteu} | Engajou: ${countByStatus.engajou} | Sem interação: ${countByStatus.ignorou} | Perdeu: ${countByStatus.perdeu}\\n";
   txt += "\\nRECOMENDAÇÕES:\\n";
   recs.forEach(r => {

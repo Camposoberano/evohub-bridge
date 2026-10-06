@@ -34,6 +34,7 @@ import {
   isMetaWindowError,
   metaDeliveryStatus,
 } from "../shared/meta-errors.ts";
+import { readConversationAssigneeUpdate } from "../shared/chatwoot-assignee.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -76,6 +77,12 @@ export async function handle(req: Request): Promise<Response> {
     });
   });
 
+  if (eventName === "conversation_updated") {
+    deferBackground(async () => {
+      await syncConversationAssignee(db, p);
+    });
+  }
+
   // Envia em BACKGROUND e responde 200 na hora — senão o Chatwoot marca "Failed to send"
   // por timeout do webhook quando o envio (mídia/áudio) demora. O envio segue após o 200.
   if (eventName === "message_created" && isOutgoing(p) && !p.private) {
@@ -89,6 +96,23 @@ export async function handle(req: Request): Promise<Response> {
     });
   }
   return new Response("ok", { status: 200 });
+}
+
+async function syncConversationAssignee(db: Db, payload: Json): Promise<void> {
+  const update = readConversationAssigneeUpdate(payload);
+  if (!update) return;
+  const chatwootConversationId = Number(update.conversationId);
+  const { data: channel, error: channelError } = await db.from("channels")
+    .select("id").eq("chatwoot_inbox_id", Number(update.inboxId))
+    .maybeSingle();
+  if (channelError) throw channelError;
+  if (!channel?.id) return;
+
+  const { error } = await db.from("conversations").update({
+    assignee: update.assignee,
+  }).eq("channel_id", channel.id)
+    .eq("chatwoot_conversation_id", chatwootConversationId);
+  if (error) throw error;
 }
 
 function isOutgoing(p: Json): boolean {
@@ -574,6 +598,28 @@ export async function handleOutgoing(db: Db, p: Json) {
     );
   } else {
     await db.from("messages").insert(messageRow);
+  }
+
+  const sender = (p.sender ?? {}) as Json;
+  const contentAttributes = (p.content_attributes ?? {}) as Json;
+  if (
+    entregouAlgo && conv?.id && sender.type === "user" && p.private !== true &&
+    contentAttributes.evohub_generated !== true
+  ) {
+    const { error: humanResponseError } = await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "human_response",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conv.id,
+        message_id: cwMsgId ? String(cwMsgId) : null,
+        origin: "humano",
+        chatwoot_message_id: cwMsgId ?? null,
+      },
+    });
+    if (humanResponseError) {
+      console.warn("sales-funnel human response:", String(humanResponseError).slice(0, 120));
+    }
   }
 
   // Entrega parcial merece aviso próprio: dizer "falhou" faria o atendente reenviar tudo e

@@ -4,12 +4,17 @@ import { admin, claimDelivery } from "./supabase.ts";
 import { env } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
+import { canSendSilentFollowup } from "./funnel-recovery.ts";
 import { bloqueiosPorConversa, motivoDoBloqueio } from "./gate-comercial.ts";
+import {
+  brtMinuteOfDay,
+  isWithinFunnelSendHours,
+  nextFunnelSendAt,
+} from "./business-hours.ts";
 
 type Json = Record<string, unknown>;
 
 let running = false;
-const BRT_OFFSET_MINUTES = 180;
 const WINDOW_HOLD_FLAG = "__awaiting_meta_window";
 
 /** Reabre somente peças retidas pela janela Meta após nova entrada do cliente. */
@@ -52,8 +57,7 @@ export async function resumeWindowHeldMessages(
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
     const date = new Date(value);
-    const brt = new Date(date.getTime() - BRT_OFFSET_MINUTES * 60_000);
-    return brt.getUTCHours() * 60 + brt.getUTCMinutes();
+    return brtMinuteOfDay(date.getTime());
   });
   if (!minutes.length) return 0;
   const min = Math.min(...minutes);
@@ -150,6 +154,10 @@ export async function pumpFunnelQueue(
   if (running) return { found: 0, sent: 0, failed: 0, held: 0 };
   running = true;
   try {
+    // O limite vale no momento do envio, não só no horário originalmente agendado.
+    if (!isWithinFunnelSendHours()) {
+      return { found: 0, sent: 0, failed: 0, held: 0 };
+    }
     const db = admin();
     await normalizeBusinessQueue(db);
     const now = new Date().toISOString();
@@ -192,6 +200,72 @@ export async function pumpFunnelQueue(
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
       if (!id) continue;
+
+      const conversationId = String(row.conversation_id ?? "");
+      const funnel = String(row.funnel ?? "mega-sorgo");
+      if (funnel === "mega-sorgo") {
+        const { data: sequence, error: sequenceError } = await db.from(
+          "sales_sequences",
+        ).select("status")
+          .eq("conversation_id", conversationId).eq("funnel", funnel)
+          .maybeSingle();
+        if (sequenceError) throw sequenceError;
+        if (!sequence || sequence.status === "replied") {
+          const { error: cancelError } = await db.from("scheduled_messages")
+            .update({ status: "cancelled" }).eq("id", id)
+            .eq("status", "pending");
+          if (cancelError) throw cancelError;
+          cancelled++;
+          continue;
+        }
+      } else if (funnel === "mega-sorgo-followup") {
+        const { data: sequence, error: sequenceError } = await db.from(
+          "sales_sequences",
+        ).select("last_sent_at")
+          .eq("conversation_id", conversationId).eq("funnel", "mega-sorgo")
+          .maybeSingle();
+        if (sequenceError) throw sequenceError;
+        const { data: inbound, error: inboundError } = await db.from("messages")
+          .select("sent_at").eq("conversation_id", conversationId)
+          .eq("direction", "in").order("sent_at", { ascending: false })
+          .limit(1).maybeSingle();
+        if (inboundError) throw inboundError;
+        const { data: conversation, error: conversationError } = await db
+          .from("conversations").select("assignee,outcome")
+          .eq("id", conversationId).maybeSingle();
+        if (conversationError) throw conversationError;
+        const lastIn = Date.parse(String(inbound?.sent_at ?? ""));
+        const lastMainOut = Date.parse(String(sequence?.last_sent_at ?? ""));
+        if (
+          !sequence || !conversation ||
+          !canSendSilentFollowup({
+            now: Date.now(),
+            lastInboundAt: Number.isFinite(lastIn) ? lastIn : null,
+            lastMainOutAt: lastMainOut,
+            assignee: conversation.assignee,
+            outcome: String(conversation.outcome ?? "open"),
+          })
+        ) {
+          const { error: cancelError } = await db.from("scheduled_messages")
+            .update({ status: "cancelled" }).eq("id", id)
+            .eq("status", "pending");
+          if (cancelError) throw cancelError;
+          cancelled++;
+          continue;
+        }
+      }
+
+      // A rodada pode atravessar o horário de corte enquanto envia um lote. Reagenda
+      // cada peça restante para a próxima abertura, sem marcar como erro ou consumi-la.
+      const dispatchAt = Date.now();
+      if (!isWithinFunnelSendHours(dispatchAt)) {
+        const nextSendAt = new Date(nextFunnelSendAt(dispatchAt)).toISOString();
+        const { error: deferError } = await db.from("scheduled_messages")
+          .update({ send_at: nextSendAt }).eq("id", id).eq("status", "pending");
+        if (deferError) throw deferError;
+        held++;
+        continue;
+      }
 
       const bloqueio = closed.get(String(row.conversation_id ?? ""));
       if (bloqueio) {
@@ -253,6 +327,13 @@ export async function pumpFunnelQueue(
           .eq("funnel", row.funnel ?? "mega-sorgo")
           .in("status", ["running", "paused"]);
         sent++;
+      } else if (
+        body.deferred_business_window === true
+      ) {
+        // send-outbound também é chamado pelo n8n. O endpoint persiste o novo horário;
+        // liberamos o claim para a fila poder tentar novamente na próxima abertura.
+        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        held++;
       } else if (
         body.awaiting_window === true ||
         body.blocked === "janela-fechada" ||

@@ -18,15 +18,23 @@ import {
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
 import {
+  classificarIntencaoComercial,
+  extrairAreaHectares,
+  isAreaAcimaDosPacotes,
+  usoPorResposta,
+} from "../shared/funil-comercial.ts";
+import {
   inferSocialDetailAction,
   inferSocialMenuAction,
 } from "../shared/social-sales.ts";
 import {
   handleMenuClick,
+  handleHumanRequest,
   handleNutricaoClick,
   handlePlantioClick,
   handleSocialPrecoClick,
   handleSocialSalesIntent,
+  recordInboundCommercialIntent,
 } from "./hub-webhook.ts";
 
 type Json = Record<string, unknown>;
@@ -401,34 +409,29 @@ async function syncInbound(
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
-            if (menuAction === "menu_humano") {
-              await handleSocialSalesIntent(
+            const claimed = await claimDelivery(
+              db,
+              socialPriceActionClaimKey(
+                channel.id as string,
+                eventId,
+                menuAction,
+              ),
+              "social-menu-action",
+            );
+            if (claimed) {
+              if (menuAction === "menu_preco") {
+                await recordInboundCommercialIntent(db, channel, contactId, "preco", eventId);
+              } else if (menuAction === "menu_uso") {
+                await recordInboundCommercialIntent(db, channel, contactId, "interesse_geral", eventId);
+              }
+              await handleMenuClick(
                 db,
                 channel,
                 contactId,
-                content,
+                menuAction,
+                acct,
                 eventId,
-                "contact",
               );
-            } else {
-              const claimed = await claimDelivery(
-                db,
-                socialPriceActionClaimKey(
-                  channel.id as string,
-                  eventId,
-                  menuAction,
-                ),
-                "social-menu-action",
-              );
-              if (claimed) {
-                await handleMenuClick(
-                  db,
-                  channel,
-                  contactId,
-                  menuAction,
-                  acct,
-                );
-              }
             }
           } catch (error) {
             console.error(
@@ -466,14 +469,49 @@ async function syncInbound(
           }
         } else {
           try {
-            await handleSocialSalesIntent(
-              db,
-              channel,
-              contactId,
-              content,
-              metaMessageId ??
-                `sync-${contactId}-${String(message.created_time ?? "")}`,
-            );
+            const eventId = metaMessageId ??
+              `sync-${contactId}-${String(message.created_time ?? "")}`;
+            const intent = classificarIntencaoComercial(content);
+            if (intent) {
+              await recordInboundCommercialIntent(
+                db,
+                channel,
+                contactId,
+                intent,
+                eventId,
+              );
+              const action = intent === "preco"
+                ? (isAreaAcimaDosPacotes(content)
+                  ? `preco_area_livre:${extrairAreaHectares(content) ?? ""}`
+                  : "menu_preco")
+                : intent === "uso"
+                ? `uso_${usoPorResposta(content) ?? ""}`
+                : intent === "interesse_geral"
+                ? "menu_uso"
+                : "duvida_tecnica";
+              const claimed = await claimDelivery(
+                db,
+                socialPriceActionClaimKey(channel.id as string, eventId, action),
+                "social-commercial-intent",
+              );
+              if (claimed) {
+                if (action.startsWith("preco_area_livre:")) {
+                  await handleSocialPrecoClick(db, channel, contactId, action, eventId);
+                } else if (intent === "preco" || intent === "interesse_geral") {
+                  await handleMenuClick(db, channel, contactId, action, acct, eventId);
+                } else if (intent === "uso") {
+                  await handleSocialPrecoClick(db, channel, contactId, action, eventId);
+                } else {
+                  await handleHumanRequest(db, channel, contactId, "social", acct, {
+                    tipo_pedido: "duvida_tecnica",
+                    pergunta: content.slice(0, 400),
+                    message_id: eventId,
+                  });
+                }
+              }
+            } else {
+              await handleSocialSalesIntent(db, channel, contactId, content, eventId);
+            }
           } catch (error) {
             console.error(
               "sync-facebook intenção comercial falhou:",

@@ -22,6 +22,7 @@ import {
   isContactExcludedFromAutomation,
 } from "../shared/lead-block.ts";
 import { type Isca, iscasAtivas } from "../shared/iscas.ts";
+import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
@@ -82,19 +83,13 @@ const MENU_ROWS: Botao[] = [
   { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
 ];
 
-function closingList(gancho: { text: string; row: Botao } | null): Peca {
-  const sections = gancho
-    ? [{ title: "Continuar", rows: [gancho.row] }, {
-      title: "Tire sua dúvida",
-      rows: MENU_ROWS,
-    }]
-    : [{ title: "Tire sua dúvida", rows: MENU_ROWS }];
+function closingList(): Peca {
   return {
     offset: 0,
     kind: "list",
-    text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌",
+    text: "O senhor quer saber mais sobre o quê? 🙌",
     buttonLabel: "Ver opções",
-    sections,
+    sections: [{ title: "Tire sua dúvida", rows: MENU_ROWS }],
   };
 }
 
@@ -152,53 +147,40 @@ function fase1(): Peca[] {
     },
     {
       offset: 140,
-      kind: "interactive",
-      text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
-      buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, {
-        id: "f1_olhando",
-        title: "Só olhando 👀",
-      }],
-      headerSlot: "image",
+      kind: "media",
+      mediaType: "image",
+      slot: "image",
+      caption:
+        "Este é o Mega Sorgo Santa Elisa. Ao final desta etapa, escolha no menu se quer ver preço, plantio, informação nutricional, vídeos ou falar com o Cícero.",
     },
     { offset: 210, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 280, kind: "media", mediaType: "audio", slot: "audio2" },
-    // imagem solta (slot "image") removida 30/06: a imagem já vai junto do botão de abertura
-    // (offset 140, headerSlot "image"). Padrão = botão-com-imagem, nunca imagem solta.
+    // A imagem de apresentação segue como peça própria; perguntas com botões sem destino
+    // foram retiradas até existir tratamento de respostas para esta jornada agendada.
     { offset: 350, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList({
-        text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊",
-        row: { id: "f1_continuar", title: "📈 Quanto produz?" },
-      }) as Peca,
+      ...closingList(),
       offset: 420,
     },
   ];
 }
 
-// Ordem padrão (combinada 29/06, corrigida 29/06 2): imagem e botão são UMA mensagem só
-// (header_image no interactive) -> áudio1 -> áudio2 -> vídeo -> lista de fechamento (sempre
-// por último). Nunca manda imagem solta separada do botão de abertura.
+// Fase 2: imagem com legenda -> áudios -> vídeo -> menu final com ações que têm handler.
 function fase2(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "interactive",
-      text:
-        "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
-      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, {
-        id: "f2_corte",
-        title: "Corte 🥩",
-      }, { id: "f2_ambos", title: "Os dois 🐄" }],
-      headerSlot: "image",
+      kind: "media",
+      mediaType: "image",
+      slot: "image",
+      caption:
+        "O sorgo forrageiro pode ser uma alternativa para silagem. Produção e qualidade variam conforme o híbrido, a região, a época e o manejo; compare a ficha técnica e os resultados de campo antes de estimar sua área.",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList({
-        text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽",
-        row: { id: "f2_continuar", title: "🌽 Quero o segredo" },
-      }) as Peca,
+      ...closingList(),
       offset: 280,
     },
   ];
@@ -208,24 +190,17 @@ function fase3(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "interactive",
-      text:
-        "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
-      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, {
-        id: "f3_capim",
-        title: "Capim 🌿",
-      }, { id: "f3_nao", title: "Não planto 🤷" }],
-      headerSlot: "image",
+      kind: "media",
+      mediaType: "image",
+      slot: "image",
+      caption:
+        "Alguns materiais de sorgo podem rebrotar após o corte. O volume e a qualidade do segundo corte variam conforme o híbrido, a chuva e o manejo; não são duas colheitas garantidas iguais.",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList({
-        text:
-          "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪",
-        row: { id: "f3_continuar", title: "💪 Quero ver" },
-      }) as Peca,
+      ...closingList(),
       offset: 280,
     },
   ];
@@ -233,18 +208,13 @@ function fase3(): Peca[] {
 
 function fase4(): Peca[] {
   return [
-    // abertura = botão-com-imagem (igual fases 2/3): os 2 textos de praga/seca foram fundidos
-    // no corpo do interactive -> uma mensagem só, abrindo com a imagem (header_image).
     {
       offset: 0,
-      kind: "interactive",
-      text:
-        "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
-      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, {
-        id: "f4_nunca",
-        title: "Nunca, graças 🙏",
-      }],
-      headerSlot: "image",
+      kind: "media",
+      mediaType: "image",
+      slot: "image",
+      caption:
+        "O sorgo pode ter vantagem em condições de menor disponibilidade de água, mas seca e pragas ainda podem afetar a lavoura. O resultado depende do híbrido, da região e do manejo.",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
@@ -257,30 +227,22 @@ function fase4(): Peca[] {
     },
     { offset: 280, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList({
-        text: "Quer *garantir o seu* pra safra 2027? 🚜",
-        row: { id: "f4_continuar", title: "🚜 Quero garantir" },
-      }) as Peca,
+      ...closingList(),
       offset: 350,
     },
   ];
 }
 
-// Fase 5 — oferta + LOGÍSTICA + entrada de 2 kg.
-// A logística (depósitos, nota fiscal, rastreio, frete) é quebra de objeção pesada pra quem
-// compra semente pela internet e não existia em nenhuma fase. A oferta de 2 kg baixa a
-// barreira: "testar antes de ampliar" converte melhor que "condição especial" genérica.
-// O gancho final pede CIDADE/CEP de propósito — a resposta dispara isFechamentoIntent
-// (shared/intent.ts), que pausa o funil e atribui a conversa pro atendente.
+// Fase 5 — oferta + LOGÍSTICA + cotação sem preço automático.
+// Endereço/CEP enviados livremente são detectados por isFechamentoIntent (shared/intent.ts),
+// que pausa o funil e encaminha para atendimento.
 function fase5(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "interactive",
+      kind: "text",
       text:
-        "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
-      buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }],
-      headerSlot: "image",
+        "Se quiser consultar os pacotes e a condição vigente, use a opção *Preço* no menu ao final. A disponibilidade é confirmada antes de fechar o pedido.",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
@@ -303,32 +265,56 @@ function fase5(): Peca[] {
       mediaDay: 0,
     },
     { offset: 350, kind: "media", mediaType: "video", slot: "video" },
-    // Oferta de entrada COM a foto do saco de 2 kg em vez de texto solto -- o produtor vê o
-    // que vai receber. Legenda no lugar do texto: é a mesma mensagem, uma peça só.
     {
       offset: 420,
-      kind: "media",
-      mediaType: "image",
-      slot: "preco_2kg",
-      mediaDay: 0,
-      caption:
-        "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança.",
+      kind: "text",
+      text:
+        "🚚 O frete é grátis e o desconto é progressivo por quantidade: pode chegar a 30% em pedidos acima de 100 kg.\n\n📦 O valor exato depende do volume. Toque em *Preço* no menu e diga a quantidade ou a área que pretende plantar para receber a cotação.",
     },
     // Oferta da isca (imagem + Sim/Não). Antes do fechamento porque a última peça precisa
     // ser a lista que pede o CEP. Sem isca cadastrada, some e o fechamento volta pra 490.
     ...(iscasAtivas().length ? [ofertaIsca(iscasAtivas()[0], 490)] : []),
     {
-      ...closingList({
-        text:
-          "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
-        row: { id: "f5_local", title: "📍 Vou informar" },
-      }) as Peca,
+      ...closingList(),
       offset: iscasAtivas().length ? 560 : 490,
     },
   ];
 }
 
-export const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
+function faseComercialV2(): Peca[] {
+  return [
+    {
+      offset: 0,
+      kind: "text",
+      text: "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
+    },
+    {
+      offset: 70,
+      kind: "list",
+      text: "Como posso ajudar?",
+      buttonLabel: "Escolher assunto",
+      sections: [{
+        title: "Atendimento",
+        rows: [
+          { id: "menu_preco", title: "Consultar opções" },
+          { id: "menu_uso", title: "Escolher finalidade" },
+          { id: "menu_humano", title: "Falar com Cícero" },
+        ],
+      }],
+    },
+  ];
+}
+
+// FASES representa a jornada usada em novas inscrições. A antiga sequência longa permanece
+// exportada apenas para leitura/teste de filas históricas; nenhum reenvio é feito aqui.
+export const FASES_LEGADAS: (() => Peca[])[] = [
+  fase1,
+  fase2,
+  fase3,
+  fase4,
+  fase5,
+];
+export const FASES: (() => Peca[])[] = [faseComercialV2];
 
 // calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
 // fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
@@ -522,6 +508,19 @@ export async function handle(req: Request): Promise<Response> {
   const { error } = await db.from("scheduled_messages").insert(rows);
   if (error) return json({ error: error.message }, 500);
 
+  const { error: versionEventError } = await db.from("events").insert({
+    source: "sales-funnel",
+    event_type: "commercial_funnel_enrolled_v2",
+    payload: {
+      conversation_id: conv.id,
+      chatwoot_conversation_id: cwConvId,
+      version: 2,
+    },
+  });
+  if (versionEventError) {
+    console.warn("funil v2: falha ao registrar versão:", versionEventError.message);
+  }
+
   return json({ ok: true, enfileiradas: rows.length });
 }
 
@@ -584,6 +583,8 @@ export async function autoEnrollFunil(
   content: string,
   fromAd = false,
 ): Promise<void> {
+  // Um pedido já claro deve ir para sua resposta imediata; não deve ganhar uma régua paralela.
+  if (classificarIntencaoComercial(content)) return;
   // A mensagem pré-preenchida do anúncio e o referral da Meta são sinais
   // suficientes mesmo sem configuração adicional no ambiente.
   if (fromAd || isDefaultAdMessage(content)) {

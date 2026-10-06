@@ -53,7 +53,7 @@ const ENTREGAVEIS = new Set([
 ]);
 
 const TITULOS: Record<string, string> = {
-  pediu_humano: "Cliente pediu falar com o Cícero (funil pausado, esperando atendente)",
+  pediu_humano: "Cliente pediu atendimento/cotação do Cícero (funil pausado, aguardando resposta)",
   catchup_degradado: "Varredura de entrada da uazapi degradada (mensagem perdida pode não ser recuperada)",
   inbound_recovered: "Mensagem de cliente recuperada fora do webhook (responder no Chatwoot)",
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",

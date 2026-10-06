@@ -1,7 +1,98 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> Documento de estado do projeto. Lê isto antes de mexer em qualquer coisa.
-> Última atualização: 2026-07-09 14:00
+> **Documento de estado do projeto — atualizado em 06/10/2026 (America/Fortaleza).** Leia esta seção antes de retomar. As notas abaixo de “Contexto histórico” são registros antigos e podem estar desatualizadas.
+
+## Estado atual — 06/10/2026
+
+### Análise comercial salva — 05/10/2026
+
+- A análise histórica dos envios e das conversas foi registrada em `.memoria/handoff.md` e no relatório local de funis. O corte é de 19/09 a 04/10 BRT; não representa uma consulta ao vivo de 05/10.
+- Principais pontos salvos: excesso de repetição dos mesmos argumentos, necessidade de qualificar por uso/área/região, prova técnica condicionada à ficha e ao manejo, CTA curto após cada peça e revisão individual dos contatos que terminaram falando por último.
+- O novo seletor de área/preparo continua local e não foi publicado. Não houve envio, escrita no banco ou retomada de campanha nesta análise.
+- A especificação aprovada e o plano executado localmente estão em `docs/superpowers/specs/2026-10-05-funil-comercial-ramificado-design.md` e `docs/superpowers/plans/2026-10-05-funil-comercial-ramificado.md`. A nova entrada usa abertura curta; resposta do cliente interrompe o restante promocional; WhatsApp, Instagram e Facebook convergem para a mesma política de pacote, área e cotação.
+
+### Implementação local do funil ramificado — 05/10/2026
+
+- O pedido de preço abre a seleção sem preço numérico. 1 ha corresponde a 4 kg, 2 ha a 10 kg e 4 ha a 20 kg; área acima de 4 ha é encaminhada como cotação livre. Texto informa frete grátis e desconto progressivo de até 30% somente acima de 100 kg.
+- Interesse geral pergunta a finalidade. Só envia prova se houver slot dedicado ativo com URL segura, legenda e tipo de mídia; sem prova, responde com texto curto e segue para o seletor. O fluxo não afirma que o contato assistiu ao material.
+- Dúvida técnica e pedido de cotação são registrados para atendimento; confirmações ao cliente dependem do registro. Eventos associam intenção, uso, pacote, prova, cotação, encaminhamento humano, resposta humana e resultado disponível.
+- Novas entradas usam uma régua curta. Uma resposta cancela as peças promocionais pendentes e impede retomada da régua; a versão nova não entra na cadeia longa de recuperação. A 6836 continua pausada e suas filas não foram alteradas.
+- Verificações locais: 67 testes focados passaram; `deno check --node-modules-dir=none bridge/server.ts` e `git diff --check` passaram. A atribuição ativa do Chatwoot também bloqueia o único follow-up. Sem envio real, escrita operacional no banco, reativação de campanha, reinício de serviço ou deploy.
+- Retomar pela revisão do diff local e, em etapa separada, configurar slots de mídia aprovados. Publicação só após decisão explícita e revisão final de alegações/mídia; não selecionar prova agronômica no escuro.
+- Matriz de seleção preparada em `ops/matriz-aprovacao-midias-funil-2026-10-05.md`: nenhuma prova técnica foi liberada com o snapshot; há duas candidatas institucionais, e as artes de preço/alegações seguem bloqueadas ou aguardando validação. Nenhuma alteração no catálogo ao vivo.
+- Cards v2 em `ops/midias-rascunho-funil-2026-10-06/` aprovados visualmente pelo usuário em 06/10/2026: 2 kg para até 0,5 ha com faixa vermelha “OPÇÃO TESTE”; 4 kg para até 1 ha; 10 kg para 2 ha; 20 kg para 4 ha. CTA “Dúvidas ou quer finalizar? Fale com a gente.” Preço fica na mensagem, fora da arte. JPEGs 1080 × 1080, ~256–265 KB; PNGs originais preservados. Catálogo ao vivo não consultado/alterado; sem upload, associação a slot ou ativação.
+
+### Ajuste local do seletor de pacote — 05/10/2026
+
+- WhatsApp, Instagram e Facebook apresentam os botões `1 hectare`, `2 hectares` e `4 hectares`, ligados a 4 kg, 10 kg e 20 kg, nessa ordem; o texto de apoio mostra a correspondência e não revela preços.
+- Rótulos completos dos botões e títulos antigos ainda usados em conversas abertas são reconhecidos pelos handlers; áreas acima de 4 hectares seguem para cotação em texto.
+- Alteração local em `bridge/handlers/hub-webhook.ts`, `bridge/shared/hybrid-menu.ts` e `bridge/shared/social-funnel.ts`. Não foi feito deploy, chamada ao banco ou teste nesta alteração.
+
+### Publicação e saúde
+
+- Correção publicada no `master`: commit `ba0b19ebc37559e70c3de0d114e8347c16160d32` (`ba0b19e`). Deploy Coolify `rvci4mj4qjuiuks2kc13t4di` terminou em **Success**.
+- Container ativo `f82026dc279e`; imagem `m8qf6ru2x75gukzozpsrssrm:ba0b19ebc37559e70c3de0d114e8347c16160d32`.
+- `/health` e `/version` responderam HTTP 200. Build identificado: `2026-10-02-funnel-no-duplicate-media`.
+- Correção adicional publicada no `master`: `2985a62` (`fix: reconcile provider media echoes`) e `6f4fcd7` (`chore: identify provider echo dedup build`). Coolify concluiu ambos os deploys: `dbhtrp3qerr2pnkguqlzivsr` e `8xxlasgwqmuoroyefk0mmcur`, status **Success**.
+- Container ativo após o último deploy: `eb7d6fcfdca2`; imagem `m8qf6ru2x75gukzozpsrssrm:6f4fcd7c3b8b831465ae7e24fb8adca8a6550160`. `/health` retornou `ok`; `/version` identificou `2026-10-02-provider-echo-canonical-dedup` e o recurso `provider-echo-canonical-dedup`.
+- Na correção de eco, `deno check bridge/server.ts` e `git diff --check` passaram. Não foi executada a suíte de testes nesta etapa.
+- 16 testes locais passaram; `deno check bridge/server.ts` e `git diff --check` passaram. Os testes usaram `--no-check` devido à dependência `npm:@types/node` ausente no cache local; o bridge foi verificado separadamente.
+- Estado da publicação registrado em [docs/HANDOFF-OPERACAO-EMBRAPA-E-FUNIL-2026-10-02.md](docs/HANDOFF-OPERACAO-EMBRAPA-E-FUNIL-2026-10-02.md); evidência visual em [docs/deploy-duplicacao-3219-2026-10-02.png](docs/deploy-duplicacao-3219-2026-10-02.png). Os arquivos sob `docs/` são ignorados pelo `.gitignore`, mas permanecem salvos localmente.
+
+### Repetição de vídeos — conversa 3219
+
+- Na fase 03 do funil `mega-sorgo`, a UAZAPI demorou mais de 45 segundos para confirmar o vídeo. O código antigo fazia fallback para a rota oficial; o retorno desse envio pelo Chatwoot podia ser tratado como nova mensagem e enviado outra vez.
+- O histórico tem quatro linhas de vídeo, mas dois pares usam IDs equivalentes do provedor. Não afirmar que foram quatro entregas físicas distintas apenas pelas linhas no banco.
+- Correção: timeout, erro de transporte, HTTP 408/5xx e resposta ilegível passam a estado de entrega incerta e não fazem fallback automático; um claim durável bloqueia a repetição da peça após o TTL normal de 2 minutos; saída registrada no Chatwoot leva `content_attributes.bridge_already_sent` e webhook/polling ignoram o eco.
+- O Chatwoot preservou o marcador em uma nota privada de auditoria na conversa 3219 (ID 131448); nada foi enviado ao cliente nesse teste. A demora da UAZAPI continua possível. Se a confirmação for incerta, conferir se chegou antes de qualquer novo envio.
+- Relatório técnico: [docs/AUDITORIA-DUPLICACAO-CONVERSA-3219-2026-10-02.md](docs/AUDITORIA-DUPLICACAO-CONVERSA-3219-2026-10-02.md).
+
+### Campanhas na consulta de 02/10 às 14h19 BRT
+
+| Campanha | ID | Enviados | Pendentes | Ignorados | Falhas | Pausados |
+|---|---|---:|---:|---:|---:|---:|
+| Embrapa Sul/Sudeste — 5895 | `isca-embrapa-sul-sudeste-5895-2026-09-25` | 370 | 359 | 521 | 1 | 0 |
+| Lista 6836 | `camp_20260907034408` | 119 | 0 | 3 | 0 | 1818 |
+
+- Embrapa estava com último envio às 13h41 BRT e ainda dentro da janela 08h–20h. Na consulta constavam 10 envios no dia. Ritmo configurado na campanha: `capInicial:50`, incremento 5, teto 1253. Fila tem 1251 registros por exclusões de preparação.
+- A campanha 6836 continua **pausada**. Não reativar sem instrução explícita.
+- A única falha da fila Embrapa é a peça com resultado incerto retida para conferência. Não reenviar às cegas.
+- Dos 499 ignorados atuais, consultar agrupamento atualizado de `last_error` na próxima retomada, sem expor telefones. Em 01/10 os 232 ignorados então vistos eram: 212 atendimento ativo, 8 não compradores, 5 já pagos e 7 oferta já enviada em outro funil.
+
+### Regras acordadas para a lista 6836
+
+- Antes de cada dia/contato elegível, atualizar a validação: situação de compra/pagamento, “não compra”, atendimento ativo, WhatsApp válido/bloqueado e existência do número, segundo as respostas disponíveis do provedor.
+- Consultar os últimos 30 dias de interação em **todos os números da empresa**, incluindo 5895 e 6836. Se já conversou por outra linha, excluir da abordagem 6836.
+- Revalidar perto dos envios ao longo da campanha; não confiar numa checagem única feita semanas antes.
+- Preservar horário, pausa, volume e rampa já aprovados. Pré-envio diário, claims atômicos e proteção de fila Embrapa anterior estão no commit `feba3c4`; a correção deste handoff está em `ba0b19e`.
+- Em timeout/resultado incerto, interromper repetição automática e confirmar no histórico do WhatsApp antes de tentar novamente.
+
+### Próximos passos ao retomar
+
+1. Confirmar `/health`, `/version`, container atual e logs de `send_uncertain`/erros, sem imprimir dados pessoais dos contatos.
+2. Agrupar as 499 exclusões Embrapa por `last_error` e atualizar este handoff com novos totais.
+3. Conferir avanço da Embrapa, dentro do horário, e procurar `processing` órfão; manter 6836 pausada.
+4. Conferir manualmente a entrega do único item incerto antes de decidir se retoma essa peça.
+5. Acompanhar as próximas mídias; falha/latência de UAZAPI requer conciliação, não fallback automático.
+
+## Auditoria posterior de repetições — 02/10/2026, 14h19 BRT
+
+- Conversa **3208**: o print do usuário mostra quatro vídeos de 1:49 em sequência. Na fila havia um único vídeo agendado para a etapa correspondente. O mesmo `chatwoot_message_id` 131307 aparece duas vezes no banco, com a mesma mídia, IDs diferentes do provedor e 45 segundos entre registros; depois há o anexo de retorno 131310. O Chatwoot API retornou dois anexos de vídeo no trecho (131307 e 131310), ambos com 12.306.071 bytes. Como essa contagem não coincide com as quatro bolhas visíveis no print, não afirmar a quantidade física sem conferir o histórico no WhatsApp do aparelho.
+- Na 3208 também há uma diferença de transcript: linha `[video]` sem anexo e duas representações do menu interativo em Chatwoot, enquanto o envio agendado da lista foi único. Isso pode duplicar/confundir o histórico interno sem equivaler automaticamente a mais uma mensagem física no WhatsApp.
+- Conversa **3225**: evidência de repetição em cascata. A fila tinha um envio do vídeo fase 01 (`scheduled_message_id` `48c68d10-8847-4d57-bdb6-526abe933f98`) e uma lista. Depois o Chatwoot recebeu **sete anexos de vídeo idênticos** de 15.650.923 bytes entre 08h43 e 08h50 BRT, sem `funnel_step` ou `scheduled_message_id` nas linhas adicionais. O mesmo Chatwoot message ID era salvo com outro ID do provedor cerca de 45 s depois; o próximo anexo aparecia ~60 s após o anterior. Não eram sete itens agendados: era eco acionando reenvio, timeout UAZAPI e fallback oficial, que criava novo eco.
+- Busca retrospectiva de 14 dias por mesma conversa + mesmo `chatwoot_message_id` + URL: **181 grupos excedentes em 102 conversas**; 29 grupos com intervalos de 40–50 s. É assinatura de registros duplicados, não prova de 181 envios físicos a mais. Exemplos incluem 3208, 3219, 3220, 3221 e 3225.
+- Depois da publicação `ba0b19e` (12h18 BRT), não apareceu grupo da mesma mídia/conversa/mensagem na consulta pós-deploy. Foram registrados **5 eventos `send_uncertain`** sem `fallback_requested`: a nova proteção reteve os casos sem confirmação, sem tentar pela segunda rota.
+- Auditoria detalhada: [docs/AUDITORIA-REPETICOES-FUNIL-2026-10-02.md](docs/AUDITORIA-REPETICOES-FUNIL-2026-10-02.md). O diretório `docs/` é ignorado pelo `.gitignore`; o resumo acima permanece neste HANDOFF versionado.
+
+## Conciliação de ecos por identidade do provedor — 02/10/2026, 14h52 BRT
+
+- Confirmei pares que representam o mesmo envio com formatos diferentes de ID: o `wamid.<base64>` da linha de saída contém o token `CE…` que aparece como sufixo no ID direto da UAZAPI. Na conversa 3208, os pares observados ficaram separados por 15–18 segundos; na 3225, por cerca de 19 segundos.
+- O bridge agora decodifica estritamente esse token, usa uma chave canônica para serializar ecos simultâneos e procura a mensagem original na mesma conversa, canal, direção e tipo dentro de 10 minutos. Se a mensagem original já tem linha no Chatwoot, o eco não cria outra bolha nem outra linha no banco. Se o envio original ficou sem ID de mensagem no Chatwoot, o anexo do eco pode completar uma única entrada e sua ID fica vinculada à linha já existente.
+- A deduplicação depende da equivalência exata do identificador do provedor. Mensagens físicas distintas com IDs distintos não são agrupadas só por terem o mesmo vídeo. O bloqueio de reenvio do commit `ba0b19e` permanece como proteção separada contra fallback/replay.
+- Nenhum registro histórico de conversa foi apagado ou alterado nesta correção.
+- Implementação em `bridge/shared/inbound.ts`; versão publicada: `2026-10-02-provider-echo-canonical-dedup`, commit `6f4fcd7`.
+
+## Contexto histórico
 
 ## 🔁 SESSÃO ATUAL — 2026-07-09
 - Revisão do painel/dashboard e da arquitetura do projeto concluída.
@@ -410,3 +501,44 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 - Primeira rodada automatica persistiu cinco bloqueios em 11/09 19:51:06–19:51:10 UTC, com um ultimo aviso por conversa. Validacao no container em producao, somente SELECT, simulou agora/+5min/+10min: scanned=5, due=0, sent=0, failed=0, dispatch=0 em todas. Nao foram enviadas mensagens de teste nem apagadas notas.
 - Scripts locais: ops/audit-social-recovery.mjs, ops/verify-social-recovery.mjs, ops/verify-social-recovery-runtime.js. Auditoria original preservada em ops/audit-social-recovery-2026-09-11.json.
 - SSH atual funciona com chave C:/Users/User/.ssh/oracle_ubuntu_2026 e usuario ubuntu@136.248.116.231; a memoria antiga sobre SSH indisponivel esta desatualizada.
+
+## Correcao de ecos duplicados de midia — 02/10/2026, 14h55 BRT
+
+- Conversas 3208 e 3225 mostraram que o envio original e o eco da UAZAPI podem
+  identificar a mesma mensagem em formatos diferentes: `wamid.<base64>` e `CE…`.
+- O bridge agora normaliza apenas essa equivalencia conhecida, reivindica a chave
+  canonica de forma atomica para evitar duplicidade em webhooks concorrentes e
+  reconhece a mensagem de saida correspondente antes de criar outra bolha no Chatwoot.
+- A conciliacao exige o mesmo canal, conversa, tipo de mensagem e ID normalizado,
+  dentro de dez minutos. Envios distintos com IDs diferentes continuam separados.
+  Se o eco trouxer o anexo e o registro original ainda nao tiver ID do Chatwoot,
+  o anexo pode completar o registro original.
+- Codigo publicado em `master`: `2985a62` (correcao) e `6f4fcd7` (identificacao do build).
+  Deploys Coolify `dbhtrp3qerr2pnkguqlzivsr` e `8xxlasgwqmuoroyefk0mmcur` concluidos
+  com sucesso. Container ativo `eb7d6fcfdca2`; imagem `m8qf6ru2x75gukzozpsrssrm`.
+- Confirmacao em producao: `/health` respondeu `ok`; `/version` informou o build
+  `2026-10-02-provider-echo-canonical-dedup` e a feature correspondente.
+- `deno check bridge/server.ts` e `git diff --check` passaram. Nao foi executada
+  suite de testes. Mensagens historicas duplicadas nao foram alteradas ou apagadas.
+
+## Correcao de horario da fila do funil — 03/10/2026
+
+- Auditoria do recorte de 15 dias (18/09 16:56–03/10 16:56 BRT): 6.186 envios
+  confirmados em `scheduled_messages`; 266 ocorreram fora de 06:00–22:00 (208 depois
+  das 22h e 58 antes das 06h). Em 260 casos o proprio `send_at` ja estava fora da
+  janela; seis tinham horario previsto dentro, mas foram enviados tarde.
+- Causa: o pump processava qualquer item vencido sem validar o horario real; chamadas
+  de `/send-outbound` originadas por uma `scheduled_message` tambem nao tinham uma
+  barreira final. A normalizacao da fila so lia ate 2.000 linhas, entao nao cobria
+  necessariamente toda a fila.
+- Correcao local: `bridge/shared/business-hours.ts` centraliza a janela BRT; o pump
+  nao envia fora da janela, volta a conferir antes de cada item e reprograma sobras
+  para as 06:00 seguintes. `/send-outbound` bloqueia tambem as chamadas externas do
+  n8n identificadas por `scheduled_message_id`, mantendo a linha pendente. O corte
+  ficou em 21:55 para dar cinco minutos de margem antes das 22h. Chamadas manuais
+  continuam fora dessa regra.
+- Verificacao: `deno check` passou nos quatro arquivos alterados e `git diff --check`
+  passou. A suite de testes nao foi executada.
+- Estado de publicacao: a correcao esta salva no workspace local, ainda sem deploy.
+  O `master` local diverge de `origin/master` (10 commits a frente e 6 atras) e o
+  workspace contem outras alteracoes pendentes; reconciliar a branch antes de publicar.

@@ -6,6 +6,7 @@ export type SocialMenuAction =
   | "menu_depoimento"
   | "menu_plantio"
   | "menu_nutricao"
+  | "menu_uso"
   | "menu_humano";
 export type SocialDetailAction =
   | `plantio_${string}`
@@ -60,6 +61,9 @@ export function inferSocialMenuAction(text: string): SocialMenuAction | null {
     "ver plantio": "menu_plantio",
     "info nutricional": "menu_nutricao",
     "ver nutricao": "menu_nutricao",
+    "qual finalidade": "menu_uso",
+    "escolher uso": "menu_uso",
+    "uso do sorgo": "menu_uso",
     "falar com cicero": "menu_humano",
   };
   return actions[value] ?? null;

@@ -30,18 +30,21 @@ Deno.test("nenhuma peça passa do teto do acesso", () => {
   });
 });
 
-// Fase 5 é o fechamento: precisa mostrar a logística (quebra a objeção de comprar semente
-// pela internet) e o saco de 2 kg (oferta de entrada) antes de pedir o CEP.
-Deno.test("fase 5 mostra logística e o pacote de entrada, e pede o local por último", () => {
-  const pecas = FASES[4]();
-  const slots = pecas.filter((p) => p.kind === "media").map((p) =>
-    (p as { slot: string }).slot
-  );
-  assertEquals(slots.includes("logistica_img"), true, "faltou logistica_img");
-  assertEquals(slots.includes("preco_2kg"), true, "faltou preco_2kg");
-
-  const ultima = pecas.reduce((a, b) => (b.offset > a.offset ? b : a));
-  assertEquals(ultima.kind, "list", "a última peça tem que ser o fechamento");
+// A nova jornada é curta, sem mídia genérica e com ações que levam a ramos reais.
+Deno.test("nova entrada recebe só abertura e menu acionável, sem régua longa", () => {
+  assertEquals(FASES.length, 1);
+  const pecas = FASES[0]();
+  assertEquals(pecas.length, 2);
+  assertEquals(pecas.some((p) => p.kind === "media"), false);
+  const menu = pecas.find((p) => p.kind === "list");
+  assertEquals(menu?.kind, "list");
+  if (menu?.kind !== "list") throw new Error("menu inicial ausente");
+  assertEquals(menu.sections[0].rows.map((row) => row.id), [
+    "menu_preco",
+    "menu_uso",
+    "menu_humano",
+  ]);
+  assertEquals(menu.text.toLowerCase().includes("preço"), false);
 });
 
 // Artes do catálogo vivem em day=0, que não é fase nenhuma. Sem mediaDay o pick() procura

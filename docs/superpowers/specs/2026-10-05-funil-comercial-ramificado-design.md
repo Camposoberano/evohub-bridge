@@ -99,4 +99,4 @@ Relatórios devem distinguir mensagem automática de resposta humana e desfecho 
 
 ## Estado
 
-Desenho aprovado pelo usuário em 05/10/2026. A implementação continua aguardando revisão desta especificação; nenhuma mudança de código ou publicação decorre deste documento.
+Especificação aprovada pelo usuário em 05/10/2026 e implementada localmente no checkout compartilhado. A validação passou: 67 testes focados, `deno check --node-modules-dir=none bridge/server.ts` e `git diff --check`. Nenhum envio real, escrita operacional no banco, reativação da lista 6836, reinício ou deploy foi realizado. A implementação continua sem prova de mídia enquanto os slots próprios não tiverem mídia ativa e aprovada.

@@ -365,7 +365,10 @@ export async function createConversationMessage(
     message_type: input.messageType,
     private: isPrivate,
     content_type: "text",
-    content_attributes: input.alreadySent ? { bridge_already_sent: true } : {},
+    content_attributes: {
+      ...(input.messageType === "outgoing" && !isPrivate ? { evohub_generated: true } : {}),
+      ...(input.alreadySent ? { bridge_already_sent: true } : {}),
+    },
   });
   let res = await fetch(url, {
     method: "POST",

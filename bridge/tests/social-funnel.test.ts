@@ -219,6 +219,22 @@ Deno.test("texto comum não vira clique sem menu compatível", () => {
   );
 });
 
+Deno.test("uso livre só mapeia após pergunta de finalidade", () => {
+  const prompt =
+    "Para eu te orientar melhor, o senhor pretende usar o sorgo para silagem, pastejo ou outra finalidade?";
+  assert(inferSocialPriceReply("Silagem", prompt) === "uso_silagem", "silagem deve seguir o uso escolhido");
+  assert(inferSocialPriceReply("Pasto", prompt) === "uso_pastejo", "pasto deve seguir o uso escolhido");
+  assert(inferSocialPriceReply("Outro", prompt) === "uso_outro", "outro deve seguir o uso escolhido");
+  assert(inferSocialPriceReply("Silagem", "Bom dia") === null, "texto sem prompt não vira clique");
+});
+
+Deno.test("área livre só encaminha acima de quatro hectares após prompt compatível", () => {
+  const prompt = "Para áreas acima de 4 hectares, informe quantos hectares pretende plantar e sua região.";
+  assert(inferSocialPriceReply("8 hectares", prompt) === "preco_area_livre:8", "área acima de quatro deve ir para cotação");
+  assert(inferSocialPriceReply("2 hectares", prompt) === null, "área do pacote não deve virar cotação livre");
+  assert(inferSocialPriceReply("8 hectares", "Bom dia") === null, "texto sem prompt compatível não vira clique");
+});
+
 Deno.test("webhook e sincronizador compartilham a trava do clique social", () => {
   const key = socialPriceActionClaimKey("canal", "mensagem", "preco_tamanho");
   assert(

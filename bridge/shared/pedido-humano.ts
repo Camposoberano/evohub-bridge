@@ -1,4 +1,4 @@
-// pedido-humano — o cliente clicou "Falar com Cícero". Duas coisas têm que acontecer.
+// pedido-humano — o cliente pediu uma pessoa ou a cotação do Cícero. Duas coisas têm que acontecer.
 //
 // Medido em 13/09: 8 clientes pediram falar com uma pessoa em 5 dias. **Nenhum tinha
 // atendente designado**, e em duas conversas o funil continuou por cima do pedido — #2504
@@ -16,7 +16,7 @@
 // 2. O evento é o produto. Pausar sem avisar troca "cliente recebendo spam" por "cliente
 //    esquecido em silêncio" — que foi o que aconteceu com os 8. O alerta é o que fecha o laço.
 import type { DbClient } from "./supabase.ts";
-import { claimDeliveryWithTtl } from "./supabase.ts";
+import { claimDeliveryWithTtl, releaseDelivery } from "./supabase.ts";
 import { autoPauseFunil } from "./funnel-state.ts";
 import { descreveErro } from "./erros.ts";
 
@@ -46,6 +46,7 @@ export async function registrarPedidoHumano(
     chatwootConversationId?: number | null;
     origem: OrigemPedido;
     contato?: string | null;
+    contexto?: Record<string, unknown>;
   },
 ): Promise<ResultadoPedidoHumano> {
   if (!opts.conversationId) return { registrado: false, funilPausado: false, motivo: "sem-conversa" };
@@ -57,7 +58,7 @@ export async function registrarPedidoHumano(
       "pedido-humano",
       JANELA_MS,
     );
-    if (!novo) return { registrado: false, funilPausado: false, motivo: "repetido" };
+    if (!novo) return { registrado: true, funilPausado: false, motivo: "repetido" };
   } catch (e) {
     // Sem saber se é repetido, seguir em frente: alerta a mais é melhor que cliente esquecido.
     console.error("pedido-humano: claim falhou, seguindo", descreveErro(e).slice(0, 140));
@@ -86,6 +87,7 @@ export async function registrarPedidoHumano(
         // só os 4 últimos: o alerta sai por WhatsApp e não precisa carregar o número inteiro
         contato: opts.contato ? `…${String(opts.contato).slice(-4)}` : null,
         funil_pausado: funilPausado,
+        ...(opts.contexto ?? {}),
       },
     });
     if (error) throw error;
@@ -94,6 +96,13 @@ export async function registrarPedidoHumano(
       "pedido-humano: evento falhou (cliente esperando SEM alerta)",
       descreveErro(e).slice(0, 160),
     );
+    // Sem evento não existe pedido confirmado; liberar o claim permite uma nova tentativa
+    // em vez de deixar uma janela inteira de falso "já encaminhado".
+    try {
+      await releaseDelivery(db, `pedido-humano-${opts.conversationId}`);
+    } catch (releaseError) {
+      console.error("pedido-humano: claim não liberado:", descreveErro(releaseError).slice(0, 120));
+    }
     return { registrado: false, funilPausado };
   }
 

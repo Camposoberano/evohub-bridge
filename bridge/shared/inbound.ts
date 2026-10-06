@@ -1,7 +1,6 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
 import { claimDelivery, type DbClient, releaseDelivery } from "./supabase.ts";
-import { optionalEnv } from "./env.ts";
 import { ensureCustomer } from "./customer.ts";
 import {
   mergeLeadAttributes,
@@ -527,21 +526,48 @@ async function ingestInboundClaimed(
     }
   }
 
-  // Decisão 01/07: resposta/clique do cliente NÃO trava o funil. O Cícero recebe a resposta
-  // no Chatwoot e responde manualmente EM PARALELO; a sequência segue até o fim. (As sequências
-  // por botão -- preço, vídeos etc. -- serão desenvolvidas depois; aí volta o cancelamento
-  // seletivo.) Reativar o comportamento antigo: FUNIL_CANCEL_ON_REPLY=true.
-  if (!msg.outgoing && optionalEnv("FUNIL_CANCEL_ON_REPLY") === "true") {
-    db.from("scheduled_messages").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).eq("status", "pending").then(
-        () => {},
-        () => {},
+  // Uma resposta passa o lead para a conversa comercial. Para Mega Sorgo, a régua de
+  // apresentação não pode continuar por cima do atendimento nem ser retomada depois.
+  if (!msg.outgoing) {
+    try {
+      const { data: sequence, error: sequenceError } = await db.from(
+        "sales_sequences",
+      ).select("id,status")
+        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
+        .in("status", ["running", "paused"]).maybeSingle();
+      if (sequenceError) throw sequenceError;
+      if (sequence) {
+        const { error: stateError } = await db.from("sales_sequences")
+          .update({ status: "replied" }).eq("id", sequence.id)
+          .in("status", ["running", "paused"]);
+        if (stateError) throw stateError;
+        const { error: cancelError } = await db.from("scheduled_messages")
+          .update({ status: "cancelled" })
+          .eq("conversation_id", conv.id)
+          .in("funnel", ["mega-sorgo", "mega-sorgo-followup"])
+          .in("status", ["pending", "paused"]);
+        if (cancelError) throw cancelError;
+        const { error: eventError } = await db.from("events").insert({
+          source: "sales-funnel",
+          event_type: "commercial_engaged",
+          channel_id: channel.id,
+          payload: {
+            conversation_id: conv.id,
+            sequence_id: sequence.id,
+            message_id: insertedMessage.id,
+            origin: "cliente",
+          },
+        });
+        if (eventError) throw eventError;
+      }
+    } catch (error) {
+      // A mensagem continua persistida. O pump da fila repete a guarda consultando o estado
+      // da sequência antes de qualquer entrega pendente.
+      console.error(
+        "inbound: não consegui interromper a régua após resposta:",
+        String(error).slice(0, 180),
       );
-    db.from("sales_sequences").update({ status: "replied" })
-      .eq("conversation_id", conv.id).eq("status", "running").then(
-        () => {},
-        () => {},
-      );
+    }
   }
 
   if (!msg.outgoing && conv.chatwoot_conversation_id) {

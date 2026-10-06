@@ -46,6 +46,10 @@ import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
+import {
+  isWithinFunnelSendHours,
+  nextFunnelSendAt,
+} from "../shared/business-hours.ts";
 
 type Json = Record<string, unknown>;
 
@@ -83,6 +87,43 @@ export async function handle(req: Request): Promise<Response> {
   };
 
   const db = admin();
+  // Última barreira para toda peça ligada a scheduled_messages, incluindo chamadas
+  // do n8n que não passam pelo pump local. Mensagens manuais continuam fora desta regra.
+  if (funnelLink.scheduled_message_id && !isWithinFunnelSendHours()) {
+    const nextSendAt = new Date(nextFunnelSendAt()).toISOString();
+    const { data: deferred, error: deferError } = await db
+      .from("scheduled_messages")
+      .update({ send_at: nextSendAt })
+      .eq("id", funnelLink.scheduled_message_id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+    if (deferError) {
+      console.error("send-outbound: falha ao reagendar fora da janela:", deferError);
+      return json({
+        ok: false,
+        deferred_business_window: true,
+        error: "não foi possível reagendar fora da janela",
+      }, 503);
+    }
+    if (!deferred) {
+      return json({
+        ok: false,
+        error: "scheduled_message não está pendente",
+        deferred_business_window: true,
+        next_send_at: nextSendAt,
+      }, 409);
+    }
+    console.log(
+      `send-outbound: scheduled_message ${funnelLink.scheduled_message_id} ` +
+        `adiada para ${nextSendAt} por horário de envio`,
+    );
+    return json({
+      ok: false,
+      deferred_business_window: true,
+      next_send_at: nextSendAt,
+    }, 409);
+  }
   const { data: conv } = await db.from("conversations").select(
     "*, contacts(*), channels(*)",
   )

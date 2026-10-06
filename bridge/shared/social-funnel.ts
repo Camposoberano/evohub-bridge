@@ -1,4 +1,5 @@
 type Json = Record<string, unknown>;
+import { extrairAreaHectares, isAreaAcimaDosPacotes } from "./funil-comercial.ts";
 
 export type SocialMessage = {
   message: Json;
@@ -175,6 +176,37 @@ export function inferSocialPriceReply(
   const prompt = normalizeReply(previousInteractive);
   const selectedAnswer = answer.replace(/^meta ai\s+/, "");
 
+  // Resposta livre só vira seleção de uso depois do prompt compatível.
+  if (
+    prompt.includes("silagem pastejo ou outra finalidade") ||
+    prompt.includes("qual uso pretende dar")
+  ) {
+    if (selectedAnswer === "silagem") return "uso_silagem";
+    if (selectedAnswer === "pastejo" || selectedAnswer === "pasto") {
+      return "uso_pastejo";
+    }
+    if (
+      selectedAnswer === "outro" || selectedAnswer === "outro uso" ||
+      selectedAnswer === "outra finalidade"
+    ) return "uso_outro";
+    return null;
+  }
+
+  if (
+    prompt.includes("acima de 4 hectares") ||
+    prompt.includes("quantos hectares pretende plantar")
+  ) {
+    const hectares = extrairAreaHectares(reply);
+    if (hectares !== null && isAreaAcimaDosPacotes(reply)) {
+      return `preco_area_livre:${hectares}`;
+    }
+  }
+
+  // Algumas rotas sociais retornam o título completo do botão, não o ID do postback.
+  if (selectedAnswer === "1 hectare 4 kg") return "tam_4kg";
+  if (selectedAnswer === "2 hectares 10 kg") return "tam_10kg";
+  if (selectedAnswer === "4 hectares 20 kg") return "tam_20kg";
+
   if (prompt.includes("qual destas areas")) {
     if (selectedAnswer === "2 hectares") return "tam_10kg";
     if (selectedAnswer === "4 hectares ou mais") return "tam_20kg";
@@ -183,10 +215,13 @@ export function inferSocialPriceReply(
 
   if (
     prompt.includes("qual area") || prompt.includes("qual outra area") ||
-    prompt.includes("tamanho da area")
+    prompt.includes("tamanho da area") || prompt.includes("escolha a area")
   ) {
     if (selectedAnswer === "meio hectare") return "tam_2kg";
     if (selectedAnswer === "1 hectare") return "tam_4kg";
+    if (selectedAnswer === "2 hectares") return "tam_10kg";
+    if (selectedAnswer === "4 hectares") return "tam_20kg";
+    if (selectedAnswer === "4 hectares ou mais") return "tam_20kg";
     if (selectedAnswer === "2 hectares ou mais") return "preco_area_maior";
     return null;
   }

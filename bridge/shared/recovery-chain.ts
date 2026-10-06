@@ -263,6 +263,7 @@ export async function pumpRecoveryChain(
     { data: conversations },
     { data: recoveryEvents },
     { data: blockedEvents, error: blockedEventsError },
+    { data: v2Enrollments, error: v2EnrollmentsError },
   ] = await Promise.all(
     [
       // Em lotes, e o erro SOBE: com 500 ids numa chamada só a URL passa de 18 KB e o proxy
@@ -289,10 +290,22 @@ export async function pumpRecoveryChain(
         .gte("received_at", new Date(now - IDADE_MAXIMA_MS).toISOString())
         .order("received_at", { ascending: false })
         .limit(5_000),
+      db.from("events")
+        .select("payload")
+        .eq("source", "sales-funnel")
+        .eq("event_type", "commercial_funnel_enrolled_v2")
+        .gte("received_at", new Date(now - IDADE_MAXIMA_MS).toISOString())
+        .limit(5_000),
     ],
   );
   // Falha de leitura nao significa ausencia de bloqueio.
   if (blockedEventsError) throw blockedEventsError;
+  if (v2EnrollmentsError) throw v2EnrollmentsError;
+  const v2Conversations = new Set(
+    (v2Enrollments ?? []).map((event: Json) =>
+      String((event.payload as Json | undefined)?.conversation_id ?? "")
+    ).filter(Boolean),
+  );
   // conversa -> variação -> quando bateu no bloqueio terminal pela última vez
   const bloqueios = new Map<string, Map<number, number>>();
   for (const ev of (blockedEvents ?? []) as Json[]) {
@@ -357,6 +370,7 @@ export async function pumpRecoveryChain(
   // já esgotou a cadeia — hoje são pouquíssimas conversas, então sai barato.
   for (const sequence of sequences as Json[]) {
     const id = String(sequence.conversation_id);
+    if (v2Conversations.has(id)) continue;
     const enviadas = enviadasPorConversa.get(id) ?? [];
     if (new Set(enviadas).size < RECOVERY_CHAIN_DAYS.length) continue;
     if (isClosedOutcome(outcomeById.get(id) ?? null)) continue;
@@ -406,6 +420,7 @@ export async function pumpRecoveryChain(
     if (result.sent >= maxPorRodada) break;
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
+    if (v2Conversations.has(conversationId)) continue;
     if (muted.has(conversationId)) continue;
     const cwConvId = Number(sequence.chatwoot_conversation_id ?? 0);
     const funnelEndedAt = sequence.last_sent_at

@@ -39,6 +39,8 @@ Deno.test("cliques híbridos das recuperações voltam para o menu correto", () 
 
 Deno.test("normaliza respostas exatas dos botões de preço", () => {
   assertEquals(normalizeHybridButtonReply("1 hectare"), "tam_4kg");
+  assertEquals(normalizeHybridButtonReply("Silagem"), "uso_silagem");
+  assertEquals(normalizeHybridButtonReply("Pastejo"), "uso_pastejo");
   assertEquals(
     normalizeHybridButtonReply("2 hectares ou mais"),
     "preco_area_maior",

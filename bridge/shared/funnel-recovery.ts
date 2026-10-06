@@ -131,6 +131,22 @@ export function silentFollowupAt(lastSentAt: number, now: number): number {
   ));
 }
 
+export function canSendSilentFollowup(input: {
+  now: number;
+  lastInboundAt: number | null;
+  lastMainOutAt: number;
+  assignee?: unknown;
+  humanRequested?: boolean;
+  outcome?: string | null;
+}): boolean {
+  return input.lastInboundAt !== null && Number.isFinite(input.lastInboundAt) &&
+    Number.isFinite(input.lastMainOutAt) &&
+    input.lastInboundAt <= input.lastMainOutAt &&
+    input.now - input.lastInboundAt <= MAX_CONTACT_AGE_MS &&
+    !String(input.assignee ?? "").trim() && !input.humanRequested &&
+    !isClosedOutcome(input.outcome);
+}
+
 export async function maintainFunnels(
   db: DbClient,
   now = Date.now(),
@@ -303,33 +319,57 @@ async function scheduleSilentFollowup(
 ): Promise<boolean> {
   const conversationId = String(sequence.conversation_id);
   const conversation = await db.from("conversations")
-    .select("outcome")
+    .select("outcome,assignee")
     .eq("id", conversationId)
     .maybeSingle();
+  if (conversation.error || !conversation.data) return false;
   // Era `if (conversation.data?.outcome)`: como a coluna vem 'open' por padrão, isso
   // barrava todo mundo — 135 funis concluídos e nenhum follow-up agendado.
-  if (isClosedOutcome(conversation.data?.outcome as string | null)) {
-    return false;
-  }
+
+  // Falha de entrega e pedido humano tornam o acompanhamento automático inadequado.
+  const { data: failedRows, error: failedError } = await db.from(
+    "scheduled_messages",
+  ).select("id").eq("conversation_id", conversationId)
+    .eq("funnel", String(sequence.funnel ?? "mega-sorgo"))
+    .eq("status", "failed").limit(1);
+  if (failedError) throw failedError;
+  if (failedRows?.length) return false;
+  const { data: humanRequests, error: humanRequestError } = await db.from(
+    "events",
+  ).select("payload").eq("source", "atendimento")
+    .eq("event_type", "pediu_humano")
+    .gte("received_at", new Date(lastSentAt - MAX_CONTACT_AGE_MS).toISOString())
+    .order("received_at", { ascending: false }).limit(2_000);
+  if (humanRequestError) throw humanRequestError;
+  const humanRequested = (humanRequests ?? []).some((event: Json) =>
+    String((event.payload as Json | undefined)?.conversation_id ?? "") === conversationId
+  );
 
   const activity = await latestActivity(db, conversationId);
+  if (!canSendSilentFollowup({
+    now,
+    lastInboundAt: activity.lastInboundAt,
+    lastMainOutAt: lastSentAt,
+    assignee: conversation.data.assignee,
+    humanRequested,
+    outcome: conversation.data.outcome as string | null,
+  })) return false;
   if (
-    !activity.lastInboundAt || activity.lastInboundAt > lastSentAt ||
     (activity.lastActivityAt && activity.lastActivityAt > lastSentAt)
   ) {
     return false;
   }
-  if (now - activity.lastInboundAt > MAX_CONTACT_AGE_MS) return false;
-  const { data: existing } = await db.from("scheduled_messages")
+  const { data: existing, error: existingError } = await db.from("scheduled_messages")
     .select("id")
     .eq("conversation_id", conversationId)
     .eq("funnel", FOLLOW_UP_FUNNEL)
     .limit(1)
     .maybeSingle();
+  if (existingError) throw existingError;
   if (existing) return false;
 
   const desiredAt = silentFollowupAt(lastSentAt, now);
-  const latestSafeAt = activity.lastInboundAt + MAX_CONTACT_AGE_MS;
+  const latestSafeAt = (activity.lastInboundAt as number) + MAX_CONTACT_AGE_MS;
   if (desiredAt > latestSafeAt) return false;
   const { error } = await db.from("scheduled_messages").insert({
     conversation_id: conversationId,
@@ -340,10 +380,10 @@ async function scheduleSilentFollowup(
     type: "interactive",
     payload: {
       text:
-        "Oi! O senhor conseguiu ver as informações e os vídeos do Mega Sorgo? Ficou alguma dúvida sobre preço, plantio ou produção? Posso te ajudar por aqui. 🙌",
+        "Oi! Ficou alguma dúvida sobre o Mega Sorgo ou posso ajudar a encontrar a opção de área e volume adequada? Se quiser cotação, responda com sua região e quantidade. 🙌",
       buttons: [
         { id: "menu_preco", title: "Ver preço 💰" },
-        { id: "menu_depoimento", title: "Assistir vídeos 🎬" },
+        { id: "menu_uso", title: "Escolher finalidade" },
         { id: "menu_humano", title: "Falar com Cícero" },
       ],
     },
@@ -364,7 +404,7 @@ async function scheduleSilentFollowup(
 }
 
 async function latestActivity(db: DbClient, conversationId: string) {
-  const [{ data: latest }, { data: inbound }] = await Promise.all([
+  const [latestResult, inboundResult] = await Promise.all([
     db.from("messages").select("sent_at")
       .eq("conversation_id", conversationId)
       .order("sent_at", { ascending: false }).limit(1).maybeSingle(),
@@ -372,6 +412,10 @@ async function latestActivity(db: DbClient, conversationId: string) {
       .eq("conversation_id", conversationId).eq("direction", "in")
       .order("sent_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
+  if (latestResult.error) throw latestResult.error;
+  if (inboundResult.error) throw inboundResult.error;
+  const latest = latestResult.data;
+  const inbound = inboundResult.data;
   return {
     lastActivityAt: latest?.sent_at ? Date.parse(String(latest.sent_at)) : null,
     lastInboundAt: inbound?.sent_at
