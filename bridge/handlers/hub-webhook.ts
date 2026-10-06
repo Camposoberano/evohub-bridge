@@ -1054,8 +1054,26 @@ async function handlePrecoSequence(
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+  // Apresenta primeiro as três artes padrão. A opção de 2 kg é reservada para teste.
+  const pecas: {
+    body: Json;
+    registro: string;
+    tipo: string;
+    pacote?: string;
+  }[] = [];
+  for (const id of ["tam_4kg", "tam_10kg", "tam_20kg"]) {
+    const imageUrl = await imagemDoPacotePreco(db, id);
+    const caption = tamanhoCard(id);
+    if (!imageUrl || !caption) continue;
+    pecas.push({
+      tipo: "image",
+      body: { type: "image", image: { link: imageUrl, caption } },
+      registro: caption,
+      pacote: id,
+    });
+  }
+
   // O preço não pode ser comparado sem volume: abrir diretamente a seleção de área.
-  const pecas: { body: Json; registro: string; tipo: string }[] = [];
   // Lista aberta: área e pacote correspondente nos três tamanhos aprovados.
   pecas.push({
     tipo: "interactive",
@@ -1107,6 +1125,23 @@ async function handlePrecoSequence(
     : { data: null };
 
   for (const [i, p] of pecas.entries()) {
+    if (p.tipo === "image") {
+      const sent = await sendWhatsAppPiece(
+        db,
+        channel,
+        from,
+        p.body,
+        p.registro,
+        "image",
+        acct,
+      );
+      if (!sent) {
+        console.warn("imagem do pacote de preço não enviada:", p.pacote);
+      }
+      if (i < pecas.length - 1) await pause(2500);
+      continue;
+    }
+
     const r = await sendMeta(token, path, {
       messaging_product: "whatsapp",
       to: from,
@@ -1158,6 +1193,21 @@ async function handleSocialPrecoSequence(
   channel: Json,
   from: string,
 ): Promise<void> {
+  for (const id of ["tam_4kg", "tam_10kg", "tam_20kg"]) {
+    const imageUrl = await imagemDoPacotePreco(db, id);
+    const caption = tamanhoCard(id);
+    if (!imageUrl || !caption) continue;
+    try {
+      await sendSocialPieces(db, channel, from, [{
+        type: "image",
+        payload: { media_url: imageUrl, caption },
+      }]);
+    } catch (error) {
+      // A imagem é complementar; uma falha não deve impedir o envio do seletor.
+      console.warn("imagem do pacote social não enviada:", id, String(error).slice(0, 120));
+    }
+  }
+
   const pieces: { type: string; payload: Json }[] = [{
     type: "interactive",
     payload: {
