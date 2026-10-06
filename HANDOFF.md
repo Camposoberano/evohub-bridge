@@ -542,3 +542,23 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 - Estado de publicacao: a correcao esta salva no workspace local, ainda sem deploy.
   O `master` local diverge de `origin/master` (10 commits a frente e 6 atras) e o
   workspace contem outras alteracoes pendentes; reconciliar a branch antes de publicar.
+
+## Funil comercial ramificado — publicado em 06/10/2026
+
+- O usuário aprovou o CTA dos cards e a regra dos volumes: botões em três opções,
+  1 hectare → 4 kg, 2 hectares → 10 kg, 4 hectares → 20 kg. A arte de 2 kg está
+  identificada como opção teste para até 0,5 hectare. Não imprimir preço no card.
+- Implementação do funil publicada em `master`, commit `c5a40afcb1bc4917ce20d347b3e1c05f703ae9fc`
+  (`feat: funil comercial ramificado e artes aprovadas`). O rebase preservou os seis
+  commits recebidos de `origin/master`; push feito sem force.
+- Verificação pré-deploy: `deno check --node-modules-dir=none bridge/server.ts` passou.
+- Coolify não iniciou pelo push; o webhook configurado recusou GET com 405 e aceitou POST.
+  Confirmação em produção: `/health` respondeu `ok`; `/version` informou
+  `2026-10-06-funil-comercial-ramificado`, iniciado em `2026-10-06T04:17:46.779Z`.
+- Quatro JPEGs v2 publicados em `soberano-out/mega-sorgo/imagens/funil-comercial-2026-10-06/`.
+  Cada URL respondeu 200 com `Content-Type: image/jpeg`. Os registros ativos de
+  `public.funnel_media` foram atualizados nos slots `preco_2kg`, `preco_4kg`,
+  `preco_10kg` e `preco_20kg`; os registros antigos inativos foram preservados.
+- Backup privado anterior à mudança: `soberano-config/backups/funnel-media-before-2026-10-06-c5a40af.json`.
+- A campanha 6836 permaneceu pausada. Nenhuma fila foi retomada e nenhuma mensagem
+  foi disparada durante a publicação.

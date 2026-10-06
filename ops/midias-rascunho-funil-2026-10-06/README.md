@@ -27,4 +27,13 @@ CTA comum: **“Dúvidas ou quer finalizar? Fale com a gente.”** O preço segu
 
 Os PNGs originais v2 também foram preservados nesta pasta (1254 × 1254, aproximadamente 1,8–1,9 MB cada). Os JPEGs foram exportados em 1080 × 1080, qualidade 90.
 
-**Aprovação visual:** aprovada pelo usuário em 06/10/2026. Os arquivos v2 estão aprovados como artes. Ainda não houve envio para plataformas, cadastro, associação a slot nem ativação no servidor; o catálogo ao vivo não foi alterado.
+**Aprovação e publicação:** aprovada pelo usuário e publicada em 06/10/2026. Os quatro JPEGs estão no bucket público `soberano-out`, no prefixo `mega-sorgo/imagens/funil-comercial-2026-10-06/`, e as URLs foram conferidas com `HEAD` (`200`, `image/jpeg`).
+
+| Slot ativo | Arte publicada | Correspondência |
+|---|---|---|
+| `preco_2kg` | `v2-teste-meio-hectare-2kg.jpg` | Opção teste — até 0,5 hectare, 2 kg |
+| `preco_4kg` | `v2-ate-1ha-4kg.jpg` | Até 1 hectare, 4 kg |
+| `preco_10kg` | `v2-2ha-10kg.jpg` | Até 2 hectares, 10 kg |
+| `preco_20kg` | `v2-4ha-20kg.jpg` | Até 4 hectares, 20 kg |
+
+Antes de alterar o catálogo, salvei os quatro registros ativos em `soberano-config/backups/funnel-media-before-2026-10-06-c5a40af.json`. As artes antigas não foram sobrescritas. Os botões permanecem em três opções: 1, 2 e 4 hectares; a opção de 2 kg fica identificada como teste.
