@@ -983,6 +983,54 @@ function tamanhoLabel(id: string): string {
   }
 }
 
+const PRECO_MEDIA_POR_PACOTE: Record<
+  string,
+  { slot: string; arquivo: string }
+> = {
+  // 2 kg continua sendo uma opção de teste; não aparece no seletor padrão.
+  tam_2kg: {
+    slot: "preco_2kg",
+    arquivo: "v2-teste-meio-hectare-2kg.jpg",
+  },
+  tam_4kg: { slot: "preco_4kg", arquivo: "v2-ate-1ha-4kg.jpg" },
+  tam_10kg: { slot: "preco_10kg", arquivo: "v2-2ha-10kg.jpg" },
+  tam_20kg: { slot: "preco_20kg", arquivo: "v2-4ha-20kg.jpg" },
+};
+
+async function imagemDoPacotePreco(db: Db, id: string): Promise<string | null> {
+  const asset = PRECO_MEDIA_POR_PACOTE[id];
+  if (!asset) return null;
+
+  const { data, error } = await db.from("funnel_media").select("url,type")
+    .eq("funnel", "mega-sorgo")
+    .eq("day", 0)
+    .eq("slot", asset.slot)
+    .eq("type", "image")
+    .eq("active", true)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn("imagem do pacote indisponível:", asset.slot, error.message);
+    return null;
+  }
+
+  const url = String(data?.url ?? "").trim();
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const storageOrigin = new URL(env("SUPABASE_URL")).origin;
+    const expectedPath =
+      `/storage/v1/object/public/soberano-out/mega-sorgo/imagens/funil-comercial-2026-10-06/${asset.arquivo}`;
+    if (
+      parsed.protocol !== "https:" || parsed.origin !== storageOrigin ||
+      !parsed.pathname.endsWith(expectedPath)
+    ) return null;
+  } catch {
+    return null;
+  }
+  return url;
+}
+
 async function handlePrecoSequence(
   db: Db,
   channel: Json,
@@ -1636,9 +1684,12 @@ export async function handleSocialPrecoClick(
 
   const card = tamanhoCard(id);
   if (!card) return;
+  const imageUrl = await imagemDoPacotePreco(db, id);
   const pieces: { type: string; payload: Json }[] = [];
   pieces.push(
-    { type: "text", payload: { content: card } },
+    imageUrl
+      ? { type: "image", payload: { media_url: imageUrl, caption: card } }
+      : { type: "text", payload: { content: card } },
     {
       type: "interactive",
       payload: {
@@ -1650,7 +1701,13 @@ export async function handleSocialPrecoClick(
       },
     },
   );
-  await sendSocialPieces(db, channel, from, pieces, actionScope);
+  await sendSocialPieces(
+    db,
+    channel,
+    from,
+    pieces,
+    actionScope ? `${actionScope}:package:${id}` : undefined,
+  );
 }
 
 async function resolveSocialConversation(db: Db, channel: Json, from: string) {
@@ -2100,7 +2157,18 @@ export async function handlePrecoClick(
   // Clique no pacote -> descrição sem preço -> cotação humana sob solicitação.
   const card = tamanhoCard(id);
   if (card) {
-    await envia({ type: "text", text: { body: card } }, card, "text");
+    const imageUrl = await imagemDoPacotePreco(db, id);
+    if (imageUrl) {
+      await sendSocialPieces(
+        db,
+        channel,
+        from,
+        [{ type: "image", payload: { media_url: imageUrl, caption: card } }],
+        _actionEventId ? `whatsapp-price-package:${_actionEventId}` : undefined,
+      );
+    } else {
+      await envia({ type: "text", text: { body: card } }, card, "text");
+    }
     await envia(
       {
         type: "interactive",
