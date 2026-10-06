@@ -562,3 +562,39 @@ SaaS omnichannel de WhatsApp/Facebook/Instagram. Peças:
 - Backup privado anterior à mudança: `soberano-config/backups/funnel-media-before-2026-10-06-c5a40af.json`.
 - A campanha 6836 permaneceu pausada. Nenhuma fila foi retomada e nenhuma mensagem
   foi disparada durante a publicação.
+
+## Checagem pós-publicação — 06/10/2026
+
+- Revisão somente leitura do relatório nativo de Funis no Chatwoot, período 07/09–06/10/2026:
+  `Pipeline de Vendas` mostra 0 negócios criados, 0 ganhos e 0 perdidos.
+- O mesmo relatório apresenta 53 cartões abertos em etapas do pipeline; os mais antigos
+  têm entre 96 e 123 dias. Isso é estoque histórico e não mede o desempenho do funil
+  comercial publicado em 06/10.
+- Não alterei nem arquivei cartões do CRM. Também não retomei a campanha 6836 nem enviei
+  mensagens. A listagem de conversas observada não ofereceu uma amostra pós-publicação
+  suficiente para medir conversão ou resposta do novo fluxo.
+- Confirmei no build publicado (`c5a40af`) que o worker executa `campaign-preflight` para
+  cada contato imediatamente antes do primeiro envio da campanha. Ele consulta todos os
+  canais WhatsApp, verifica bloqueio e existência atual do número (`/chat/blocklist` e
+  `/chat/check`), mensagens recebidas nos últimos 30 dias, resultado/etiquetas comerciais,
+  atendimento aberto e pedido/orçamento em andamento. Contato inelegível é pulado; erro
+  de leitura ou do verificador pausa a campanha e mantém o envio bloqueado. Portanto, a
+  revalidação individual pedida já está implementada no código publicado.
+- Próxima medição útil: acompanhar os primeiros leads reais que percorrerem o novo fluxo,
+  separando canal, opção escolhida (4/10/20 kg), prova entregue, pedido de cotação,
+  resposta humana e desfecho. Usar o relatório próprio do EvoHub para eventos de conversa;
+  não usar os cartões antigos do pipeline como conversões atuais.
+
+## Retomada controlada da campanha 6836 — 06/10/2026
+
+- Conforme autorização anterior do usuário, retomei somente `camp_20260907034408`
+  (`sul-6836-20260907`). Confirmei que o canal `6836` está ativo, o fluxo contém a isca
+  Embrapa e a cadência existente é 25 no primeiro dia, +5/dia até 100, entre 08h e 20h BRT.
+- A fila exata após a retomada: 1.817 pendentes, 0 pausados, 119 enviados, 4 pulados,
+  0 falhas e 0 em processamento. Os 1.817 registros pausados foram liberados; nenhum
+  outro ID de campanha foi alterado.
+- O resumo padrão da fila lê até 1.000 linhas; confirmei esses totais com contagem exata
+  por status. A revalidação do worker continua ocorrendo contato a contato antes do envio.
+- Retomada às 01h40 BRT, fora da janela. A conferência de horários confirmou que nenhum
+  envio ocorreu na retomada; o envio mais recente registrado antes dela foi em 29/09 às
+  18h41 BRT. O próximo envio só pode ocorrer dentro da janela 08h–20h.
