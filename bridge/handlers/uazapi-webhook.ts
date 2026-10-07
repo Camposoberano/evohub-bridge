@@ -2,7 +2,7 @@
 // Alimenta o monitor de eventos do painel e ingesta inbound de mensagens no Chatwoot.
 // Auth: ?token=<UAZAPI_WEBHOOK_TOKEN|CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
@@ -379,17 +379,6 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         !msg.menuClickId && !consumedByQualification && !consumedByCatalog
       ) {
         try {
-          await autoEnrollFunil(
-            db,
-            channel as Json,
-            msg.from,
-            msg.content,
-            msg.fromAd,
-          );
-        } catch (e) {
-          console.error("uazapi-webhook auto-enroll erro:", e);
-        }
-        try {
           await handleUazapiIntent(db, channel as Json, msg, acct);
         } catch (e) {
           console.error("uazapi-webhook intent erro:", e);
@@ -456,14 +445,14 @@ async function handleUazapiIntent(
         "uazapi-webhook: áudio recebido, mas não foi transcrito",
         msg.metaMessageId,
       );
-      return;
+    } else {
+      intentText = transcription;
+      console.log(
+        "uazapi-webhook: áudio transcrito",
+        msg.metaMessageId,
+        JSON.stringify(transcription.slice(0, 160)),
+      );
     }
-    intentText = transcription;
-    console.log(
-      "uazapi-webhook: áudio transcrito",
-      msg.metaMessageId,
-      JSON.stringify(transcription.slice(0, 160)),
-    );
   }
 
   const intent = isPrecoIntent(intentText)
@@ -475,7 +464,49 @@ async function handleUazapiIntent(
     : isNutricaoIntent(intentText)
     ? { name: "nutricao", menu: "menu_nutricao" }
     : null;
-  if (!intent) return;
+  let enrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+  try {
+    enrollment = await autoEnrollFunil(
+      db,
+      channel,
+      from,
+      intentText,
+      msg.fromAd,
+      { responseWillHandle: Boolean(intent) },
+    );
+  } catch (error) {
+    console.error("uazapi-webhook auto-enroll erro:", error);
+  }
+
+  if (!intent) {
+    if (enrollment?.humanHandoff) {
+      const messageId = msg.metaMessageId ?? msg.sentAt ?? null;
+      const handoffClaimId = messageId
+        ? `ad-question-handoff-${channel.id}-${from}-${messageId}`
+        : null;
+      const claimed = await claimDelivery(
+        db,
+        handoffClaimId,
+        "ad-question-handoff",
+      );
+      if (claimed) {
+        try {
+          await handleMenuClick(
+            db,
+            channel,
+            from,
+            "menu_humano",
+            acct,
+            messageId ?? undefined,
+          );
+        } catch (error) {
+          await releaseDelivery(db, handoffClaimId);
+          throw error;
+        }
+      }
+    }
+    return;
+  }
 
   const intentKey = msg.metaMessageId ?? new Date().toISOString();
   const claimed = await claimDelivery(

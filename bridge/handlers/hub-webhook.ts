@@ -509,20 +509,6 @@ async function handleWhatsApp(db: Db, p: Json) {
           console.error("resumeCampaign erro:", e);
         }
 
-        // entrada automática no funil (leads de anúncio) -- só age se FUNIL_AUTO_ENROLL_CHANNEL
-        // estiver setado e este for o canal alvo (+ FUNIL_KEYWORD, se configurada).
-        try {
-          await autoEnrollFunil(
-            db,
-            channel as Json,
-            from,
-            content ?? "",
-            Boolean(m.referral),
-          );
-        } catch (e) {
-          console.error("autoEnrollFunil erro:", e);
-        }
-
         // Intenção de PREÇO — três portas, mesma resposta do botão 💰 Preço:
         //   botão   -> menu_preco (tratado acima)
         //   texto   -> "preço/valor/quanto custa/orçamento..." (tolerante a acento/maiúscula)
@@ -609,6 +595,27 @@ async function handleWhatsApp(db: Db, p: Json) {
               : isNutricaoIntent(intentText)
               ? "nutrição"
               : null;
+            const routeWillHandle = Boolean(commercialIntent) ||
+              isVideoIntent(intentText) || isPlantioIntent(intentText) ||
+              isNutricaoIntent(intentText) ||
+              (isAreaAcimaDosPacotes(intentText) &&
+                extrairAreaHectares(intentText) !== null);
+
+            // Enroll depois da transcrição para decidir a abertura com a mesma intenção que
+            // será roteada. Referral/origem persistida prevalece mesmo quando há intenção.
+            let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+            try {
+              adEnrollment = await autoEnrollFunil(
+                db,
+                channel as Json,
+                from,
+                intentText,
+                Boolean(m.referral),
+                { responseWillHandle: routeWillHandle },
+              );
+            } catch (e) {
+              console.error("autoEnrollFunil erro:", e);
+            }
             // Qualquer intenção comercial interrompe a sequência agendada para não atravessar
             // a conversa. Se a primeira mensagem do anúncio pedir preço, o seletor de área
             // também deve aparecer agora, em vez de apenas prometer um menu futuro.
@@ -833,6 +840,35 @@ async function handleWhatsApp(db: Db, p: Json) {
                   regiao_uf: extrairUF(intentText),
                   message_id: String(m.id ?? m.message_id ?? "") || null,
                 });
+              }
+            }
+
+            // Pergunta de anúncio sem resposta automática: aciona uma única vez o caminho
+            // de atendimento humano já existente. O texto inbound já está no Chatwoot.
+            if (adEnrollment?.humanHandoff) {
+              const inboundMessageId = String(m.id ?? m.message_id ?? "") || null;
+              const handoffClaimId = inboundMessageId
+                ? `ad-question-handoff-${channel.id}-${from}-${inboundMessageId}`
+                : null;
+              const claimed = await claimDelivery(
+                db,
+                handoffClaimId,
+                "ad-question-handoff",
+              );
+              if (claimed) {
+                try {
+                  await handleMenuClick(
+                    db,
+                    channel as Json,
+                    from,
+                    "menu_humano",
+                    acct,
+                    inboundMessageId ?? undefined,
+                  );
+                } catch (error) {
+                  await releaseDelivery(db, handoffClaimId);
+                  throw error;
+                }
               }
             }
           } catch (e) {

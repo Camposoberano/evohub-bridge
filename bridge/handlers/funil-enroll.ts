@@ -5,7 +5,7 @@
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
-import { admin } from "../shared/supabase.ts";
+import { admin, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import {
@@ -44,7 +44,7 @@ const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 type Botao = { id: string; title: string };
 type Peca =
-  | { offset: number; kind: "text"; text: string }
+  | { offset: number; kind: "text"; text: string; opening?: boolean }
   | { offset: number; kind: "text_sequence"; texts: string[] }
   | {
     offset: number;
@@ -71,6 +71,7 @@ type Peca =
     text: string;
     buttonLabel: string;
     sections: { title?: string; rows: Botao[] }[];
+    opening?: boolean;
   };
 
 // Menu de ação — disponível no fechamento de TODA fase. Clique entrega o conteúdo na hora
@@ -286,11 +287,13 @@ function faseComercialV2(): Peca[] {
     {
       offset: 0,
       kind: "text",
+      opening: true,
       text: "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
     },
     {
       offset: 70,
       kind: "list",
+      opening: true,
       text: "Como posso ajudar?",
       buttonLabel: "Escolher assunto",
       sections: [{
@@ -356,12 +359,31 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
   }
   const force = body.force === true || body.force === "true";
+  const requestedOpeningReason = body.opening_reason === "intent_answered" ||
+      body.opening_reason === "human_handoff"
+    ? body.opening_reason
+    : null;
+  const skipOpening = body.skip_opening === true &&
+    requestedOpeningReason !== null;
+  const allowedOriginSignals = new Set([
+    "meta_referral",
+    "persisted_ad_origin",
+    "default_ad_message",
+    "social_opening",
+    "configured_keyword",
+  ]);
+  const originSignal = allowedOriginSignals.has(String(body.origin_signal))
+    ? String(body.origin_signal)
+    : null;
 
   const db = admin();
-  const { data: conv } = await db.from("conversations").select(
+  const { data: conv, error: conversationError } = await db.from("conversations").select(
     "id, chatwoot_conversation_id, contacts(attributes)",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
+  if (conversationError) {
+    return json({ error: `falha ao consultar conversa: ${conversationError.message}` }, 500);
+  }
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
 
   // Contato marcado com a etiqueta "nao-compra" (bridge/handlers/funil-control.ts,
@@ -375,8 +397,11 @@ export async function handle(req: Request): Promise<Response> {
 
   // dedup: já está no funil? force=true -> limpa a sequência + a fila antiga e re-enfileira
   // (re-teste). Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
-  const { data: existing } = await db.from("sales_sequences").select("id")
+  const { data: existing, error: existingError } = await db.from("sales_sequences").select("id")
     .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
+  if (existingError) {
+    return json({ error: `falha ao consultar sequência: ${existingError.message}` }, 500);
+  }
   if (existing) {
     if (!force) return json({ ok: true, already: true });
     await db.from("scheduled_messages").delete().eq("conversation_id", conv.id);
@@ -418,6 +443,7 @@ export async function handle(req: Request): Promise<Response> {
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;
     for (const p of FASES[i]()) {
+      if (skipOpening && "opening" in p && p.opening) continue;
       const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
       if (p.kind === "text") {
         rows.push({
@@ -500,13 +526,18 @@ export async function handle(req: Request): Promise<Response> {
     status: "running",
   });
   if (sequenceError) {
+    if ((sequenceError as { code?: string }).code === "23505") {
+      return json({ ok: true, already: true });
+    }
     return json(
       { error: `falha ao criar sequência: ${sequenceError.message}` },
       500,
     );
   }
-  const { error } = await db.from("scheduled_messages").insert(rows);
-  if (error) return json({ error: error.message }, 500);
+  if (rows.length > 0) {
+    const { error } = await db.from("scheduled_messages").insert(rows);
+    if (error) return json({ error: error.message }, 500);
+  }
 
   const { error: versionEventError } = await db.from("events").insert({
     source: "sales-funnel",
@@ -515,6 +546,9 @@ export async function handle(req: Request): Promise<Response> {
       conversation_id: conv.id,
       chatwoot_conversation_id: cwConvId,
       version: 2,
+      origin_signal: originSignal,
+      opening_skipped: skipOpening,
+      opening_reason: skipOpening ? requestedOpeningReason : null,
     },
   });
   if (versionEventError) {
@@ -557,23 +591,75 @@ export async function ehAberturaDeAnuncioSocial(
   channel: Json,
   from: string,
   content: string,
+  activeConversationId?: string,
 ): Promise<boolean> {
   if (!CANAIS_SOCIAIS.has(String(channel.type ?? ""))) return false;
   if (!pareceAberturaComercial(content, icebreakersConfigurados())) return false;
 
-  const { data: contact } = await db.from("contacts").select("id")
-    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-  if (!contact) return false;
-  const { data: conv } = await db.from("conversations").select("id")
-    .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-  if (!conv) return false;
+  let conversationId = activeConversationId;
+  if (!conversationId) {
+    const { data: contact, error: contactError } = await db.from("contacts").select("id")
+      .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) return false;
+    const { data: conv, error: conversationError } = await db.from("conversations").select("id")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+    if (conversationError) throw conversationError;
+    conversationId = conv?.id as string | undefined;
+  }
+  if (!conversationId) return false;
 
   // 1 = a que acabou de ser gravada. Acima disso a conversa já estava em andamento.
-  const { count } = await db.from("messages")
+  const { count, error: messageCountError } = await db.from("messages")
     .select("id", { count: "exact", head: true })
-    .eq("conversation_id", conv.id).eq("direction", "in");
+    .eq("conversation_id", conversationId).eq("direction", "in");
+  if (messageCountError) throw messageCountError;
   return (count ?? 0) <= 1;
+}
+
+export type AutoEnrollResult = {
+  adOrigin: boolean;
+  humanHandoff: boolean;
+};
+
+type EnrollOpeningOptions = {
+  skipOpening?: boolean;
+  openingReason?: "intent_answered" | "human_handoff";
+  originSignal?: string;
+  conversation?: Json | null;
+};
+
+type EnrollOutcome =
+  | "created"
+  | "already"
+  | "blocked"
+  | "in_progress"
+  | "no_contact"
+  | "no_conversation";
+
+async function activeConversationForContact(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+): Promise<Json | null> {
+  const { data: contact, error: contactError } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (contactError) throw contactError;
+  if (!contact) return null;
+
+  const { data: conversation, error: conversationError } = await db.from("conversations")
+    .select("id, chatwoot_conversation_id, origem")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  if (conversationError) throw conversationError;
+  return conversation as Json | null;
+}
+
+function parecePerguntaDeAnuncio(content: string): boolean {
+  const text = content.trim();
+  return text.includes("?") ||
+    pareceAberturaComercial(text, icebreakersConfigurados());
 }
 
 export async function autoEnrollFunil(
@@ -582,15 +668,16 @@ export async function autoEnrollFunil(
   from: string,
   content: string,
   fromAd = false,
-): Promise<void> {
-  // Um pedido já claro deve ir para sua resposta imediata; não deve ganhar uma régua paralela.
-  if (classificarIntencaoComercial(content)) return;
-  // A mensagem pré-preenchida do anúncio e o referral da Meta são sinais
-  // suficientes mesmo sem configuração adicional no ambiente.
-  if (fromAd || isDefaultAdMessage(content)) {
-    await enrollIfNew(db, channel, from);
-    return;
-  }
+  options: { responseWillHandle?: boolean } = {},
+): Promise<AutoEnrollResult> {
+  const conversation = await activeConversationForContact(db, channel, from);
+  let originSignal: string | null = fromAd
+    ? "meta_referral"
+    : conversation?.origem === "anuncio"
+    ? "persisted_ad_origin"
+    : isDefaultAdMessage(content)
+    ? "default_ad_message"
+    : null;
 
   // Facebook e Instagram: pergunta comercial NA ABERTURA vale como lead de anúncio.
   //
@@ -601,57 +688,130 @@ export async function autoEnrollFunil(
   // Só na abertura, e só nesses canais. No WhatsApp a inscrição já funciona por outro caminho
   // (63 de 67 aberturas comerciais entraram no funil nos mesmos 5 dias), e alargar a regra lá
   // pegaria quem chega por indicação, não por anúncio.
-  if (await ehAberturaDeAnuncioSocial(db, channel, from, content)) {
-    await enrollIfNew(db, channel, from);
-    return;
+  if (!originSignal && await ehAberturaDeAnuncioSocial(
+    db,
+    channel,
+    from,
+    content,
+    String(conversation?.id ?? "") || undefined,
+  )) {
+    originSignal = "social_opening";
   }
 
-  const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
-  if (!alvo) return; // desligado por padrão
-  if (channel.name !== alvo && channel.external_id !== alvo) return;
-  const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
-  // match tolerante: ignora maiúscula/minúscula E acentos ("INFORMAÇÕES" == "informacoes"),
-  // e basta a palavra-chave estar CONTIDA na msg (lead pode escrever coisa a mais em volta).
-  if (kw && !foldText(content).includes(foldText(kw))) return;
+  // Sinais de anúncio têm precedência: preço, dúvida técnica e demais intenções não podem
+  // impedir a inscrição quando a Meta ou a conversa já confirmou a origem.
+  if (!originSignal) {
+    // Um pedido orgânico já claro deve ir para sua resposta imediata, sem régua paralela.
+    if (classificarIntencaoComercial(content)) {
+      return { adOrigin: false, humanHandoff: false };
+    }
 
-  await enrollIfNew(db, channel, from);
+    const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
+    if (!alvo || (channel.name !== alvo && channel.external_id !== alvo)) {
+      return { adOrigin: false, humanHandoff: false };
+    }
+    const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
+    // Match tolerante: ignora maiúsculas/minúsculas e acentos.
+    if (kw && !foldText(content).includes(foldText(kw))) {
+      return { adOrigin: false, humanHandoff: false };
+    }
+    originSignal = "configured_keyword";
+  }
+
+  const unsupportedQuestion = !options.responseWillHandle &&
+    parecePerguntaDeAnuncio(content);
+  const openingReason = options.responseWillHandle
+    ? "intent_answered"
+    : unsupportedQuestion
+    ? "human_handoff"
+    : undefined;
+
+  let outcome: EnrollOutcome;
+  try {
+    outcome = await enrollIfNew(db, channel, from, {
+      skipOpening: Boolean(openingReason),
+      openingReason,
+      originSignal,
+      conversation,
+    });
+  } catch (error) {
+    console.error("autoEnrollFunil inscrição falhou:", error);
+    outcome = "in_progress";
+  }
+
+  return {
+    adOrigin: true,
+    humanHandoff: unsupportedQuestion && outcome !== "blocked" &&
+      outcome !== "no_contact" && outcome !== "no_conversation",
+  };
 }
 
 export async function enrollIfNew(
   db: ReturnType<typeof admin>,
   channel: Json,
   from: string,
-): Promise<void> {
-  const { data: contact } = await db.from("contacts").select("id")
-    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-  if (!contact) return;
-  const { data: conv } = await db.from("conversations").select(
-    "id, chatwoot_conversation_id",
-  )
-    .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-  if (!conv?.chatwoot_conversation_id) return;
-  const { data: existing } = await db.from("sales_sequences").select("id")
-    .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
-  if (existing) return;
+  options: EnrollOpeningOptions = {},
+): Promise<EnrollOutcome> {
+  const conv = options.conversation ?? await (async () => {
+    const { data: contact, error: contactError } = await db.from("contacts").select("id")
+      .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) return null;
+    const { data: conversation, error: conversationError } = await db.from("conversations")
+      .select("id, chatwoot_conversation_id, origem")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+    if (conversationError) throw conversationError;
+    return conversation as Json | null;
+  })();
+  if (!options.conversation && !conv) return "no_contact";
+  if (!conv) return "no_conversation";
+  if (!conv.chatwoot_conversation_id) return "no_conversation";
 
-  const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
-  const res = await handle(
-    new Request(`http://internal/funil-enroll?token=${token}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chatwoot_conversation_id: conv.chatwoot_conversation_id,
+  const claimKey = `funil-enroll-${String(conv.id)}`;
+  if (!await claimDeliveryWithTtl(db, claimKey, "funil-enroll", 2 * 60_000)) {
+    return "in_progress";
+  }
+
+  try {
+    const { data: existing, error: existingError } = await db.from("sales_sequences").select("id")
+      .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
+    if (existingError) throw existingError;
+    if (existing) return "already";
+
+    const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
+    const response = await handle(
+      new Request(`http://internal/funil-enroll?token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatwoot_conversation_id: conv.chatwoot_conversation_id,
+          skip_opening: options.skipOpening === true,
+          opening_reason: options.openingReason ?? null,
+          origin_signal: options.originSignal ?? null,
+        }),
       }),
-    }),
-  );
-  console.log(
-    "enrollIfNew: conv",
-    conv.chatwoot_conversation_id,
-    "->",
-    res.status,
-    await res.text(),
-  );
+    );
+    const result = await response.json().catch(() => ({})) as Json;
+    if (response.status === 422 && result.blocked) return "blocked";
+    if (!response.ok || result.error) {
+      throw new Error(`funil-enroll HTTP ${response.status}`);
+    }
+    const outcome = result.already === true ? "already" : "created";
+    console.log(
+      "enrollIfNew:",
+      "conv",
+      conv.chatwoot_conversation_id,
+      outcome,
+      "opening_skipped",
+      options.skipOpening === true,
+      "origin_signal",
+      options.originSignal ?? "none",
+    );
+    return outcome;
+  } finally {
+    await releaseDelivery(db, claimKey);
+  }
 }
 
 export async function recoverEligibleFunnels(
