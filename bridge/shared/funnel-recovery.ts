@@ -61,20 +61,24 @@ export async function resumeSequenceRebased(
   now = Date.now(),
 ): Promise<number> {
   const { data: paused, error } = await db.from("scheduled_messages")
-    .select("id,send_at")
+    .select("id,send_at,type")
     .eq("conversation_id", conversationId)
     .eq("funnel", funnel)
     .eq("status", "paused")
     .order("send_at", { ascending: true })
     .limit(500);
   if (error) throw error;
-  const rows = (paused ?? []) as Json[];
-  if (!rows.length) return 0;
-
-  const rebased = rebasePausedSchedule(
-    rows.map((row) => String(row.send_at)),
-    now + 60_000,
+  const rows = ((paused ?? []) as Json[]).filter((row) =>
+    row.type !== "deferred_intent"
   );
+  const deferredRoutes = ((paused ?? []) as Json[]).filter((row) =>
+    row.type === "deferred_intent"
+  );
+  if (!rows.length && !deferredRoutes.length) return 0;
+
+  const rebased = rows.length
+    ? rebasePausedSchedule(rows.map((row) => String(row.send_at)), now + 60_000)
+    : [];
   for (let index = 0; index < rows.length; index++) {
     await db.from("scheduled_messages").update({
       status: "pending",
@@ -85,7 +89,7 @@ export async function resumeSequenceRebased(
     .eq("conversation_id", conversationId)
     .eq("funnel", funnel)
     .eq("status", "paused");
-  return rows.length;
+  return rows.length + deferredRoutes.length;
 }
 
 export function canAutoResume(input: {
@@ -215,7 +219,7 @@ export async function maintainFunnels(
     const { data: queue, error: queueError } = await db.from(
       "scheduled_messages",
     )
-      .select("id,day,status,send_at,sent_at")
+      .select("id,day,status,send_at,sent_at,type")
       .eq("conversation_id", conversationId)
       .eq("funnel", String(sequence.funnel ?? "mega-sorgo"))
       .order("send_at", { ascending: true })
@@ -266,8 +270,13 @@ export async function maintainFunnels(
 
     if (sequence.status !== "paused") continue;
     if (catalogConversationIds.has(conversationId)) continue;
-    const pausedRows = rows.filter((row) => row.status === "paused");
-    if (!pausedRows.length) continue;
+    const deferredRoutes = rows.filter((row) =>
+      row.status === "paused" && row.type === "deferred_intent"
+    );
+    const pausedRows = rows.filter((row) =>
+      row.status === "paused" && row.type !== "deferred_intent"
+    );
+    if (!pausedRows.length && !deferredRoutes.length) continue;
     const pause = latestPause.get(conversationId);
     if (!pause) continue;
     const activity = await latestActivity(db, conversationId);
@@ -287,10 +296,12 @@ export async function maintainFunnels(
       })
     ) continue;
 
-    const rebased = rebasePausedSchedule(
-      pausedRows.map((row) => String(row.send_at)),
-      now + 60_000,
-    );
+    const rebased = pausedRows.length
+      ? rebasePausedSchedule(
+        pausedRows.map((row) => String(row.send_at)),
+        now + 60_000,
+      )
+      : [];
     for (let index = 0; index < pausedRows.length; index++) {
       await db.from("scheduled_messages").update({
         status: "pending",
@@ -307,6 +318,7 @@ export async function maintainFunnels(
         chatwoot_conversation_id: sequence.chatwoot_conversation_id,
         reason: "90min-sem-atividade",
         resumed_messages: pausedRows.length,
+        resumed_deferred_routes: deferredRoutes.length,
       },
     });
     result.resumed++;

@@ -11,7 +11,10 @@ import {
   confereSegredo,
   segredoParaChamadaInterna,
 } from "./shared/segredo-bridge.ts";
-import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
+import {
+  dispatchDeferredFunnelIntent,
+  handle as hubWebhook,
+} from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
 import { handle as connectUazapi } from "./handlers/connect-uazapi.ts";
@@ -1237,7 +1240,7 @@ function startFunnelQueueLoop() {
     if (rodando) return;
     rodando = true;
     try {
-      const result = await pumpFunnelQueue(10);
+      const result = await pumpFunnelQueue(10, dispatchDeferredFunnelIntent);
       if (result.found) {
         console.log("funnel-queue-pump:", JSON.stringify(result));
       }

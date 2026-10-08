@@ -617,15 +617,21 @@ async function handleWhatsApp(db: Db, p: Json) {
                 {
                   responseWillHandle: routeWillHandle && !humanHandoffWillHandle,
                   humanHandoffWillHandle,
+                  sourceMessageId: String(m.id ?? m.message_id ?? "") || null,
                 },
               );
             } catch (e) {
               console.error("autoEnrollFunil erro:", e);
             }
-            // Qualquer intenção comercial interrompe a sequência agendada para não atravessar
-            // a conversa. Se a primeira mensagem do anúncio pedir preço, o seletor de área
-            // também deve aparecer agora, em vez de apenas prometer um menu futuro.
-            if (detectedIntent) {
+            if (adEnrollment?.deferIntent) {
+              console.log(
+                "hub-webhook: rota comercial adiada até a abertura do funil",
+                sufixoContato(from),
+              );
+            }
+            // Uma rota da primeira mensagem de anúncio fica na fila até a abertura terminar.
+            // Em mensagens posteriores, a intenção pode pausar o funil e responder direto.
+            if (detectedIntent && !adEnrollment?.deferIntent) {
               const { data: _ct } = await db.from("contacts").select("id").eq(
                 "channel_id",
                 channel.id,
@@ -646,7 +652,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                 }
               }
             }
-            if (isPrecoIntent(intentText)) {
+            if (isPrecoIntent(intentText) && !adEnrollment?.deferIntent) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -711,7 +717,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                   }
                 }
               }
-            } else if (isVideoIntent(intentText)) {
+            } else if (isVideoIntent(intentText) && !adEnrollment?.deferIntent) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -754,7 +760,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                   }
                 }
               }
-            } else if (isPlantioIntent(intentText)) {
+            } else if (isPlantioIntent(intentText) && !adEnrollment?.deferIntent) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -766,7 +772,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 await handlePlantioSequence(db, channel as Json, from, acct);
               }
-            } else if (isNutricaoIntent(intentText)) {
+            } else if (isNutricaoIntent(intentText) && !adEnrollment?.deferIntent) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -778,7 +784,9 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
-            } else if (commercialIntent === "duvida_tecnica") {
+            } else if (
+              commercialIntent === "duvida_tecnica" && !adEnrollment?.deferIntent
+            ) {
               // Pergunta técnica (espaçamento, densidade, irrigação, que animal come):
               // não existe resposta pronta e chutar sobre plantio queima a confiança de
               // quem entende de terra. Então o bot cala e chama gente — que é melhor que
@@ -803,7 +811,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                   String(m.id ?? m.message_id ?? "") || undefined,
                 );
               }
-            } else if (commercialIntent === "uso") {
+            } else if (commercialIntent === "uso" && !adEnrollment?.deferIntent) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (await claimDelivery(db, `intent-uso-${channel.id}-${from}-${intentKey}`, "intent")) {
@@ -822,7 +830,9 @@ async function handleWhatsApp(db: Db, p: Json) {
                   String(m.id ?? m.message_id ?? "") || undefined,
                 );
               }
-            } else if (commercialIntent === "interesse_geral") {
+            } else if (
+              commercialIntent === "interesse_geral" && !adEnrollment?.deferIntent
+            ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (await claimDelivery(db, `intent-interesse-${channel.id}-${from}-${intentKey}`, "intent")) {
@@ -835,7 +845,9 @@ async function handleWhatsApp(db: Db, p: Json) {
                   String(m.id ?? m.message_id ?? "") || undefined,
                 );
               }
-            } else if (isAreaAcimaDosPacotes(intentText)) {
+            } else if (
+              isAreaAcimaDosPacotes(intentText) && !adEnrollment?.deferIntent
+            ) {
               const hectares = extrairAreaHectares(intentText);
               if (hectares !== null) {
                 const origem = channel.type === "facebook" || channel.type === "instagram"
@@ -3448,6 +3460,62 @@ export async function handleMenuClick(
   return { sent: r.ok };
 }
 
+/** Executa uma intenção inicial de anúncio depois que a abertura foi entregue. */
+export async function dispatchDeferredFunnelIntent(
+  db: Db,
+  row: Json,
+): Promise<void> {
+  const payload = row.payload && typeof row.payload === "object"
+    ? row.payload as Json
+    : {};
+  const action = String(payload.__deferred_action ?? "");
+  const allowed = new Set([
+    "menu_preco",
+    "menu_depoimento",
+    "menu_plantio",
+    "menu_nutricao",
+    "menu_uso",
+    "menu_humano",
+  ]);
+  if (!allowed.has(action)) {
+    throw new Error("rota de anúncio adiada inválida");
+  }
+
+  const conversationId = String(row.conversation_id ?? "");
+  const { data: conversation, error: conversationError } = await db.from(
+    "conversations",
+  ).select("id,contact_id").eq("id", conversationId).maybeSingle();
+  if (conversationError) throw conversationError;
+  if (!conversation?.contact_id) throw new Error("conversa da rota adiada ausente");
+  const { data: contact, error: contactError } = await db.from("contacts")
+    .select("channel_id,external_contact_id").eq("id", conversation.contact_id)
+    .maybeSingle();
+  if (contactError) throw contactError;
+  if (!contact?.channel_id || !contact.external_contact_id) {
+    throw new Error("contato da rota adiada ausente");
+  }
+  const { data: channel, error: channelError } = await db.from("channels")
+    .select("*").eq("id", contact.channel_id).maybeSingle();
+  if (channelError) throw channelError;
+  if (!channel) throw new Error("canal da rota adiada ausente");
+  const acct = await accountForChannel(String(channel.id));
+
+  // A abertura já terminou. Agora o pedido original pode pausar a régua
+  // informativa e seguir pelo fluxo específico, como numa resposta posterior.
+  await autoPauseFunil(conversationId, action, { comPrazo: action !== "menu_humano" });
+  const dispatch = await handleMenuClick(
+    db,
+    channel as Json,
+    String(contact.external_contact_id),
+    action,
+    acct,
+    String(payload.__source_message_id ?? "") || undefined,
+  );
+  if (!dispatch.sent && dispatch.reason !== "already-sent-today") {
+    throw new Error("a rota pós-abertura não confirmou o envio");
+  }
+}
+
 // Erros da Meta que indicam número inexistente / não-WhatsApp (número morto).
 const DEAD_NUMBER_ERRORS = new Set([131026, 131051, 131047, 131000]);
 
@@ -3609,6 +3677,7 @@ async function handleMessenger(db: Db, p: Json) {
                 !humanHandoffWillHandle
             ),
             humanHandoffWillHandle,
+            sourceMessageId: inboundEventId,
           },
         );
       } catch (error) {
@@ -3618,7 +3687,14 @@ async function handleMessenger(db: Db, p: Json) {
         );
       }
 
+      if (adEnrollment?.deferIntent) {
+        console.log(
+          "hub-webhook social: rota adiada até a abertura do funil",
+          sufixoContato(sender),
+        );
+      }
       if (
+        !adEnrollment?.deferIntent &&
         /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
           .test(actionId)
       ) {
@@ -3657,7 +3733,7 @@ async function handleMessenger(db: Db, p: Json) {
             inboundEventId,
           );
         }
-      } else if (actionId === "menu_humano") {
+      } else if (!adEnrollment?.deferIntent && actionId === "menu_humano") {
         await handleSocialSalesIntent(
           db,
           channel as Json,
@@ -3666,7 +3742,7 @@ async function handleMessenger(db: Db, p: Json) {
           inboundEventId,
           "contact",
         );
-      } else if (!actionId) {
+      } else if (!adEnrollment?.deferIntent && !actionId) {
         if (commercialIntent) {
           await recordInboundCommercialIntent(
             db, channel as Json, sender, commercialIntent, inboundEventId,

@@ -1,5 +1,11 @@
 # Entrada de leads de anúncios no funil — design
 
+## Revisão de comportamento aprovada em 08/10/2026
+
+Esta decisão substitui qualquer trecho abaixo que peça para omitir a abertura por causa de uma intenção ou pergunta inicial. Todo contato identificado como lead de anúncio recebe primeiro as duas mensagens do funil principal, qualquer que seja o texto recebido. A intenção inicial fica numa etapa da fila, depois do menu: preço, vídeo, plantio, nutrição ou atendimento só são acionados quando as duas mensagens principais estiverem confirmadas como enviadas. Uma resposta posterior durante a abertura não cancela esse trecho; se ela já acionar diretamente uma rota, a etapa adiada correspondente deve ser cancelada para evitar duplicidade.
+
+A conversa 3485 exemplifica a falha: a pergunta de preço enviou os pacotes, mas nenhuma mensagem principal saiu, e a sequência ficou concluída sem registro de envio. Quando uma nova mensagem chegar a uma conversa com sequência terminal e sem evidência de nenhuma das duas mensagens principais, o sistema pode recriar a abertura uma vez. A correção não faz reenvio histórico em massa.
+
 ## Objetivo
 
 Fazer cada conversa identificada como originada de anúncio entrar uma única vez no funil comercial, mesmo quando a primeira mensagem usa uma pergunta ou frase diferente do texto pré-configurado. A pergunta inicial do produtor deve continuar sendo tratada, sem competir com uma saudação ou menu genérico duplicado.

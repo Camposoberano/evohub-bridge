@@ -7,16 +7,23 @@ import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
 import {
   admin,
+  claimDelivery,
   claimDeliveryWithTtl,
   releaseDelivery,
 } from "../shared/supabase.ts";
-import { autoPauseFunil } from "../shared/funnel-state.ts";
+import {
+  autoPauseFunil,
+  openingMessagesComplete,
+} from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import {
+  deferredAdRoute,
   foldText,
+  isAdFunnelOriginSignal,
   isDefaultAdMessage,
   pareceAberturaComercial,
+  shouldDeferInitialAdIntent,
 } from "../shared/ad-lead.ts";
 import {
   addBusinessSeconds,
@@ -551,7 +558,20 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  const sequenceStatus = rows.length > 0 ? "running" : "completed";
+  if (rows.length === 0) {
+    await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "commercial_funnel_opening_skipped",
+      payload: {
+        conversation_id: conv.id,
+        origin_signal: originSignal,
+        opening_reason: skipOpening ? requestedOpeningReason : null,
+      },
+    });
+    return json({ ok: true, enqueued: 0, skipped: true });
+  }
+
+  const sequenceStatus = "running";
   const enrollmentId = crypto.randomUUID();
   for (const row of rows) {
     const messagePayload = row.payload && typeof row.payload === "object"
@@ -686,10 +706,12 @@ export async function ehAberturaDeAnuncioSocial(
 export type AutoEnrollResult = {
   adOrigin: boolean;
   humanHandoff: boolean;
+  deferIntent: boolean;
 };
 
 type EnrollOpeningOptions = {
   skipOpening?: boolean;
+  force?: boolean;
   openingReason?: "intent_answered" | "human_handoff";
   originSignal?: string;
   conversation?: Json | null;
@@ -730,6 +752,93 @@ function parecePerguntaDeAnuncio(content: string): boolean {
     pareceAberturaComercial(text, icebreakersConfigurados());
 }
 
+async function enqueueDeferredAdRoute(
+  db: ReturnType<typeof admin>,
+  conversation: Json,
+  route: string,
+  sourceMessageId: string | null,
+): Promise<void> {
+  const conversationId = String(conversation.id ?? "");
+  const chatwootConversationId = Number(conversation.chatwoot_conversation_id);
+  if (!conversationId || !chatwootConversationId) {
+    throw new Error("conversa sem identificador Chatwoot para adiar rota");
+  }
+
+  const { data: existing, error: existingError } = await db.from(
+    "scheduled_messages",
+  ).select("id,status").eq("conversation_id", conversationId)
+    .eq("funnel", FUNNEL).eq("type", "deferred_intent")
+    .in("status", ["pending", "paused"]).limit(1);
+  if (existingError) throw existingError;
+
+  const { data: openingRows, error: openingError } = await db.from(
+    "scheduled_messages",
+  ).select("step,send_at,type").eq("conversation_id", conversationId)
+    .eq("funnel", FUNNEL).eq("day", 1).limit(100);
+  if (openingError) throw openingError;
+  const openings = (openingRows ?? []).filter((row: Json) =>
+    row.type !== "deferred_intent"
+  );
+
+  const latestOpeningAt = Math.max(
+    ...openings.map((row: Json) => Date.parse(String(row.send_at ?? "")))
+      .filter(Number.isFinite),
+  );
+  const sendAtMs = Number.isFinite(latestOpeningAt)
+    ? Math.max(Date.now() + 30_000, latestOpeningAt + 20_000)
+    : Date.now() + 120_000;
+  const step = openings.length
+    ? Math.max(
+      ...openings.map((row: Json) => Number(row.step ?? 0)).filter(
+        Number.isFinite,
+      ),
+      0,
+    ) + 1
+    : 2;
+  const claimId = "deferred-ad-route:" + conversationId + ":" +
+    (sourceMessageId ?? "initial");
+  if (!await claimDelivery(db, claimId, "deferred-ad-route")) return;
+
+  try {
+    const payload = {
+      __deferred_action: route,
+      __source_message_id: sourceMessageId,
+    };
+    const error = existing?.length
+      ? (await db.from("scheduled_messages").update({
+        payload,
+        send_at: new Date(sendAtMs).toISOString(),
+      }).eq("id", existing[0].id).in("status", ["pending", "paused"])).error
+      : (await db.from("scheduled_messages").insert({
+        conversation_id: conversationId,
+        chatwoot_conversation_id: chatwootConversationId,
+        funnel: FUNNEL,
+        day: 1,
+        step,
+        type: "deferred_intent",
+        // O n8n consome somente status=pending. A fila local processa este estado
+        // reservado após a abertura, sem expor um tipo desconhecido ao consumidor externo.
+        status: "paused",
+        payload,
+        send_at: new Date(sendAtMs).toISOString(),
+      })).error;
+    if (error) throw error;
+    await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "ad_route_deferred",
+      payload: {
+        conversation_id: conversationId,
+        route,
+        source_message_id: sourceMessageId,
+        send_at: new Date(sendAtMs).toISOString(),
+      },
+    });
+  } catch (error) {
+    await releaseDelivery(db, claimId);
+    throw error;
+  }
+}
+
 export async function autoEnrollFunil(
   db: ReturnType<typeof admin>,
   channel: Json,
@@ -739,6 +848,7 @@ export async function autoEnrollFunil(
   options: {
     responseWillHandle?: boolean;
     humanHandoffWillHandle?: boolean;
+    sourceMessageId?: string | null;
   } = {},
 ): Promise<AutoEnrollResult> {
   const conversation = await activeConversationForContact(db, channel, from);
@@ -776,26 +886,30 @@ export async function autoEnrollFunil(
   if (!originSignal) {
     // Um pedido orgânico já claro deve ir para sua resposta imediata, sem régua paralela.
     if (classificarIntencaoComercial(content)) {
-      return { adOrigin: false, humanHandoff: false };
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
     }
 
     const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
     if (!alvo || (channel.name !== alvo && channel.external_id !== alvo)) {
-      return { adOrigin: false, humanHandoff: false };
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
     }
     const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
     // Match tolerante: ignora maiúsculas/minúsculas e acentos.
     if (kw && !foldText(content).includes(foldText(kw))) {
-      return { adOrigin: false, humanHandoff: false };
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
     }
     originSignal = "configured_keyword";
   }
 
+  const adFunnelOrigin = isAdFunnelOriginSignal(originSignal);
   const humanHandoffWillHandle = options.humanHandoffWillHandle === true;
   const unsupportedQuestion = !options.responseWillHandle &&
     !humanHandoffWillHandle &&
     parecePerguntaDeAnuncio(content);
-  const openingReason = humanHandoffWillHandle || unsupportedQuestion
+  // Perguntas iniciais de anúncio recebem a abertura; o handoff ou a rota específica
+  // são executados em seguida, pela fila da etapa adiada.
+  const automaticHandoff = unsupportedQuestion;
+  const openingReason = humanHandoffWillHandle || automaticHandoff
     ? "human_handoff"
     : options.responseWillHandle
     ? "intent_answered"
@@ -804,7 +918,8 @@ export async function autoEnrollFunil(
   let outcome: EnrollOutcome;
   try {
     outcome = await enrollIfNew(db, channel, from, {
-      skipOpening: Boolean(openingReason),
+      // Anúncio sempre recebe a abertura principal antes de qualquer rota lateral.
+      skipOpening: !adFunnelOrigin && Boolean(openingReason),
       openingReason,
       originSignal,
       conversation,
@@ -813,10 +928,88 @@ export async function autoEnrollFunil(
     console.error("autoEnrollFunil inscrição falhou:", error);
     outcome = "in_progress";
   }
+  let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome);
+  if (
+    !deferIntent && adFunnelOrigin && outcome === "already" && conversation?.id
+  ) {
+    try {
+      const conversationId = String(conversation.id);
+      const openingComplete = await openingMessagesComplete(db, conversationId);
+      deferIntent = !openingComplete;
+
+      // Corrige sequências antigas que foram marcadas como concluídas sem enviar
+      // nenhuma peça da abertura (caso 3485). Só recria quando não há evidência de
+      // nenhuma das duas mensagens; uma abertura parcial nunca é duplicada às cegas.
+      if (!openingComplete) {
+        const { data: dayRows, error: dayRowsError } = await db.from(
+          "scheduled_messages",
+        ).select("id,type").eq("conversation_id", conversationId)
+          .eq("funnel", FUNNEL).eq("day", 1).limit(100);
+        if (dayRowsError) throw dayRowsError;
+        const hasOpeningRows = (dayRows ?? []).some((row: Json) =>
+          row.type !== "deferred_intent"
+        );
+        if (!hasOpeningRows) {
+          const { data: sequence, error: sequenceError } = await db.from(
+            "sales_sequences",
+          ).select("status").eq("conversation_id", conversationId)
+            .eq("funnel", FUNNEL).maybeSingle();
+          if (sequenceError) throw sequenceError;
+          if (
+            sequence &&
+            ["completed", "cancelled"].includes(String(sequence.status))
+          ) {
+            outcome = await enrollIfNew(db, channel, from, {
+              force: true,
+              originSignal,
+              conversation,
+            });
+            deferIntent = !await openingMessagesComplete(
+              db,
+              conversationId,
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error("autoEnrollFunil leitura da abertura falhou:", error);
+      // Se não der para confirmar que a abertura terminou, não deixe a rota lateral
+      // pausar ou atravessar o funil principal nesta mensagem.
+      deferIntent = true;
+    }
+  }
+
+  if (deferIntent && adFunnelOrigin && conversation?.id) {
+    const route = deferredAdRoute(content);
+    if (route) {
+      try {
+        await enqueueDeferredAdRoute(
+          db,
+          conversation,
+          route,
+          options.sourceMessageId ?? null,
+        );
+      } catch (error) {
+        console.error(
+          "autoEnrollFunil não conseguiu enfileirar a rota pós-abertura:",
+          error,
+        );
+        await db.from("events").insert({
+          source: "sales-funnel",
+          event_type: "deferred_ad_route_failed",
+          payload: {
+            conversation_id: conversation.id,
+            route,
+            source_message_id: options.sourceMessageId ?? null,
+          },
+        });
+      }
+    }
+  }
 
   // Resposta automática pausa com prazo; handoff humano não retoma sozinho. Vale também
-  // para a fila recém-criada sem saudação/menu, porque os próximos acessos já estão agendados.
-  if (openingReason && conversation?.id) {
+  // para respostas posteriores. A primeira entrada do anúncio precisa enviar a abertura.
+  if (openingReason && conversation?.id && !deferIntent) {
     try {
       await autoPauseFunil(String(conversation.id), openingReason, {
         comPrazo: openingReason !== "human_handoff",
@@ -828,8 +1021,11 @@ export async function autoEnrollFunil(
 
   return {
     adOrigin: true,
-    humanHandoff: unsupportedQuestion && outcome !== "blocked" &&
+    humanHandoff: !deferIntent &&
+      (humanHandoffWillHandle || automaticHandoff) &&
+      outcome !== "blocked" &&
       outcome !== "no_contact" && outcome !== "no_conversation",
+    deferIntent,
   };
 }
 
@@ -867,10 +1063,12 @@ export async function enrollIfNew(
   try {
     const { data: existing, error: existingError } = await db.from(
       "sales_sequences",
-    ).select("id")
+    ).select("id,status")
       .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
     if (existingError) throw existingError;
-    if (existing) return "already";
+    const forceEligible = options.force === true && existing &&
+      ["completed", "cancelled"].includes(String(existing.status ?? ""));
+    if (existing && !forceEligible) return "already";
 
     const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
     const response = await handle(
@@ -879,6 +1077,7 @@ export async function enrollIfNew(
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chatwoot_conversation_id: conv.chatwoot_conversation_id,
+          force: forceEligible,
           skip_opening: options.skipOpening === true,
           opening_reason: options.openingReason ?? null,
           origin_signal: options.originSignal ?? null,

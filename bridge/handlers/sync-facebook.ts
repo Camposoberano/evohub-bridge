@@ -390,6 +390,8 @@ async function syncInbound(
                   !humanHandoffWillHandle
               ),
               humanHandoffWillHandle,
+              sourceMessageId: metaMessageId ??
+                `sync-${contactId}-${String(message.created_time ?? "")}`,
             },
           );
         } catch (error) {
@@ -398,7 +400,24 @@ async function syncInbound(
             String(error).slice(0, 200),
           );
         }
-        if (detailAction) {
+        const deferSocialRoute = adEnrollment?.deferIntent === true;
+        if (deferSocialRoute) {
+          if (commercialIntent) {
+            await recordInboundCommercialIntent(
+              db,
+              channel,
+              contactId,
+              commercialIntent,
+              metaMessageId ??
+                `sync-${contactId}-${String(message.created_time ?? "")}`,
+            );
+          }
+          console.log(
+            "sync-facebook: rota adiada até a abertura do funil",
+            contactId.slice(-4),
+          );
+        }
+        if (!deferSocialRoute && detailAction) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
@@ -434,7 +453,7 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else if (menuAction) {
+        } else if (!deferSocialRoute && menuAction) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
@@ -468,7 +487,7 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else if (inferredReply) {
+        } else if (!deferSocialRoute && inferredReply) {
           try {
             const claimed = await claimDelivery(
               db,
@@ -496,7 +515,7 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else {
+        } else if (!deferSocialRoute) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;

@@ -472,10 +472,21 @@ async function handleUazapiIntent(
       from,
       intentText,
       msg.fromAd,
-      { responseWillHandle: Boolean(intent) },
+      {
+        responseWillHandle: Boolean(intent),
+        sourceMessageId: msg.metaMessageId ?? null,
+      },
     );
   } catch (error) {
     console.error("uazapi-webhook auto-enroll erro:", error);
+  }
+
+  if (enrollment?.deferIntent) {
+    console.log(
+      "uazapi-webhook: rota adiada até a abertura do funil",
+      sufixoContato(from),
+    );
+    return;
   }
 
   if (!intent) {

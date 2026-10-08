@@ -1,9 +1,59 @@
+import {
+  isDuvidaTecnicaIntent,
+  isFechamentoIntent,
+  isInteresseComercialIntent,
+  isNutricaoIntent,
+  isPlantioIntent,
+  isPrecoIntent,
+  isVideoIntent,
+} from "./intent.ts";
+
 export function foldText(value: string): string {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
 export function normalizedWords(value: string): string {
   return foldText(value).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+const AD_FUNNEL_ORIGIN_SIGNALS = new Set([
+  "meta_referral",
+  "persisted_ad_origin",
+  "default_ad_message",
+  "social_opening",
+]);
+
+export function isAdFunnelOriginSignal(signal: unknown): boolean {
+  return AD_FUNNEL_ORIGIN_SIGNALS.has(String(signal ?? ""));
+}
+
+export function shouldDeferInitialAdIntent(
+  originSignal: unknown,
+  enrollmentOutcome: string,
+): boolean {
+  return isAdFunnelOriginSignal(originSignal) &&
+    ["created", "in_progress"].includes(enrollmentOutcome);
+}
+
+/** Rota comercial identificada na mensagem inicial, para ser acionada após a abertura. */
+export function deferredAdRoute(content: string): string | null {
+  if (isPrecoIntent(content)) return "menu_preco";
+  if (isVideoIntent(content)) return "menu_depoimento";
+  if (isPlantioIntent(content)) return "menu_plantio";
+  if (isNutricaoIntent(content)) return "menu_nutricao";
+  if (isFechamentoIntent(content) || isDuvidaTecnicaIntent(content)) {
+    return "menu_humano";
+  }
+  if (isInteresseComercialIntent(content)) return "menu_uso";
+  // Pergunta desconhecida continua recebendo a abertura. Em seguida, segue para
+  // atendimento humano em vez de desaparecer ou interromper a primeira mensagem.
+  if (
+    content.includes("?") ||
+    /\b(entrega|frete|envio|envia|transport\w*)\b/i.test(content)
+  ) {
+    return "menu_humano";
+  }
+  return null;
 }
 
 /**

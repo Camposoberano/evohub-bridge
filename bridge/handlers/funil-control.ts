@@ -269,7 +269,7 @@ export async function handle(req: Request): Promise<Response> {
     await nota(
       cwConvId,
       resumed > 0
-        ? `▶️ *Funil retomado* — ${resumed} mensagens reativadas, reagendadas a partir de agora mantendo os intervalos originais.`
+        ? `▶️ *Funil retomado* — ${resumed} etapa(s) reativada(s), com os intervalos originais preservados.`
         : "▶️ *Nada a retomar* — não há mensagem pausada nesta conversa. (Se o funil foi encerrado por *stop*, *pago* ou *não compra*, as mensagens foram canceladas e só um novo início traz de volta.)",
       acct,
     );
@@ -360,7 +360,7 @@ export async function handle(req: Request): Promise<Response> {
         ? status === "paused"
           ? "ℹ️ *Funil já está pausado.* Não dupliquei a fila. Use a macro Retomar Funil quando o atendimento puder continuar."
           : status === "completed"
-          ? "ℹ️ *Funil já concluído.* Não criei uma segunda sequência."
+          ? "ℹ️ *A abertura do funil já foi enviada.* Não criei outra sequência para evitar mensagens duplicadas."
           : status === "cancelled"
           ? "ℹ️ *Funil foi cancelado.* Não reativei nem dupliquei as mensagens."
           : "ℹ️ *Funil já iniciado.* Não dupliquei as mensagens."

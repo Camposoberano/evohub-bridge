@@ -11,6 +11,7 @@ import {
   isWithinFunnelSendHours,
   nextFunnelSendAt,
 } from "./business-hours.ts";
+import { openingMessagesComplete } from "./funnel-state.ts";
 
 type Json = Record<string, unknown>;
 
@@ -157,6 +158,10 @@ async function recordFailure(
 
 export async function pumpFunnelQueue(
   limit = 10,
+  dispatchDeferredIntent?: (
+    db: ReturnType<typeof admin>,
+    row: Json,
+  ) => Promise<void>,
 ): Promise<
   { found: number; sent: number; failed: number; held: number }
 > {
@@ -170,15 +175,31 @@ export async function pumpFunnelQueue(
     const db = admin();
     await normalizeBusinessQueue(db);
     const now = new Date().toISOString();
-    const { data, error } = await db.from("scheduled_messages")
-      .select(
-        "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
-      )
-      .eq("status", "pending")
-      .lte("send_at", now)
-      .order("send_at", { ascending: true })
-      .limit(limit);
-    if (error) throw error;
+    const [pendingResult, deferredResult] = await Promise.all([
+      db.from("scheduled_messages")
+        .select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
+        )
+        .eq("status", "pending")
+        .lte("send_at", now)
+        .order("send_at", { ascending: true })
+        .limit(limit),
+      db.from("scheduled_messages")
+        .select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
+        )
+        .eq("status", "paused").eq("type", "deferred_intent")
+        .lte("send_at", now).order("send_at", { ascending: true })
+        .limit(limit),
+    ]);
+    if (pendingResult.error) throw pendingResult.error;
+    if (deferredResult.error) throw deferredResult.error;
+    const data = [
+      ...(pendingResult.data ?? []),
+      ...(deferredResult.data ?? []),
+    ].sort((a: Json, b: Json) =>
+      Date.parse(String(a.send_at)) - Date.parse(String(b.send_at))
+    ).slice(0, limit);
 
     // Quem já comprou e quem disse que não compra saem da cadeia. A etiqueta é posta pelo
     // atendente no WhatsApp/Chatwoot e `bloqueiosPorConversa` lê a ETIQUETA junto com o
@@ -225,6 +246,10 @@ export async function pumpFunnelQueue(
             .eq("status", "pending");
           if (cancelError) throw cancelError;
           cancelled++;
+          continue;
+        }
+        if (row.type === "deferred_intent" && sequence.status !== "running") {
+          held++;
           continue;
         }
       } else if (funnel === "mega-sorgo-followup") {
@@ -306,6 +331,55 @@ export async function pumpFunnelQueue(
       const payload = (row.payload && typeof row.payload === "object")
         ? row.payload as Json
         : {};
+      if (String(row.type ?? "") === "deferred_intent") {
+        if (!dispatchDeferredIntent) {
+          await releaseQueueClaim(db, claimKey);
+          held++;
+          continue;
+        }
+        let openingComplete: boolean;
+        try {
+          openingComplete = await openingMessagesComplete(db, conversationId);
+        } catch (error) {
+          await releaseQueueClaim(db, claimKey);
+          throw error;
+        }
+        if (!openingComplete) {
+          const { error: waitError } = await db.from("scheduled_messages")
+            .update({
+              send_at: new Date(Date.now() + 30_000).toISOString(),
+            }).eq("id", id).in("status", ["pending", "paused"]);
+          if (waitError) throw waitError;
+          await releaseQueueClaim(db, claimKey);
+          held++;
+          continue;
+        }
+        try {
+          await dispatchDeferredIntent(db, row);
+          const sentAt = new Date().toISOString();
+          const { error: sentError } = await db.from("scheduled_messages")
+            .update({ status: "sent", sent_at: sentAt }).eq("id", id);
+          if (sentError) throw sentError;
+          const { error: sequenceError } = await db.from("sales_sequences")
+            .update({ current_day: Number(row.day ?? 1), last_sent_at: sentAt })
+            .eq("conversation_id", conversationId)
+            .eq("funnel", row.funnel ?? "mega-sorgo")
+            .in("status", ["running", "paused"]);
+          if (sequenceError) throw sequenceError;
+          sent++;
+        } catch (error) {
+          console.error("funnel-queue: rota adiada falhou", id, error);
+          await db.from("scheduled_messages").update({ status: "failed" })
+            .eq("id", id).in("status", ["pending", "paused", "cancelled"]);
+          await releaseQueueClaim(db, claimKey);
+          await recordFailure(db, id, row, 500, {
+            blocked: "deferred-intent-failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          failed++;
+        }
+        continue;
+      }
       let res: Response;
       try {
         res = await sendOutbound(
