@@ -600,6 +600,9 @@ async function handleWhatsApp(db: Db, p: Json) {
               isNutricaoIntent(intentText) ||
               (isAreaAcimaDosPacotes(intentText) &&
                 extrairAreaHectares(intentText) !== null);
+            const humanHandoffWillHandle = commercialIntent === "duvida_tecnica" ||
+              (isAreaAcimaDosPacotes(intentText) &&
+                extrairAreaHectares(intentText) !== null);
 
             // Enroll depois da transcrição para decidir a abertura com a mesma intenção que
             // será roteada. Referral/origem persistida prevalece mesmo quando há intenção.
@@ -611,7 +614,10 @@ async function handleWhatsApp(db: Db, p: Json) {
                 from,
                 intentText,
                 Boolean(m.referral),
-                { responseWillHandle: routeWillHandle },
+                {
+                  responseWillHandle: routeWillHandle && !humanHandoffWillHandle,
+                  humanHandoffWillHandle,
+                },
               );
             } catch (e) {
               console.error("autoEnrollFunil erro:", e);
@@ -633,7 +639,9 @@ async function handleWhatsApp(db: Db, p: Json) {
                 ).limit(1).maybeSingle();
                 if (_cv) {
                   await autoPauseFunil(_cv.id as string, detectedIntent, {
-                    comPrazo: false,
+                    // Resposta automática pausa só pelo prazo; atendimento humano espera
+                    // decisão do agente e não retoma mensagens sozinho.
+                    comPrazo: !humanHandoffWillHandle,
                   });
                 }
               }
@@ -1912,6 +1920,15 @@ export async function handleSocialSalesIntent(
             .eq("contact_id", ct.id).neq("status", "resolved")
             .order("opened_at", { ascending: false }).limit(1).maybeSingle()
           : { data: null };
+        if (cv?.id) {
+          try {
+            await autoPauseFunil(String(cv.id), "pedido_contato", {
+              comPrazo: false,
+            });
+          } catch (error) {
+            console.error("handleSocialSalesIntent pausa de funil falhou:", error);
+          }
+        }
         const pedido = await registrarPedidoHumano(db, {
           conversationId: (cv?.id as string | undefined) ?? null,
           channelId: String(channel.id),
@@ -3193,6 +3210,16 @@ export async function handleHumanRequest(
   contexto: Record<string, unknown> = { tipo_pedido: "atendimento" },
 ): Promise<boolean> {
   const conversation = await resolveSocialConversation(db, channel, from);
+  const tipoPedido = String(contexto.tipo_pedido ?? "atendimento");
+  if (conversation?.id) {
+    try {
+      await autoPauseFunil(String(conversation.id), tipoPedido, {
+        comPrazo: false,
+      });
+    } catch (error) {
+      console.error("handleHumanRequest pausa de funil falhou:", error);
+    }
+  }
   const pedido = await registrarPedidoHumano(db, {
     conversationId: (conversation?.id as string | undefined) ?? null,
     channelId: String(channel.id),
@@ -3202,7 +3229,6 @@ export async function handleHumanRequest(
     contato: from,
     contexto,
   });
-  const tipoPedido = String(contexto.tipo_pedido ?? "atendimento");
   const area = Number(contexto.area_hectares);
   const textoRegistrado = tipoPedido === "duvida_tecnica"
     ? "✅ Registrei sua dúvida para o Cícero confirmar com segurança. O funil ficará pausado enquanto a equipe verifica a resposta."
@@ -3534,6 +3560,8 @@ async function handleMessenger(db: Db, p: Json) {
       const inboundEventId = (message?.mid as string | undefined) ??
         (postback?.mid as string | undefined) ??
         `postback-${sender}-${String(entry.time ?? Date.now())}-${actionId}`;
+      const referral = (m.referral as Json | undefined) ??
+        (postback?.referral as Json | undefined) ?? undefined;
       await ingestInbound(db, channel as Json, {
         from: sender,
         name: profile.name,
@@ -3542,9 +3570,53 @@ async function handleMessenger(db: Db, p: Json) {
         msgType: "text",
         content: text,
         acct,
-        referral: (m.referral as Json | undefined) ??
-          (postback?.referral as Json | undefined) ?? undefined,
+        referral,
       });
+
+      const repliedAt = message?.timestamp
+        ? new Date(Number(message.timestamp) * 1000).toISOString()
+        : undefined;
+      const inferredReply = !actionId
+        ? await inferSocialReplyFromRecentPrompt(
+          db,
+          String(channel.id),
+          sender,
+          text,
+          repliedAt,
+        )
+        : null;
+      const menuAction = !actionId ? inferSocialMenuAction(text) : null;
+      const commercialIntent = !actionId
+        ? classificarIntencaoComercial(text)
+        : null;
+      const salesIntent = !actionId ? inferSocialSalesIntent(text) : null;
+      const recognizedAction = /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso|humano)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
+        .test(actionId);
+      const humanHandoffWillHandle = actionId === "menu_humano" ||
+        commercialIntent === "duvida_tecnica" ||
+        (isAreaAcimaDosPacotes(text) && extrairAreaHectares(text) !== null);
+      let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+      try {
+        adEnrollment = await autoEnrollFunil(
+          db,
+          channel as Json,
+          sender,
+          text,
+          Boolean(referral),
+          {
+            responseWillHandle: Boolean(
+              (recognizedAction || inferredReply || menuAction || commercialIntent || salesIntent) &&
+                !humanHandoffWillHandle
+            ),
+            humanHandoffWillHandle,
+          },
+        );
+      } catch (error) {
+        console.error(
+          "hub-webhook social auto-enroll erro:",
+          String(error).slice(0, 200),
+        );
+      }
 
       if (
         /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
@@ -3595,15 +3667,6 @@ async function handleMessenger(db: Db, p: Json) {
           "contact",
         );
       } else if (!actionId) {
-        const inferredReply = await inferSocialReplyFromRecentPrompt(
-          db,
-          String(channel.id),
-          sender,
-          text,
-          message?.timestamp ? new Date(Number(message.timestamp) * 1000).toISOString() : undefined,
-        );
-        const menuAction = inferSocialMenuAction(text);
-        const commercialIntent = classificarIntencaoComercial(text);
         if (commercialIntent) {
           await recordInboundCommercialIntent(
             db, channel as Json, sender, commercialIntent, inboundEventId,
@@ -3660,13 +3723,37 @@ async function handleMessenger(db: Db, p: Json) {
             message_id: inboundEventId,
           });
         } else {
-          await handleSocialSalesIntent(
+          const handled = await handleSocialSalesIntent(
             db,
             channel as Json,
             sender,
             text,
             inboundEventId,
           );
+          if (!handled && adEnrollment?.humanHandoff) {
+            const handoffClaimId =
+              `ad-question-handoff-${channel.id}-${sender}-${inboundEventId}`;
+            const claimed = await claimDelivery(
+              db,
+              handoffClaimId,
+              "ad-question-handoff",
+            );
+            if (claimed) {
+              try {
+                await handleMenuClick(
+                  db,
+                  channel as Json,
+                  sender,
+                  "menu_humano",
+                  acct,
+                  inboundEventId,
+                );
+              } catch (error) {
+                await releaseDelivery(db, handoffClaimId);
+                throw error;
+              }
+            }
+          }
         }
       }
     }

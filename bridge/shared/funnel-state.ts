@@ -1,5 +1,9 @@
 import { admin } from "./supabase.ts";
-import { marcarPausa } from "./funil-pausa.ts";
+import {
+  chaveDaPausa,
+  limparPausa,
+  marcarPausa,
+} from "./funil-pausa.ts";
 
 // Pausa somente a sequencia Mega Sorgo ativa da conversa. O motivo fica
 // registrado para auditoria e para uma retomada deliberada pelo atendente.
@@ -20,9 +24,20 @@ export async function autoPauseFunil(
   const comPrazo = opts.comPrazo !== false;
   const db = admin();
   const { data: seq } = await db.from("sales_sequences").select("id, status")
-    .eq("conversation_id", conversationId).eq("status", "running")
+    .eq("conversation_id", conversationId).in("status", ["running", "paused"])
     .maybeSingle();
   if (!seq) return false;
+
+  // Uma pausa manual ou handoff sem marcador não pode virar temporária só porque o
+  // cliente mandou outra mensagem enquanto aguarda o atendente.
+  if (seq.status === "paused" && comPrazo) {
+    const { data: timedPause, error: pauseError } = await db.from("deliveries")
+      .select("delivery_id")
+      .eq("delivery_id", chaveDaPausa(conversationId))
+      .eq("source", "funil-pausa-preco")
+      .maybeSingle();
+    if (pauseError || !timedPause) return false;
+  }
 
   await db.from("scheduled_messages").update({ status: "paused" })
     .eq("conversation_id", conversationId).eq("status", "pending");
@@ -33,9 +48,10 @@ export async function autoPauseFunil(
   await db.from("events").insert({
     source: "funil",
     event_type: "auto_paused",
-    payload: { conversation_id: conversationId, reason },
+    payload: { conversation_id: conversationId, reason, com_prazo: comPrazo },
   });
   if (comPrazo) await marcarPausa(db, conversationId);
+  else await limparPausa(db, conversationId);
   console.log(
     "funil auto-paused:",
     conversationId,

@@ -1,7 +1,7 @@
 // sync-facebook — fallback por pull para Messenger/Instagram quando o webhook de
 // mensagens da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { metaDeliveryStatus } from "../shared/meta-errors.ts";
@@ -26,6 +26,7 @@ import {
 import {
   inferSocialDetailAction,
   inferSocialMenuAction,
+  inferSocialSalesIntent,
 } from "../shared/social-sales.ts";
 import {
   handleMenuClick,
@@ -36,6 +37,7 @@ import {
   handleSocialSalesIntent,
   recordInboundCommercialIntent,
 } from "./hub-webhook.ts";
+import { autoEnrollFunil } from "./funil-enroll.ts";
 
 type Json = Record<string, unknown>;
 
@@ -369,6 +371,33 @@ async function syncInbound(
           content,
           message.created_time as string | undefined,
         );
+        const commercialIntent = classificarIntencaoComercial(content);
+        const salesIntent = inferSocialSalesIntent(content);
+        const humanHandoffWillHandle = commercialIntent === "duvida_tecnica" ||
+          (isAreaAcimaDosPacotes(content) &&
+            extrairAreaHectares(content) !== null);
+        let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+        try {
+          adEnrollment = await autoEnrollFunil(
+            db,
+            channel,
+            contactId,
+            content,
+            Boolean(message.referral),
+            {
+              responseWillHandle: Boolean(
+                (detailAction || menuAction || inferredReply || commercialIntent || salesIntent) &&
+                  !humanHandoffWillHandle
+              ),
+              humanHandoffWillHandle,
+            },
+          );
+        } catch (error) {
+          console.error(
+            "sync-facebook auto-enroll erro:",
+            String(error).slice(0, 200),
+          );
+        }
         if (detailAction) {
           try {
             const eventId = metaMessageId ??
@@ -471,7 +500,7 @@ async function syncInbound(
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
-            const intent = classificarIntencaoComercial(content);
+            const intent = commercialIntent;
             if (intent) {
               await recordInboundCommercialIntent(
                 db,
@@ -510,7 +539,37 @@ async function syncInbound(
                 }
               }
             } else {
-              await handleSocialSalesIntent(db, channel, contactId, content, eventId);
+              const handled = await handleSocialSalesIntent(
+                db,
+                channel,
+                contactId,
+                content,
+                eventId,
+              );
+              if (!handled && adEnrollment?.humanHandoff) {
+                const handoffClaimId =
+                  `ad-question-handoff-${channel.id}-${contactId}-${eventId}`;
+                const claimed = await claimDelivery(
+                  db,
+                  handoffClaimId,
+                  "ad-question-handoff",
+                );
+                if (claimed) {
+                  try {
+                    await handleMenuClick(
+                      db,
+                      channel,
+                      contactId,
+                      "menu_humano",
+                      acct,
+                      eventId,
+                    );
+                  } catch (error) {
+                    await releaseDelivery(db, handoffClaimId);
+                    throw error;
+                  }
+                }
+              }
             }
           } catch (error) {
             console.error(

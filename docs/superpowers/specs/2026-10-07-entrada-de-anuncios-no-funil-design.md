@@ -11,6 +11,8 @@ Fazer cada conversa identificada como originada de anúncio entrar uma única ve
 - Na conversa 3461, “Você entrega em todo Brasil?” recebeu saudação e menu genéricos, repetidos, sem resposta à pergunta de entrega.
 - No recorte dessas conversas, 478 mensagens agendadas tinham os estados `sent=310`, `pending=98`, `failed=37` e `cancelled=33`. Os itens pendentes ainda não estavam vencidos no momento da consulta. Das 37 falhas, 36 eram vídeos e uma era uma lista. A correção da inscrição não deve ser tratada como correção dessas falhas de entrega.
 - No fluxo atual, `uazapi-webhook` chama `autoEnrollFunil` antes de `handleUazapiIntent`. Em `autoEnrollFunil`, a classificação de intenção comercial retorna antes de verificar `fromAd` ou a mensagem padrão de anúncio. Assim, um pedido classificado como comercial pode impedir a inscrição mesmo quando existe um sinal de anúncio.
+- As entradas sociais usam `handleMessenger` (webhook do Messenger) e `sync-facebook` (consulta periódica, necessária para Instagram). Nenhum desses caminhos chamava `autoEnrollFunil`, embora a função já tivesse o reconhecedor de abertura comercial social. Respostas sociais de preço/entrega podiam ser enviadas sem criar sequência.
+- `ingestInbound` marcava qualquer sequência ativa como `replied` e cancelava a fila antes do roteador aplicar a pausa com prazo. A manutenção também não distinguia pausa temporária de handoff humano sem prazo.
 - A inscrição atual consulta a sequência existente antes de chamar o endpoint do funil. O comportamento precisa continuar idempotente também quando webhooks repetidos ou simultâneos processam a mesma conversa.
 
 ## Decisão de produto
@@ -23,6 +25,7 @@ O sinal confiável de origem do anúncio tem precedência sobre a classificaçã
 
 - Considerar evidência autoritativa de anúncio o `referral` da Meta recebido no webhook ou a origem persistida da conversa como `origem=anuncio`.
 - Se houver evidência autoritativa, inscrever a conversa independentemente da frase, da intenção classificada ou de o texto coincidir com a mensagem padrão do anúncio.
+- Aplicar a mesma decisão no webhook Messenger e na consulta social usada pelo Instagram, preservando a idempotência entre os dois caminhos.
 - Se não houver metadados de origem, manter os reconhecedores de texto existentes somente como fallback nos canais e condições já delimitados. Não converter toda pergunta comercial em evidência de anúncio.
 - Guardar o sinal de origem e o motivo da decisão para permitir distinguir inscrição por metadado, fallback textual, duplicidade e bloqueio operacional.
 
@@ -36,7 +39,8 @@ O sinal confiável de origem do anúncio tem precedência sobre a classificaçã
 ### 3. Tratar a primeira mensagem sem duplicidade
 
 - Executar o roteamento da intenção explícita mesmo quando a conversa também for elegível para o funil.
-- Para uma pergunta com resposta automática existente, enviar essa resposta como abertura e suprimir a saudação/menu genérico que repetiria a abertura. A sequência continua inscrita para os próximos passos compatíveis com as proteções de resposta, pausa, horário e atendimento humano.
+- Para uma pergunta com resposta automática existente, enviar essa resposta como abertura e suprimir a saudação/menu genérico que repetiria a abertura. Se já houver sequência ativa, pausá-la pelo prazo configurado para dar espaço à resposta e retomá-la automaticamente quando não houver nova atividade. Apenas perguntas encaminhadas a uma pessoa mantêm a sequência pausada sem prazo.
+- Respostas do cliente pausam e renovam o prazo de inatividade; não cancelam as etapas futuras. Handoff humano e pausa manual permanecem sem retomada automática.
 - Para uma mensagem sem intenção específica, usar a abertura normal do funil uma única vez.
 - Para uma pergunta sem resposta automática aprovada, preservar o encaminhamento humano/fallback existente e não substituí-lo por uma abertura genérica que deixe a pergunta sem tratamento.
 - Registrar qual caminho produziu a primeira resposta, para diagnosticar duplicações e perguntas sem resposta.
@@ -59,6 +63,8 @@ O sinal confiável de origem do anúncio tem precedência sobre a classificaçã
 
 - Sinal `fromAd`/referral com mensagem classificada como preço, entrega ou outra intenção comercial cria uma sequência e ainda encaminha a intenção.
 - Origem persistida `anuncio` permite inscrição pela recuperação mesmo sem nova mensagem padrão.
+- Abertura comercial social sem referral é reconhecida no primeiro inbound e inscrita pelo caminho Messenger/Instagram que recebeu a mensagem.
+- Resposta do cliente renova a pausa temporária; handoff humano não é retomado automaticamente.
 - Reentrega do mesmo evento e eventos concorrentes não criam duas sequências nem duas filas iniciais.
 - Uma pergunta respondida diretamente não recebe também saudação/menu genérico; mensagem sem intenção específica ainda recebe a abertura normal do funil uma única vez.
 - Pergunta sem resposta automática continua no fallback/atendimento humano existente.
@@ -75,4 +81,4 @@ O sinal confiável de origem do anúncio tem precedência sobre a classificaçã
 
 ## Estado
 
-O usuário aprovou a regra de precedência da origem de anúncio e a abertura sem duplicidade em 07/10/2026. Esta especificação aguarda revisão do usuário antes da implementação. Nenhum código, dado de produção ou envio foi alterado como parte deste documento.
+O usuário aprovou a regra de precedência da origem de anúncio e a abertura sem duplicidade em 07/10/2026; em 08/10/2026 pediu a correção das entradas sociais e da perda de sequência após respostas. A implementação local está no worktree isolado. Nenhum dado de produção, envio real ou deploy foi executado.

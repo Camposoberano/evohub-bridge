@@ -94,11 +94,13 @@ export function canAutoResume(input: {
   lastActivityAt: number;
   lastInboundAt: number;
   pauseType: string;
+  comPrazo?: boolean;
   outcome?: string | null;
 }): boolean {
   // isClosedOutcome, não `!outcome`: conversations.outcome é NOT NULL com default 'open',
   // então `!outcome` era falso pra TODA conversa e o auto-resume parou de existir.
-  return input.pauseType === "auto_paused" && !isClosedOutcome(input.outcome) &&
+  return input.pauseType === "auto_paused" && input.comPrazo !== false &&
+    !isClosedOutcome(input.outcome) &&
     input.now - input.pauseAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastActivityAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastInboundAt <= MAX_AUTO_RESUME_INBOUND_AGE_MS;
@@ -280,6 +282,7 @@ export async function maintainFunnels(
         lastActivityAt: activity.lastActivityAt,
         lastInboundAt: activity.lastInboundAt,
         pauseType: String(pause.event_type),
+        comPrazo: (pause.payload as Json | undefined)?.com_prazo !== false,
         outcome: String(conversation?.outcome ?? "") || null,
       })
     ) continue;

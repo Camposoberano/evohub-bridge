@@ -24,6 +24,7 @@ import {
   setConversationLabels,
 } from "./chatwoot.ts";
 import { resumeWindowHeldMessages } from "./funnel-queue.ts";
+import { autoPauseFunil } from "./funnel-state.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -526,45 +527,37 @@ async function ingestInboundClaimed(
     }
   }
 
-  // Uma resposta passa o lead para a conversa comercial. Para Mega Sorgo, a régua de
-  // apresentação não pode continuar por cima do atendimento nem ser retomada depois.
+  // Uma resposta pausa a régua enquanto o cliente conversa. A pausa tem prazo e é
+  // renovada em cada mensagem; os roteadores podem promovê-la para espera humana sem prazo.
   if (!msg.outgoing) {
     try {
-      const { data: sequence, error: sequenceError } = await db.from(
-        "sales_sequences",
-      ).select("id,status")
-        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
-        .in("status", ["running", "paused"]).maybeSingle();
-      if (sequenceError) throw sequenceError;
-      if (sequence) {
-        const { error: stateError } = await db.from("sales_sequences")
-          .update({ status: "replied" }).eq("id", sequence.id)
-          .in("status", ["running", "paused"]);
-        if (stateError) throw stateError;
-        const { error: cancelError } = await db.from("scheduled_messages")
-          .update({ status: "cancelled" })
-          .eq("conversation_id", conv.id)
-          .in("funnel", ["mega-sorgo", "mega-sorgo-followup"])
-          .in("status", ["pending", "paused"]);
-        if (cancelError) throw cancelError;
+      const paused = await autoPauseFunil(
+        String(conv.id),
+        "resposta_cliente",
+        { comPrazo: true },
+      );
+      if (paused) {
         const { error: eventError } = await db.from("events").insert({
           source: "sales-funnel",
           event_type: "commercial_engaged",
           channel_id: channel.id,
           payload: {
             conversation_id: conv.id,
-            sequence_id: sequence.id,
             message_id: insertedMessage.id,
             origin: "cliente",
           },
         });
         if (eventError) throw eventError;
       }
+      const { error: followupError } = await db.from("scheduled_messages")
+        .update({ status: "cancelled" })
+        .eq("conversation_id", conv.id)
+        .eq("funnel", "mega-sorgo-followup")
+        .in("status", ["pending", "paused"]);
+      if (followupError) throw followupError;
     } catch (error) {
-      // A mensagem continua persistida. O pump da fila repete a guarda consultando o estado
-      // da sequência antes de qualquer entrega pendente.
       console.error(
-        "inbound: não consegui interromper a régua após resposta:",
+        "inbound: não consegui pausar a régua após resposta:",
         String(error).slice(0, 180),
       );
     }

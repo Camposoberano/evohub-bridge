@@ -6,6 +6,7 @@
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
 import { admin, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
+import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import {
@@ -359,6 +360,7 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
   }
   const force = body.force === true || body.force === "true";
+  const manual = body.manual === true || body.manual === "true";
   const requestedOpeningReason = body.opening_reason === "intent_answered" ||
       body.opening_reason === "human_handoff"
     ? body.opening_reason
@@ -395,20 +397,33 @@ export async function handle(req: Request): Promise<Response> {
     return json({ ok: false, blocked: "contato-bloqueado" }, 422);
   }
 
-  // dedup: já está no funil? force=true -> limpa a sequência + a fila antiga e re-enfileira
-  // (re-teste). Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
-  const { data: existing, error: existingError } = await db.from("sales_sequences").select("id")
+  // dedup: um comando repetido nunca pode apagar uma sequência em andamento ou pausada.
+  // force fica restrito a sequências terminais e só é usado em re-teste explícito.
+  // Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
+  const { data: existing, error: existingError } = await db.from("sales_sequences").select(
+    "id,status",
+  )
     .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
   if (existingError) {
     return json({ error: `falha ao consultar sequência: ${existingError.message}` }, 500);
   }
   if (existing) {
-    if (!force) return json({ ok: true, already: true });
-    await db.from("scheduled_messages").delete().eq("conversation_id", conv.id);
-    await db.from("sales_sequences").delete().eq("conversation_id", conv.id).eq(
-      "funnel",
-      FUNNEL,
+    const existingStatus = String(existing.status ?? "");
+    if (!force || !["completed", "cancelled"].includes(existingStatus)) {
+      return json({ ok: true, already: true, sequence_status: existingStatus });
+    }
+    const { error: cancelError } = await db.from("scheduled_messages").update({
+      status: "cancelled",
+    }).eq("conversation_id", conv.id).eq("funnel", FUNNEL).in(
+      "status",
+      ["pending", "paused"],
     );
+    if (cancelError) return json({ error: cancelError.message }, 500);
+    const { error: deleteError } = await db.from("sales_sequences").delete().eq(
+      "id",
+      existing.id,
+    );
+    if (deleteError) return json({ error: deleteError.message }, 500);
   }
 
   // carrega a faixa e agrupa por dia+slot pra sortear
@@ -429,7 +444,6 @@ export async function handle(req: Request): Promise<Response> {
 
   const fast = body.fast === true || body.fast === "true";
   const turbo = body.turbo === true || body.turbo === "true";
-  const manual = body.manual === true || body.manual === "true";
   const agora = Date.now();
   // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.
   // Assim o teste cabe em ~45min sem misturar as aberturas, mídias e botões das fases.
@@ -440,6 +454,7 @@ export async function handle(req: Request): Promise<Response> {
     ? iniciosDosAcessos(agora, GAPS_FAST, true)
     : iniciosDosAcessos(agora, GAPS, false, manual);
   const rows: Json[] = [];
+
   for (let i = 0; i < FASES.length; i++) {
     const dia = i + 1;
     for (const p of FASES[i]()) {
@@ -519,11 +534,12 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
+  const sequenceStatus = rows.length > 0 ? "running" : "completed";
   const { error: sequenceError } = await db.from("sales_sequences").insert({
     conversation_id: conv.id,
     chatwoot_conversation_id: cwConvId,
     funnel: FUNNEL,
-    status: "running",
+    status: sequenceStatus,
   });
   if (sequenceError) {
     if ((sequenceError as { code?: string }).code === "23505") {
@@ -549,13 +565,18 @@ export async function handle(req: Request): Promise<Response> {
       origin_signal: originSignal,
       opening_skipped: skipOpening,
       opening_reason: skipOpening ? requestedOpeningReason : null,
+      queued_messages: rows.length,
     },
   });
   if (versionEventError) {
     console.warn("funil v2: falha ao registrar versão:", versionEventError.message);
   }
 
-  return json({ ok: true, enfileiradas: rows.length });
+  return json({
+    ok: true,
+    enfileiradas: rows.length,
+    sequence_status: sequenceStatus,
+  });
 }
 
 function json(obj: unknown, status = 200): Response {
@@ -668,7 +689,10 @@ export async function autoEnrollFunil(
   from: string,
   content: string,
   fromAd = false,
-  options: { responseWillHandle?: boolean } = {},
+  options: {
+    responseWillHandle?: boolean;
+    humanHandoffWillHandle?: boolean;
+  } = {},
 ): Promise<AutoEnrollResult> {
   const conversation = await activeConversationForContact(db, channel, from);
   let originSignal: string | null = fromAd
@@ -718,12 +742,14 @@ export async function autoEnrollFunil(
     originSignal = "configured_keyword";
   }
 
+  const humanHandoffWillHandle = options.humanHandoffWillHandle === true;
   const unsupportedQuestion = !options.responseWillHandle &&
+    !humanHandoffWillHandle &&
     parecePerguntaDeAnuncio(content);
-  const openingReason = options.responseWillHandle
-    ? "intent_answered"
-    : unsupportedQuestion
+  const openingReason = humanHandoffWillHandle || unsupportedQuestion
     ? "human_handoff"
+    : options.responseWillHandle
+    ? "intent_answered"
     : undefined;
 
   let outcome: EnrollOutcome;
@@ -737,6 +763,18 @@ export async function autoEnrollFunil(
   } catch (error) {
     console.error("autoEnrollFunil inscrição falhou:", error);
     outcome = "in_progress";
+  }
+
+  // Resposta automática pausa com prazo; handoff humano não retoma sozinho. Vale também
+  // para a fila recém-criada sem saudação/menu, porque os próximos acessos já estão agendados.
+  if (openingReason && conversation?.id) {
+    try {
+      await autoPauseFunil(String(conversation.id), openingReason, {
+        comPrazo: openingReason !== "human_handoff",
+      });
+    } catch (error) {
+      console.error("autoEnrollFunil pausa de sequência falhou:", error);
+    }
   }
 
   return {

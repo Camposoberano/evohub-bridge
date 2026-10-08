@@ -63,10 +63,11 @@ export async function marcarPausa(
   conversationId: string,
 ): Promise<void> {
   try {
-    await db.from("deliveries").insert({
+    await db.from("deliveries").upsert({
       delivery_id: chaveDaPausa(conversationId),
       source: FONTE,
-    });
+      received_at: new Date().toISOString(),
+    }, { onConflict: "delivery_id" });
   } catch (e) {
     // conflito = já havia marcador; qualquer outro erro só é registrado
     const txt = String(e);

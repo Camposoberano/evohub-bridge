@@ -344,26 +344,33 @@ export async function handle(req: Request): Promise<Response> {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Clique manual começa imediatamente; as fases seguintes respeitam a cadência comercial.
+        // O comando pode ser reencontrado pelo loop após falha de rede. O início é idempotente:
+        // uma sequência existente nunca é apagada nem re-enfileirada por uma repetição.
         body: JSON.stringify({
           chatwoot_conversation_id: cwConvId,
-          force: true,
           manual: true,
         }),
       },
     );
     const enrollData = await enrollRes.json().catch(() => ({})) as Json;
     if (enrollData.ok) {
-      await nota(
-        cwConvId,
-        `🚀 *Funil de apresentação iniciado!*\n${
-          enrollData.enfileiradas ?? 0
-        } mensagens enfileiradas.`,
-        acct,
-      );
+      const already = enrollData.already === true;
+      const status = String(enrollData.sequence_status ?? "");
+      const message = already
+        ? status === "paused"
+          ? "ℹ️ *Funil já está pausado.* Não dupliquei a fila. Use a macro Retomar Funil quando o atendimento puder continuar."
+          : status === "completed"
+          ? "ℹ️ *Funil já concluído.* Não criei uma segunda sequência."
+          : status === "cancelled"
+          ? "ℹ️ *Funil foi cancelado.* Não reativei nem dupliquei as mensagens."
+          : "ℹ️ *Funil já iniciado.* Não dupliquei as mensagens."
+        : "🚀 *Funil de apresentação iniciado!*\n" +
+          (enrollData.enfileiradas ?? 0) + " mensagens enfileiradas.";
+      await nota(cwConvId, message, acct);
       return json({
         ok: true,
         action: "funil",
+        already,
         enfileiradas: enrollData.enfileiradas,
       });
     }
