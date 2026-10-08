@@ -13,12 +13,17 @@ import {
 } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
+import { enrollIfNew } from "./funil-enroll.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
-import { autoPauseFunil } from "../shared/funnel-state.ts";
+import {
+  autoPauseFunil,
+  hasFunnelDeliveryEvidence,
+  openingMessagesComplete,
+} from "../shared/funnel-state.ts";
 import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
@@ -336,56 +341,86 @@ export async function handle(req: Request): Promise<Response> {
 
   // Iniciar funil de apresentação (Mega Sorgo) manualmente
   if (action === "funil" || action === "iniciar" || action === "start-funil") {
-    const secret = env("CHATWOOT_WEBHOOK_SECRET");
-    const enrollRes = await fetch(
-      `http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-enroll?token=${
-        encodeURIComponent(secret)
-      }`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // O comando pode ser reencontrado pelo loop após falha de rede. O início é idempotente:
-        // uma sequência existente nunca é apagada nem re-enfileirada por uma repetição.
-        body: JSON.stringify({
-          chatwoot_conversation_id: cwConvId,
-          manual: true,
-        }),
-      },
-    );
-    const enrollData = await enrollRes.json().catch(() => ({})) as Json;
-    if (enrollData.ok) {
-      const already = enrollData.already === true;
-      const status = String(enrollData.sequence_status ?? "");
-      const message = already
-        ? status === "paused"
-          ? "ℹ️ *Funil já está pausado.* Não dupliquei a fila. Use a macro Retomar Funil quando o atendimento puder continuar."
-          : status === "completed"
-          ? "ℹ️ *A abertura do funil já foi enviada.* Não criei outra sequência para evitar mensagens duplicadas."
-          : status === "cancelled"
-          ? "ℹ️ *Funil foi cancelado.* Não reativei nem dupliquei as mensagens."
-          : "ℹ️ *Funil já iniciado.* Não dupliquei as mensagens."
-        : "🚀 *Funil de apresentação iniciado!*\n" +
-          (enrollData.enfileiradas ?? 0) + " mensagens enfileiradas.";
-      await nota(cwConvId, message, acct);
+    const resolved = await resolveChannelAndContact(db, conv as Json);
+    if (!resolved) {
       return json({
-        ok: true,
-        action: "funil",
-        already,
-        enfileiradas: enrollData.enfileiradas,
-      });
+        error: "canal ou contato não encontrado",
+        terminal: true,
+      }, 404);
     }
+    const startedAt = new Date().toISOString();
+    let outcome: string;
+    try {
+      outcome = await enrollIfNew(db, resolved.channel, resolved.from, {
+        manual: true,
+        repairMissingOpening: true,
+        conversation: conv as Json,
+      });
+    } catch (error) {
+      console.error(
+        "funil-control: início manual falhou",
+        String(error).slice(0, 180),
+      );
+      return json({
+        ok: false,
+        action: "funil",
+        error: "erro ao iniciar funil",
+      }, 500);
+    }
+
+    if (!["created", "already", "in_progress"].includes(outcome)) {
+      const reason = outcome === "blocked"
+        ? "O contato está bloqueado ou excluído da automação."
+        : "Não foi possível localizar a sequência da conversa.";
+      await nota(cwConvId, "⚠️ " + reason, acct);
+      return json({ ok: true, action: "funil", terminal: true, outcome });
+    }
+
+    const [openingComplete, deliveryEvidence, newRows] = await Promise.all([
+      openingMessagesComplete(db, String(conv.id)),
+      hasFunnelDeliveryEvidence(db, String(conv.id)),
+      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
+        .eq("day", 1).neq("type", "deferred_intent"),
+    ]);
+    if (newRows.error) {
+      console.warn(
+        "funil-control: não consegui contar a fila criada",
+        newRows.error.message,
+      );
+    }
+    const already = outcome !== "created";
+    let message: string;
+    if (outcome === "created") {
+      message =
+        "🚀 *Funil de apresentação iniciado!* A abertura foi adicionada à fila (" +
+        (newRows.count ?? 0) + " mensagem(ns)).";
+    } else if (outcome === "in_progress") {
+      message =
+        "ℹ️ *O início do funil já está em andamento.* Não criei outra fila.";
+    } else if (openingComplete) {
+      message =
+        "ℹ️ *A abertura do funil foi confirmada como enviada.* Não criei outra sequência para evitar duplicação.";
+    } else if (deliveryEvidence) {
+      message =
+        "⚠️ *A abertura não está confirmada como concluída.* Há uma tentativa registrada; não repliquei as mensagens para evitar duplicação. Confira a macro Status.";
+    } else {
+      message =
+        "⚠️ Não encontrei confirmação de envio nem consegui recriar a abertura. Confira a macro Status.";
+    }
+    await nota(cwConvId, message, acct);
     return json({
-      ok: false,
+      ok: true,
       action: "funil",
-      error: enrollData.error ?? "erro ao iniciar funil",
-    }, 500);
+      already,
+      outcome,
+      enfileiradas: outcome === "created" ? (newRows.count ?? 0) : 0,
+    });
   }
 
   if (action === "catalogo" || action === "abrir-catalogo") {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
-    }
+    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     await sendCatalogRootMenu(
       db,
       resolved.channel,
@@ -403,9 +438,7 @@ export async function handle(req: Request): Promise<Response> {
 
   if (action === "catalogo-sair" || action === "voltar-mega-sorgo") {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
-    }
+    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     await leaveCatalogJourney(db, resolved.channel, resolved.from, acct);
     await nota(
       cwConvId,
@@ -445,9 +478,7 @@ export async function handle(req: Request): Promise<Response> {
   const menuId = DISPATCH_MAP[action];
   if (menuId) {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
-    }
+    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
     try {
       // Uma sequencia comercial manual substitui a conversa automatica naquele
       // momento. Pausa o funil principal antes de enviar para nao misturar
@@ -503,7 +534,11 @@ export async function handle(req: Request): Promise<Response> {
       }
       const motivo = motivoTerminal(detail);
       if (motivo) {
-        await nota(cwConvId, `🚫 *Macro "${action}" não executada.* ${motivo}`, acct);
+        await nota(
+          cwConvId,
+          `🚫 *Macro "${action}" não executada.* ${motivo}`,
+          acct,
+        );
         return json({ ok: false, terminal: true, error: detail }, 422);
       }
       return json({ error: detail }, 500);
@@ -548,7 +583,10 @@ export async function dispatchRecovery(
   const resolved = await resolveChannelAndContact(db, conv);
   if (!resolved) {
     if (automatic) return { state: "failed" };
-    return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+    return json(
+      { error: "canal ou contato não encontrado", terminal: true },
+      404,
+    );
   }
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
@@ -730,10 +768,14 @@ export async function dispatchRecovery(
       });
       if (blockedError) throw blockedError;
       // Claim atomico: macros simultaneas nao podem publicar duas notas.
-      if (await claimDeliveryWithTtl(
-        db, `recovery-blocked-note-${conv.id}-${variation}`, "recovery",
-        24 * 60 * 60_000,
-      )) {
+      if (
+        await claimDeliveryWithTtl(
+          db,
+          `recovery-blocked-note-${conv.id}-${variation}`,
+          "recovery",
+          24 * 60 * 60_000,
+        )
+      ) {
         await nota(
           cwConvId,
           `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,

@@ -1,6 +1,43 @@
 import { admin } from "./supabase.ts";
 import { chaveDaPausa, limparPausa, marcarPausa } from "./funil-pausa.ts";
 
+/** A request may replace a stale sequence only when no queue or sent-opening evidence exists. */
+export function canRecreateMissingOpening(input: {
+  requested: boolean;
+  hasSequence: boolean;
+  hasDeliveryEvidence: boolean;
+}): boolean {
+  return input.requested && input.hasSequence && !input.hasDeliveryEvidence;
+}
+
+/** Any non-deferred queue row or historical opening message blocks a full re-enrollment. */
+export async function hasFunnelDeliveryEvidence(
+  db: ReturnType<typeof admin>,
+  conversationId: string,
+): Promise<boolean> {
+  const { data: queue, error: queueError } = await db
+    .from("scheduled_messages")
+    .select("id")
+    .eq("conversation_id", conversationId)
+    .eq("funnel", "mega-sorgo")
+    .neq("type", "deferred_intent")
+    .limit(1);
+  if (queueError) throw queueError;
+  if (queue?.length) return true;
+
+  const [intro, menu] = await Promise.all([
+    db.from("messages").select("id").eq("conversation_id", conversationId)
+      .eq("direction", "out").ilike("content", "%Olá! Aqui é o Cícero%")
+      .limit(1),
+    db.from("messages").select("id").eq("conversation_id", conversationId)
+      .eq("direction", "out").ilike("content", "%Como posso ajudar?%")
+      .limit(1),
+  ]);
+  if (intro.error) throw intro.error;
+  if (menu.error) throw menu.error;
+  return Boolean(intro.data?.length || menu.data?.length);
+}
+
 async function hasPendingOpeningMessages(
   db: ReturnType<typeof admin>,
   conversationId: string,

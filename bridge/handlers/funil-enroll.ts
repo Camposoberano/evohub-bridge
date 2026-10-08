@@ -13,6 +13,8 @@ import {
 } from "../shared/supabase.ts";
 import {
   autoPauseFunil,
+  canRecreateMissingOpening,
+  hasFunnelDeliveryEvidence,
   openingMessagesComplete,
 } from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
@@ -375,6 +377,8 @@ export async function handle(req: Request): Promise<Response> {
   }
   const force = body.force === true || body.force === "true";
   const manual = body.manual === true || body.manual === "true";
+  const repairMissingOpening = body.repair_missing_opening === true ||
+    body.repair_missing_opening === "true";
   const requestedOpeningReason = body.opening_reason === "intent_answered" ||
       body.opening_reason === "human_handoff"
     ? body.opening_reason
@@ -433,8 +437,28 @@ export async function handle(req: Request): Promise<Response> {
   }
   if (existing) {
     const existingStatus = String(existing.status ?? "");
-    if (!force || !["completed", "cancelled"].includes(existingStatus)) {
-      return json({ ok: true, already: true, sequence_status: existingStatus });
+    const forceEligible = force &&
+      ["completed", "cancelled"].includes(existingStatus);
+    const hasDeliveryEvidence = repairMissingOpening
+      ? await hasFunnelDeliveryEvidence(db, String(conv.id))
+      : true;
+    const repairEligible = canRecreateMissingOpening({
+      requested: repairMissingOpening,
+      hasSequence: true,
+      hasDeliveryEvidence,
+    });
+    if (!forceEligible && !repairEligible) {
+      const [openingComplete, openingEvidence] = await Promise.all([
+        openingMessagesComplete(db, String(conv.id)),
+        hasFunnelDeliveryEvidence(db, String(conv.id)),
+      ]);
+      return json({
+        ok: true,
+        already: true,
+        sequence_status: existingStatus,
+        opening_complete: openingComplete,
+        opening_evidence: openingEvidence,
+      });
     }
     const { error: cancelError } = await db.from("scheduled_messages").update({
       status: "cancelled",
@@ -448,8 +472,22 @@ export async function handle(req: Request): Promise<Response> {
       existing.id,
     );
     if (deleteError) return json({ error: deleteError.message }, 500);
+  } else if (repairMissingOpening) {
+    const openingEvidence = await hasFunnelDeliveryEvidence(db, String(conv.id));
+    if (openingEvidence) {
+      const openingComplete = await openingMessagesComplete(
+        db,
+        String(conv.id),
+      );
+      return json({
+        ok: true,
+        already: true,
+        sequence_status: "missing",
+        opening_complete: openingComplete,
+        opening_evidence: true,
+      });
+    }
   }
-
   // carrega a faixa e agrupa por dia+slot pra sortear
   const { data: media } = await db.from("funnel_media").select(
     "day,slot,url,caption,type",
@@ -712,6 +750,8 @@ export type AutoEnrollResult = {
 type EnrollOpeningOptions = {
   skipOpening?: boolean;
   force?: boolean;
+  repairMissingOpening?: boolean;
+  manual?: boolean;
   openingReason?: "intent_answered" | "human_handoff";
   originSignal?: string;
   conversation?: Json | null;
@@ -930,45 +970,28 @@ export async function autoEnrollFunil(
   }
   let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome);
   if (
-    !deferIntent && adFunnelOrigin && outcome === "already" && conversation?.id
+    !deferIntent && adFunnelOrigin && outcome === "already" &&
+    conversation?.id
   ) {
     try {
       const conversationId = String(conversation.id);
       const openingComplete = await openingMessagesComplete(db, conversationId);
       deferIntent = !openingComplete;
 
-      // Corrige sequências antigas que foram marcadas como concluídas sem enviar
-      // nenhuma peça da abertura (caso 3485). Só recria quando não há evidência de
-      // nenhuma das duas mensagens; uma abertura parcial nunca é duplicada às cegas.
+      // Uma sequência sem fila nem mensagem de abertura é lixo de estado:
+      // reabre com o mesmo lock, mas qualquer tentativa registrada bloqueia duplicação.
       if (!openingComplete) {
-        const { data: dayRows, error: dayRowsError } = await db.from(
-          "scheduled_messages",
-        ).select("id,type").eq("conversation_id", conversationId)
-          .eq("funnel", FUNNEL).eq("day", 1).limit(100);
-        if (dayRowsError) throw dayRowsError;
-        const hasOpeningRows = (dayRows ?? []).some((row: Json) =>
-          row.type !== "deferred_intent"
+        const hasDeliveryEvidence = await hasFunnelDeliveryEvidence(
+          db,
+          conversationId,
         );
-        if (!hasOpeningRows) {
-          const { data: sequence, error: sequenceError } = await db.from(
-            "sales_sequences",
-          ).select("status").eq("conversation_id", conversationId)
-            .eq("funnel", FUNNEL).maybeSingle();
-          if (sequenceError) throw sequenceError;
-          if (
-            sequence &&
-            ["completed", "cancelled"].includes(String(sequence.status))
-          ) {
-            outcome = await enrollIfNew(db, channel, from, {
-              force: true,
-              originSignal,
-              conversation,
-            });
-            deferIntent = !await openingMessagesComplete(
-              db,
-              conversationId,
-            );
-          }
+        if (!hasDeliveryEvidence) {
+          outcome = await enrollIfNew(db, channel, from, {
+            repairMissingOpening: true,
+            originSignal,
+            conversation,
+          });
+          deferIntent = !await openingMessagesComplete(db, conversationId);
         }
       }
     } catch (error) {
@@ -978,7 +1001,6 @@ export async function autoEnrollFunil(
       deferIntent = true;
     }
   }
-
   if (deferIntent && adFunnelOrigin && conversation?.id) {
     const route = deferredAdRoute(content);
     if (route) {
@@ -1068,7 +1090,8 @@ export async function enrollIfNew(
     if (existingError) throw existingError;
     const forceEligible = options.force === true && existing &&
       ["completed", "cancelled"].includes(String(existing.status ?? ""));
-    if (existing && !forceEligible) return "already";
+    const repairRequested = options.repairMissingOpening === true;
+    if (existing && !forceEligible && !repairRequested) return "already";
 
     const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
     const response = await handle(
@@ -1078,6 +1101,8 @@ export async function enrollIfNew(
         body: JSON.stringify({
           chatwoot_conversation_id: conv.chatwoot_conversation_id,
           force: forceEligible,
+          repair_missing_opening: repairRequested,
+          manual: options.manual === true,
           skip_opening: options.skipOpening === true,
           opening_reason: options.openingReason ?? null,
           origin_signal: options.originSignal ?? null,
