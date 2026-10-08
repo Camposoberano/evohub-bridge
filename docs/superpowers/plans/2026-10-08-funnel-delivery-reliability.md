@@ -21,5 +21,5 @@
 
 - Items 1–4 implemented in the isolated worktree, including send-time enforcement, stale-attempt quarantine, enrollment rollback, per-enrollment ordering, bounded 429 retries, media diagnostics, and channel-level operational reporting.
 - Item 5 completed last as a historical audit report. No customer messages were replayed and no media was restored.
-- Static verification passed: deno fmt, deno check bridge/server.ts, and git diff --check. No test suite was run.
+- Verification passed: deno fmt, deno check bridge/server.ts, git diff --check, and the full Deno suite (386 passed, 0 failed). The stale isca assertion was updated to target FASES_LEGADAS.
 - Production publication and deployment were not performed for this revision.
