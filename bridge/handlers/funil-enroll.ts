@@ -5,7 +5,11 @@
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
-import { admin, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
+import {
+  admin,
+  claimDeliveryWithTtl,
+  releaseDelivery,
+} from "../shared/supabase.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
@@ -289,7 +293,8 @@ function faseComercialV2(): Peca[] {
       offset: 0,
       kind: "text",
       opening: true,
-      text: "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
+      text:
+        "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
     },
     {
       offset: 70,
@@ -350,7 +355,9 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")) {
+  if (
+    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")
+  ) {
     return json({ error: "unauthorized" }, 401);
   }
 
@@ -379,12 +386,16 @@ export async function handle(req: Request): Promise<Response> {
     : null;
 
   const db = admin();
-  const { data: conv, error: conversationError } = await db.from("conversations").select(
+  const { data: conv, error: conversationError } = await db.from(
+    "conversations",
+  ).select(
     "id, chatwoot_conversation_id, contacts(attributes)",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (conversationError) {
-    return json({ error: `falha ao consultar conversa: ${conversationError.message}` }, 500);
+    return json({
+      error: `falha ao consultar conversa: ${conversationError.message}`,
+    }, 500);
   }
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
 
@@ -392,20 +403,26 @@ export async function handle(req: Request): Promise<Response> {
   // ação marcar-nao-compra) nunca mais entra no funil -- nem auto-enroll, nem clique manual
   // "iniciar funil", nem recuperação, porque os três caminhos convergem nesta função.
   const allowPaid = body.allow_paid === true || body.allow_paid === "true";
-  if (isContactBlocked(conv.contacts) ||
-    (!allowPaid && isContactExcludedFromAutomation(conv.contacts))) {
+  if (
+    isContactBlocked(conv.contacts) ||
+    (!allowPaid && isContactExcludedFromAutomation(conv.contacts))
+  ) {
     return json({ ok: false, blocked: "contato-bloqueado" }, 422);
   }
 
   // dedup: um comando repetido nunca pode apagar uma sequência em andamento ou pausada.
   // force fica restrito a sequências terminais e só é usado em re-teste explícito.
   // Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
-  const { data: existing, error: existingError } = await db.from("sales_sequences").select(
+  const { data: existing, error: existingError } = await db.from(
+    "sales_sequences",
+  ).select(
     "id,status",
   )
     .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
   if (existingError) {
-    return json({ error: `falha ao consultar sequência: ${existingError.message}` }, 500);
+    return json({
+      error: `falha ao consultar sequência: ${existingError.message}`,
+    }, 500);
   }
   if (existing) {
     const existingStatus = String(existing.status ?? "");
@@ -535,12 +552,20 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   const sequenceStatus = rows.length > 0 ? "running" : "completed";
-  const { error: sequenceError } = await db.from("sales_sequences").insert({
-    conversation_id: conv.id,
-    chatwoot_conversation_id: cwConvId,
-    funnel: FUNNEL,
-    status: sequenceStatus,
-  });
+  const enrollmentId = crypto.randomUUID();
+  for (const row of rows) {
+    const messagePayload = row.payload && typeof row.payload === "object"
+      ? row.payload as Json
+      : {};
+    row.payload = { ...messagePayload, __funnel_sequence_id: enrollmentId };
+  }
+  const { data: createdSequence, error: sequenceError } = await db
+    .from("sales_sequences").insert({
+      conversation_id: conv.id,
+      chatwoot_conversation_id: cwConvId,
+      funnel: FUNNEL,
+      status: sequenceStatus,
+    }).select("id").single();
   if (sequenceError) {
     if ((sequenceError as { code?: string }).code === "23505") {
       return json({ ok: true, already: true });
@@ -552,7 +577,17 @@ export async function handle(req: Request): Promise<Response> {
   }
   if (rows.length > 0) {
     const { error } = await db.from("scheduled_messages").insert(rows);
-    if (error) return json({ error: error.message }, 500);
+    if (error) {
+      const { error: rollbackError } = await db.from("sales_sequences")
+        .delete().eq("id", createdSequence.id);
+      if (rollbackError) {
+        console.error(
+          "funil v2: não foi possível remover sequência sem mensagens",
+          rollbackError,
+        );
+      }
+      return json({ error: error.message }, 500);
+    }
   }
 
   const { error: versionEventError } = await db.from("events").insert({
@@ -569,7 +604,10 @@ export async function handle(req: Request): Promise<Response> {
     },
   });
   if (versionEventError) {
-    console.warn("funil v2: falha ao registrar versão:", versionEventError.message);
+    console.warn(
+      "funil v2: falha ao registrar versão:",
+      versionEventError.message,
+    );
   }
 
   return json({
@@ -615,15 +653,21 @@ export async function ehAberturaDeAnuncioSocial(
   activeConversationId?: string,
 ): Promise<boolean> {
   if (!CANAIS_SOCIAIS.has(String(channel.type ?? ""))) return false;
-  if (!pareceAberturaComercial(content, icebreakersConfigurados())) return false;
+  if (!pareceAberturaComercial(content, icebreakersConfigurados())) {
+    return false;
+  }
 
   let conversationId = activeConversationId;
   if (!conversationId) {
-    const { data: contact, error: contactError } = await db.from("contacts").select("id")
-      .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("id")
+      .eq("channel_id", channel.id).eq("external_contact_id", from)
+      .maybeSingle();
     if (contactError) throw contactError;
     if (!contact) return false;
-    const { data: conv, error: conversationError } = await db.from("conversations").select("id")
+    const { data: conv, error: conversationError } = await db.from(
+      "conversations",
+    ).select("id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
     if (conversationError) throw conversationError;
@@ -664,12 +708,15 @@ async function activeConversationForContact(
   channel: Json,
   from: string,
 ): Promise<Json | null> {
-  const { data: contact, error: contactError } = await db.from("contacts").select("id")
+  const { data: contact, error: contactError } = await db.from("contacts")
+    .select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
   if (contactError) throw contactError;
   if (!contact) return null;
 
-  const { data: conversation, error: conversationError } = await db.from("conversations")
+  const { data: conversation, error: conversationError } = await db.from(
+    "conversations",
+  )
     .select("id, chatwoot_conversation_id, origem")
     .eq("contact_id", contact.id).neq("status", "resolved")
     .order("opened_at", { ascending: false }).limit(1).maybeSingle();
@@ -712,13 +759,15 @@ export async function autoEnrollFunil(
   // Só na abertura, e só nesses canais. No WhatsApp a inscrição já funciona por outro caminho
   // (63 de 67 aberturas comerciais entraram no funil nos mesmos 5 dias), e alargar a regra lá
   // pegaria quem chega por indicação, não por anúncio.
-  if (!originSignal && await ehAberturaDeAnuncioSocial(
-    db,
-    channel,
-    from,
-    content,
-    String(conversation?.id ?? "") || undefined,
-  )) {
+  if (
+    !originSignal && await ehAberturaDeAnuncioSocial(
+      db,
+      channel,
+      from,
+      content,
+      String(conversation?.id ?? "") || undefined,
+    )
+  ) {
     originSignal = "social_opening";
   }
 
@@ -791,11 +840,15 @@ export async function enrollIfNew(
   options: EnrollOpeningOptions = {},
 ): Promise<EnrollOutcome> {
   const conv = options.conversation ?? await (async () => {
-    const { data: contact, error: contactError } = await db.from("contacts").select("id")
-      .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("id")
+      .eq("channel_id", channel.id).eq("external_contact_id", from)
+      .maybeSingle();
     if (contactError) throw contactError;
     if (!contact) return null;
-    const { data: conversation, error: conversationError } = await db.from("conversations")
+    const { data: conversation, error: conversationError } = await db.from(
+      "conversations",
+    )
       .select("id, chatwoot_conversation_id, origem")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
@@ -812,7 +865,9 @@ export async function enrollIfNew(
   }
 
   try {
-    const { data: existing, error: existingError } = await db.from("sales_sequences").select("id")
+    const { data: existing, error: existingError } = await db.from(
+      "sales_sequences",
+    ).select("id")
       .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
     if (existingError) throw existingError;
     if (existing) return "already";
@@ -876,18 +931,25 @@ export async function recoverEligibleFunnels(
   const [existing, inbound, contacts, channels] = await Promise.all([
     consultaEmLotes<Json>(
       conversationIds,
-      (lote) => db.from("sales_sequences").select("conversation_id").in("conversation_id", lote),
+      (lote) =>
+        db.from("sales_sequences").select("conversation_id").in(
+          "conversation_id",
+          lote,
+        ),
     ),
     consultaEmLotes<Json>(
       conversationIds,
       (lote) =>
         db.from("messages").select("conversation_id,content,sent_at")
           .in("conversation_id", lote)
-          .eq("direction", "in").order("sent_at", { ascending: false }).limit(3000),
+          .eq("direction", "in").order("sent_at", { ascending: false }).limit(
+            3000,
+          ),
     ),
     consultaEmLotes<Json>(
       contactIds,
-      (lote) => db.from("contacts").select("id,external_contact_id").in("id", lote),
+      (lote) =>
+        db.from("contacts").select("id,external_contact_id").in("id", lote),
     ),
     consultaEmLotes<Json>(
       channelIds,

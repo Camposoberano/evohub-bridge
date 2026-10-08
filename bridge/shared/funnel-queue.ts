@@ -1,6 +1,6 @@
 // Consumidor de contingencia da fila do funil.
 // O claim em deliveries evita duplicacao se o n8n e este loop enxergarem a mesma linha.
-import { admin, claimDelivery } from "./supabase.ts";
+import { admin, claimDeliveryWithTtl } from "./supabase.ts";
 import { env } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
@@ -13,6 +13,15 @@ import {
 } from "./business-hours.ts";
 
 type Json = Record<string, unknown>;
+
+async function releaseQueueClaim(
+  db: ReturnType<typeof admin>,
+  claimKey: string,
+): Promise<void> {
+  const { error } = await db.from("deliveries").delete()
+    .eq("delivery_id", claimKey);
+  if (error) throw error;
+}
 
 let running = false;
 const WINDOW_HOLD_FLAG = "__awaiting_meta_window";
@@ -163,7 +172,7 @@ export async function pumpFunnelQueue(
     const now = new Date().toISOString();
     const { data, error } = await db.from("scheduled_messages")
       .select(
-        "id,conversation_id,chatwoot_conversation_id,funnel,day,type,payload,send_at",
+        "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
       )
       .eq("status", "pending")
       .lte("send_at", now)
@@ -285,54 +294,89 @@ export async function pumpFunnelQueue(
       }
 
       const claimKey = `funnel-queue-${id}`;
-      if (!await claimDelivery(db, claimKey, "funnel-queue")) continue;
+      if (
+        !await claimDeliveryWithTtl(
+          db,
+          claimKey,
+          "funnel-queue",
+          10 * 60_000,
+        )
+      ) continue;
 
       const payload = (row.payload && typeof row.payload === "object")
         ? row.payload as Json
         : {};
-      const res = await sendOutbound(
-        new Request(
-          `http://internal/send-outbound?token=${
-            encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
-          }`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chatwoot_conversation_id: Number(row.chatwoot_conversation_id),
-              type: String(row.type ?? "text"),
-              payload,
-              // Elo pra messages.funnel/funnel_day/funnel_step/scheduled_message_id (migration
-              // 0012) -- sem isso o relatório não consegue dizer qual peça da sequência gerou
-              // qual resposta do lead.
-              funnel: row.funnel ?? "mega-sorgo",
-              funnel_day: row.day ?? null,
-              funnel_step: row.type ?? null,
-              scheduled_message_id: id,
-            }),
-          },
-        ),
-      );
+      let res: Response;
+      try {
+        res = await sendOutbound(
+          new Request(
+            `http://internal/send-outbound?token=${
+              encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+            }`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chatwoot_conversation_id: Number(row.chatwoot_conversation_id),
+                type: String(row.type ?? "text"),
+                payload,
+                // Os IDs ligam cada resultado de envio à conversa e à etapa do funil.
+                funnel: row.funnel ?? "mega-sorgo",
+                funnel_day: row.day ?? null,
+                funnel_step: row.type ?? null,
+                scheduled_message_id: id,
+              }),
+            },
+          ),
+        );
+      } catch (error) {
+        console.error("funnel-queue: send-outbound lançou exceção", id, error);
+        await db.from("scheduled_messages").update({ status: "failed" })
+          .eq("id", id).eq("status", "pending");
+        await releaseQueueClaim(db, claimKey);
+        await recordFailure(db, id, row, 500, {
+          blocked: "send-handler-exception",
+          error_type: error instanceof Error ? error.name : "unknown",
+        });
+        failed++;
+        continue;
+      }
       const body = await res.json().catch(() => ({} as Json));
-      if (res.ok && body.ok !== false && !body.blocked) {
+      if (res.ok && body.ok === true && body.sent === true) {
         const sentAt = new Date().toISOString();
-        await db.from("scheduled_messages").update({
-          status: "sent",
-          sent_at: sentAt,
-        }).eq("id", id);
-        await db.from("sales_sequences").update({
-          current_day: Number(row.day ?? 0),
-          last_sent_at: sentAt,
-        }).eq("conversation_id", row.conversation_id)
+        const { error: sentError } = await db.from("scheduled_messages").update(
+          {
+            status: "sent",
+            sent_at: sentAt,
+          },
+        ).eq("id", id);
+        if (sentError) throw sentError;
+        const { error: sequenceError } = await db.from("sales_sequences")
+          .update({
+            current_day: Number(row.day ?? 0),
+            last_sent_at: sentAt,
+          }).eq("conversation_id", row.conversation_id)
           .eq("funnel", row.funnel ?? "mega-sorgo")
           .in("status", ["running", "paused"]);
+        if (sequenceError) throw sequenceError;
         sent++;
+      } else if (body.retry_scheduled === true) {
+        await releaseQueueClaim(db, claimKey);
+        held++;
+      } else if (
+        body.in_progress === true ||
+        body.blocked === "previous-step-not-sent" ||
+        body.blocked === "scheduled-message-not-pending" ||
+        body.not_due === true
+      ) {
+        await releaseQueueClaim(db, claimKey);
+        held++;
       } else if (
         body.deferred_business_window === true
       ) {
         // send-outbound também é chamado pelo n8n. O endpoint persiste o novo horário;
         // liberamos o claim para a fila poder tentar novamente na próxima abertura.
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await releaseQueueClaim(db, claimKey);
         held++;
       } else if (
         body.awaiting_window === true ||
@@ -343,7 +387,7 @@ export async function pumpFunnelQueue(
           status: "paused",
           payload: { ...payload, [WINDOW_HOLD_FLAG]: true },
         }).eq("id", id);
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await releaseQueueClaim(db, claimKey);
         await db.from("events").insert({
           source: "funil",
           event_type: "message_held_window",
@@ -363,7 +407,7 @@ export async function pumpFunnelQueue(
           "id",
           id,
         );
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await releaseQueueClaim(db, claimKey);
         await recordFailure(db, id, row, res.status, body);
         failed++;
       }

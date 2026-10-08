@@ -50,6 +50,18 @@ import {
   isWithinFunnelSendHours,
   nextFunnelSendAt,
 } from "../shared/business-hours.ts";
+import {
+  deliveryMetadata,
+  type FunnelDeliveryEvent,
+  type FunnelDeliveryMetadata,
+  type FunnelDeliveryOutcome,
+  MAX_AUTOMATIC_DELIVERY_RETRIES,
+  nextFunnelRetryAt,
+  payloadWithoutDeliveryMetadata,
+  persistFunnelDeliveryState,
+  providerDiagnostic,
+  recordFunnelDeliveryEvent,
+} from "../shared/funnel-delivery.ts";
 
 type Json = Record<string, unknown>;
 
@@ -70,8 +82,7 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   // compat: content direto = texto
-  // `let` porque a peça pode virar outra coisa antes de sair: mídia que sumiu do storage vira
-  // texto (ver a checagem de mídia mais abaixo).
+  // `let` porque o tipo e o payload vêm da linha agendada quando há scheduled_message_id.
   let type = (body.type as string) ?? "text";
   let payload = (body.payload as Json) ??
     (body.content ? { content: body.content } : {});
@@ -87,6 +98,129 @@ export async function handle(req: Request): Promise<Response> {
   };
 
   const db = admin();
+  let scheduledRow: Json | null = null;
+  let scheduledPayload: Json = payload;
+  let deliveryState: FunnelDeliveryMetadata | null = null;
+  if (funnelLink.scheduled_message_id) {
+    const { data, error } = await db.from("scheduled_messages")
+      .select(
+        "id,status,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
+      )
+      .eq("id", funnelLink.scheduled_message_id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "scheduled-message-not-found",
+      }, 404);
+    }
+    scheduledRow = data as Json;
+    if (scheduledRow.status === "sent") {
+      return json({
+        ok: true,
+        sent: true,
+        already_sent: true,
+        deduplicated: true,
+      });
+    }
+    if (scheduledRow.status !== "pending") {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "scheduled-message-not-pending",
+        status: scheduledRow.status,
+      }, 409);
+    }
+    if (
+      Number(scheduledRow.chatwoot_conversation_id) !== cwConvId ||
+      (funnelLink.funnel && scheduledRow.funnel !== funnelLink.funnel)
+    ) {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "scheduled-message-mismatch",
+      }, 409);
+    }
+    const scheduledAt = Date.parse(String(scheduledRow.send_at ?? ""));
+    if (Number.isFinite(scheduledAt) && scheduledAt > Date.now()) {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "scheduled-message-not-due",
+        not_due: true,
+        send_at: scheduledRow.send_at,
+      }, 409);
+    }
+    const { data: sentClaim, error: sentClaimError } = await db
+      .from("deliveries").select("delivery_id")
+      .eq("delivery_id", "funnel-sent-" + funnelLink.scheduled_message_id)
+      .maybeSingle();
+    if (sentClaimError) throw sentClaimError;
+    if (sentClaim) {
+      const sentAt = new Date().toISOString();
+      await db.from("scheduled_messages").update({
+        status: "sent",
+        sent_at: sentAt,
+      }).eq("id", funnelLink.scheduled_message_id);
+      await db.from("sales_sequences").update({
+        current_day: Number(scheduledRow.day ?? 0),
+        last_sent_at: sentAt,
+      }).eq("conversation_id", scheduledRow.conversation_id)
+        .eq("funnel", scheduledRow.funnel)
+        .in("status", ["running", "paused"]);
+      return json({
+        ok: true,
+        sent: true,
+        already_sent: true,
+        deduplicated: true,
+      });
+    }
+    scheduledPayload =
+      scheduledRow.payload && typeof scheduledRow.payload === "object"
+        ? scheduledRow.payload as Json
+        : {};
+    const currentSequenceId = String(
+      scheduledPayload.__funnel_sequence_id ?? "",
+    );
+    const currentStep = Number(scheduledRow.step ?? 0);
+    const { data: previousSteps, error: previousError } = await db
+      .from("scheduled_messages")
+      .select("id,status,step,payload")
+      .eq("conversation_id", scheduledRow.conversation_id)
+      .eq("funnel", scheduledRow.funnel)
+      .lt("step", currentStep)
+      .order("step", { ascending: true })
+      .limit(100);
+    if (previousError) throw previousError;
+    const previousUnsent = (previousSteps ?? []).find((item: Json) => {
+      const previousPayload = item.payload && typeof item.payload === "object"
+        ? item.payload as Json
+        : {};
+      const sameExecution = !currentSequenceId ||
+        previousPayload.__funnel_sequence_id === currentSequenceId;
+      return sameExecution && item.status !== "sent" &&
+        item.status !== "cancelled";
+    }) as Json | undefined;
+    if (previousUnsent) {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "previous-step-not-sent",
+        previous_step: previousUnsent.step,
+        previous_status: previousUnsent.status,
+      }, 409);
+    }
+    deliveryState = deliveryMetadata(scheduledPayload);
+    type = String(scheduledRow.type ?? type);
+    funnelLink.funnel = String(scheduledRow.funnel ?? funnelLink.funnel ?? "");
+    funnelLink.funnel_day = Number(
+      scheduledRow.day ?? funnelLink.funnel_day ?? 0,
+    );
+    funnelLink.funnel_step = type;
+    payload = payloadWithoutDeliveryMetadata(scheduledPayload);
+  }
   // Última barreira para toda peça ligada a scheduled_messages, incluindo chamadas
   // do n8n que não passam pelo pump local. Mensagens manuais continuam fora desta regra.
   if (funnelLink.scheduled_message_id && !isWithinFunnelSendHours()) {
@@ -99,7 +233,10 @@ export async function handle(req: Request): Promise<Response> {
       .select("id")
       .maybeSingle();
     if (deferError) {
-      console.error("send-outbound: falha ao reagendar fora da janela:", deferError);
+      console.error(
+        "send-outbound: falha ao reagendar fora da janela:",
+        deferError,
+      );
       return json({
         ok: false,
         deferred_business_window: true,
@@ -137,9 +274,181 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "canal ou destinatário ausente" }, 404);
   }
 
+  let attemptNumber = deliveryState?.attempts ?? 0;
+  let attemptId: string | null = null;
+  let dispatchStarted = false;
+  let acceptedProviderMessages = 0;
+  const deliveryEventBase = ():
+    | Omit<
+      FunnelDeliveryEvent,
+      | "outcome"
+      | "http_status"
+      | "provider_code"
+      | "provider_subcode"
+      | "provider_error_type"
+      | "retryable"
+      | "retry_at"
+      | "failure_stage"
+      | "partial"
+    >
+    | null => {
+    if (!funnelLink.scheduled_message_id || !scheduledRow) return null;
+    return {
+      scheduled_message_id: funnelLink.scheduled_message_id,
+      conversation_id: String(scheduledRow.conversation_id ?? conv.id),
+      funnel: String(scheduledRow.funnel ?? funnelLink.funnel ?? ""),
+      day: Number.isFinite(Number(scheduledRow.day))
+        ? Number(scheduledRow.day)
+        : null,
+      step: Number.isFinite(Number(scheduledRow.step))
+        ? Number(scheduledRow.step)
+        : null,
+      type: String(scheduledRow.type ?? type),
+      channel_type: String(channel.type ?? ""),
+      attempt_id: attemptId,
+      attempt_number: attemptNumber,
+    };
+  };
+  const writeDeliveryOutcome = async (
+    outcome: FunnelDeliveryOutcome,
+    status: "pending" | "sent" | "failed",
+    details: Partial<FunnelDeliveryEvent> = {},
+    retryAt?: string,
+  ): Promise<boolean> => {
+    const eventBase = deliveryEventBase();
+    if (!eventBase || !scheduledRow || !deliveryState) return true;
+    if (
+      status === "sent" &&
+      funnelLink.scheduled_message_id
+    ) {
+      await claimDelivery(
+        db,
+        "funnel-sent-" + funnelLink.scheduled_message_id,
+        "funnel-delivery-success",
+      );
+    }
+    const nextState: FunnelDeliveryMetadata = {
+      ...deliveryState,
+      last_outcome: outcome,
+      retry_at: retryAt,
+    };
+    if (typeof details.http_status === "number") {
+      nextState.provider_status = details.http_status;
+    }
+    if (
+      typeof details.provider_code === "number" ||
+      typeof details.provider_code === "string"
+    ) nextState.provider_code = details.provider_code;
+    let persisted = true;
+    try {
+      await persistFunnelDeliveryState(
+        db,
+        funnelLink.scheduled_message_id!,
+        scheduledPayload,
+        nextState,
+        status,
+        status === "sent" ? new Date().toISOString() : undefined,
+        retryAt,
+      );
+    } catch {
+      persisted = false;
+    }
+    deliveryState = nextState;
+    await recordFunnelDeliveryEvent(db, String(channel.id ?? ""), {
+      ...eventBase,
+      ...details,
+      outcome,
+      retry_at: retryAt ?? null,
+    });
+    return persisted;
+  };
+  const beginDeliveryAttempt = async (): Promise<boolean> => {
+    if (!scheduledRow || !funnelLink.scheduled_message_id || !deliveryState) {
+      return true;
+    }
+    attemptNumber = deliveryState.attempts + 1;
+    attemptId = crypto.randomUUID();
+    deliveryState = {
+      ...deliveryState,
+      attempts: attemptNumber,
+      attempt_id: attemptId,
+      last_attempt_at: new Date().toISOString(),
+      last_outcome: "started",
+      retry_at: undefined,
+    };
+    try {
+      await persistFunnelDeliveryState(
+        db,
+        funnelLink.scheduled_message_id,
+        scheduledPayload,
+        deliveryState,
+        "pending",
+      );
+    } catch {
+      return false;
+    }
+    const eventBase = deliveryEventBase();
+    if (eventBase) {
+      await recordFunnelDeliveryEvent(db, String(channel.id ?? ""), {
+        ...eventBase,
+        outcome: "started",
+      });
+    }
+    return true;
+  };
+  const advanceFunnelSequence = async (sentAt: string): Promise<void> => {
+    if (!scheduledRow) return;
+    try {
+      const { error } = await db.from("sales_sequences").update({
+        current_day: Number(scheduledRow.day ?? 0),
+        last_sent_at: sentAt,
+      }).eq("conversation_id", scheduledRow.conversation_id)
+        .eq("funnel", scheduledRow.funnel)
+        .in("status", ["running", "paused"]);
+      if (error) throw error;
+    } catch (error) {
+      console.error("send-outbound: avanço da sequência falhou", error);
+      await recordFunnelDeliveryEvent(db, String(channel.id ?? ""), {
+        ...(deliveryEventBase() ?? {
+          scheduled_message_id: funnelLink.scheduled_message_id ?? "",
+        }),
+        outcome: "sent",
+        failure_stage: "sequence_advance",
+      });
+    }
+  };
+
+  if (scheduledRow && deliveryState?.last_outcome === "started") {
+    const lastAttemptAt = Date.parse(deliveryState.last_attempt_at ?? "");
+    if (
+      !Number.isFinite(lastAttemptAt) ||
+      Date.now() - lastAttemptAt >= 10 * 60_000
+    ) {
+      await writeDeliveryOutcome("uncertain", "failed", {
+        failure_stage: "stale_attempt_recovery",
+        retryable: false,
+      });
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "envio-incerto",
+        uncertain: true,
+      }, 409);
+    }
+    return json({
+      ok: false,
+      sent: false,
+      blocked: "envio-em-andamento",
+      in_progress: true,
+    }, 409);
+  }
   const isWhatsapp = channel.type === "whatsapp";
   const isSocialComment = to.startsWith("cmt-fb-") || to.startsWith("cmt-ig-");
   if (!isWhatsapp && isSocialComment) {
+    await writeDeliveryOutcome("rejected", "failed", {
+      failure_stage: "unsupported_channel",
+      retryable: false,
+    });
     return json({
       error:
         "funil disponível apenas em conversa privada do Facebook/Instagram",
@@ -147,6 +456,10 @@ export async function handle(req: Request): Promise<Response> {
     }, 422);
   }
   if (isWhatsapp && !channel.phone_number_id) {
+    await writeDeliveryOutcome("rejected", "failed", {
+      failure_stage: "missing_phone_number_id",
+      retryable: false,
+    });
     return json({
       error: "WhatsApp sem phone_number_id (uazapi não suportado aqui)",
     }, 422);
@@ -167,7 +480,17 @@ export async function handle(req: Request): Promise<Response> {
     "channel_token",
   ).eq("channel_id", channel.id).maybeSingle();
   const channelToken = secret?.channel_token as string | undefined;
-  if (!channelToken && !hybrid) return json({ error: "canal sem token" }, 404);
+  if (!channelToken && !hybrid) {
+    await writeDeliveryOutcome("rejected", "failed", {
+      failure_stage: "missing_channel_token",
+      retryable: false,
+    });
+    return json({
+      ok: false,
+      sent: false,
+      blocked: "canal-sem-token",
+    }, 404);
+  }
   const acct = await accountForChannel(channel.id as string);
 
   // GATE de janela (Meta): funil/n8n mandando mensagem livre com janela fechada = rejeição
@@ -227,11 +550,39 @@ export async function handle(req: Request): Promise<Response> {
     .maybeSingle();
   if (uncertainClaimError) throw uncertainClaimError;
   if (uncertainClaim) {
-    return json({ ok: false, blocked: "envio-incerto", uncertain: true });
+    await writeDeliveryOutcome("uncertain", "failed", {
+      failure_stage: "existing_uncertain_claim",
+      retryable: false,
+    });
+    return json({
+      ok: false,
+      sent: false,
+      blocked: "envio-incerto",
+      uncertain: true,
+    }, 409);
   }
   if (!await claimDeliveryWithTtl(db, claimKey, "send-outbound", 2 * 60_000)) {
     console.log("send-outbound: claim dup bloqueado", claimKey.slice(0, 80));
-    return json({ ok: true, deduplicated: true });
+    if (funnelLink.scheduled_message_id) {
+      const { data: current, error: currentError } = await db
+        .from("scheduled_messages").select("status")
+        .eq("id", funnelLink.scheduled_message_id).maybeSingle();
+      if (currentError) throw currentError;
+      if (current?.status === "sent") {
+        return json({
+          ok: true,
+          sent: true,
+          already_sent: true,
+          deduplicated: true,
+        });
+      }
+    }
+    return json({
+      ok: false,
+      sent: false,
+      blocked: "envio-em-andamento",
+      in_progress: true,
+    }, 409);
   }
 
   try {
@@ -243,12 +594,33 @@ export async function handle(req: Request): Promise<Response> {
         t?.trim()
       ) ?? [];
       const delayMs = (payload.delay_ms as number | undefined) ?? 3500;
-      if (texts.length === 0) return json({ error: "texts obrigatório" }, 400);
+      if (texts.length === 0) {
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "texts obrigatório",
+        }, 400);
+      }
+      if (!await beginDeliveryAttempt()) {
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "attempt-state-persistence-failed",
+        }, 503);
+      }
 
       const results: Json[] = [];
+      let lastResponse: { ok: boolean; status: number; data: unknown } | null =
+        null;
       for (let i = 0; i < texts.length; i++) {
         const content = texts[i];
         let res: { ok: boolean; status: number; data: unknown };
+        dispatchStarted = true;
         const hr = hybrid ? await hybridSendText(hybrid, to, content) : null;
         if (hr) {
           res = hr;
@@ -270,6 +642,8 @@ export async function handle(req: Request): Promise<Response> {
             };
           res = await sendMeta(channelToken!, path, metaPayload);
         }
+        lastResponse = res;
+        if (res.ok) acceptedProviderMessages++;
         const d = res.data as Json;
         const metaId =
           (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
@@ -289,73 +663,154 @@ export async function handle(req: Request): Promise<Response> {
           );
         }
 
-        await db.from("messages").insert({
-          conversation_id: conv.id,
-          channel_id: channel.id,
-          direction: "out",
-          msg_type: "text",
-          content,
-          meta_message_id: metaId,
-          chatwoot_message_id: cwMsgId ?? null,
-          status: res.ok ? "sent" : "failed",
-          ...funnelLink,
-        });
+        try {
+          const { error: messageError } = await db.from("messages").insert({
+            conversation_id: conv.id,
+            channel_id: channel.id,
+            direction: "out",
+            msg_type: "text",
+            content,
+            meta_message_id: metaId,
+            chatwoot_message_id: cwMsgId ?? null,
+            status: res.ok ? "sent" : "failed",
+            ...funnelLink,
+          });
+          if (messageError) {
+            console.error(
+              "send-outbound: registro da mensagem falhou",
+              messageError,
+            );
+          }
+        } catch (messageError) {
+          console.error(
+            "send-outbound: exceção ao registrar mensagem",
+            messageError,
+          );
+        }
         results.push({ ok: res.ok, meta_message_id: metaId });
         if (!res.ok) {
           console.error(
             "send-outbound (text_sequence) falhou:",
             JSON.stringify(d).slice(0, 250),
           );
-          // rejeição fica consultável (Meta recusa em silêncio; Chatwoot mostra "sent" mesmo assim).
           db.from("events").insert({
             source: "funil",
             event_type: "send_failed",
             payload: {
               conv: cwConvId,
+              scheduled_message_id: funnelLink.scheduled_message_id,
               type: "text_sequence",
               status: res.status,
               error: (d as Json)?.error ?? d,
             },
           }).then(() => {}, () => {});
+          break;
         }
         if (i < texts.length - 1) await sleep(delayMs);
       }
-      return json({ ok: results.every((r) => r.ok), results });
+      const sequenceSent = results.length === texts.length &&
+        results.every((r) => r.ok === true);
+      if (sequenceSent) {
+        await writeDeliveryOutcome("sent", "sent");
+        await advanceFunnelSequence(new Date().toISOString());
+        return json({ ok: true, sent: true, results });
+      }
+      const failedResponse = lastResponse;
+      const diagnostic = providerDiagnostic(failedResponse?.data);
+      const details: Partial<FunnelDeliveryEvent> = {
+        http_status: failedResponse?.status ?? null,
+        provider_code: diagnostic.code,
+        provider_subcode: diagnostic.subcode,
+        provider_error_type: diagnostic.type,
+        partial: acceptedProviderMessages > 0,
+      };
+      if (
+        failedResponse?.status === 429 &&
+        acceptedProviderMessages === 0 &&
+        attemptNumber > 0 &&
+        attemptNumber <= MAX_AUTOMATIC_DELIVERY_RETRIES
+      ) {
+        const retryAt = nextFunnelRetryAt(attemptNumber);
+        details.retryable = true;
+        const persisted = await writeDeliveryOutcome(
+          "retry_scheduled",
+          "pending",
+          details,
+          retryAt,
+        );
+        return json({
+          ok: false,
+          sent: false,
+          retry_scheduled: persisted,
+          retry_at: persisted ? retryAt : undefined,
+          status: failedResponse.status,
+          results,
+        }, 503);
+      }
+      const uncertain = acceptedProviderMessages > 0 ||
+        failedResponse?.status === 408 ||
+        (failedResponse?.status ?? 0) >= 500;
+      const outcome: FunnelDeliveryOutcome = acceptedProviderMessages > 0
+        ? "partial"
+        : uncertain
+        ? "uncertain"
+        : "rejected";
+      details.retryable = false;
+      await writeDeliveryOutcome(outcome, "failed", details);
+      return json({
+        ok: false,
+        sent: false,
+        blocked: uncertain ? "envio-incerto" : "provedor-rejeitou-envio",
+        uncertain,
+        status: failedResponse?.status,
+        results,
+      }, 502);
     }
 
-    // Arquivo que não existe mais no storage (biblioteca do funil apagada em 08/09: 24 dos 64
-    // ativos dão HTTP 400). A Meta recusa a peça inteira, e no social a legenda saía DUAS vezes
-    // — o anexo falhava e o fallback repetia o texto que já tinha ido. Melhor entregar o texto:
-    // imagem/vídeo com legenda viram texto, áudio (que não tem texto) é pulado, e o botão perde
-    // só a imagem do topo. Quando os arquivos voltarem, a checagem passa e nada disso acontece.
+    // A mídia faz parte da etapa. Sem ela, não enviar legenda isolada nem avançar o funil.
     const urlPeca = urlDaPeca(type, payload);
     if (urlPeca && !(await midiaDisponivel(urlPeca))) {
-      const decisao = decidirSemMidia(type, payload);
-      db.from("events").insert({
-        source: "funil",
-        event_type: "midia_indisponivel",
-        channel_id: channel.id,
-        payload: {
-          conv: cwConvId,
-          type,
-          url: urlPeca,
-          acao: decisao?.acao ?? "seguiu",
-          funnel_step: funnelLink.funnel_step,
-        },
-      }).then(() => {}, () => {});
-      console.warn(
-        "send-outbound: mídia sumiu do storage:",
-        urlPeca.slice(-60),
+      const mediaKey = decodeURIComponent(
+        urlPeca.split("?")[0].split("/").pop() ?? "",
       );
-      if (decisao?.acao === "pular") {
-        return json({ ok: true, skipped: "midia-indisponivel", url: urlPeca });
-      }
-      if (decisao?.acao === "texto") {
-        type = "text";
-        payload = { content: decisao.conteudo };
-      }
-      if (decisao?.acao === "sem-header") {
-        payload = { ...payload, header_image: undefined };
+      if (!scheduledRow) {
+        const decision = decidirSemMidia(type, payload);
+        db.from("events").insert({
+          source: "funil",
+          event_type: "midia_indisponivel",
+          channel_id: channel.id,
+          payload: {
+            type,
+            media_key: mediaKey.slice(0, 160),
+            action: decision?.acao ?? "segue",
+          },
+        }).then(() => {}, () => {});
+        if (decision?.acao === "pular") {
+          return json({ ok: true, skipped: "midia-indisponivel" });
+        }
+        if (decision?.acao === "texto") {
+          type = "text";
+          payload = { content: decision.conteudo };
+        }
+        if (decision?.acao === "sem-header") {
+          payload = { ...payload, header_image: undefined };
+        }
+      } else {
+        await writeDeliveryOutcome("media_unavailable", "failed", {
+          failure_stage: "media_preflight",
+          media_key: mediaKey.slice(0, 160),
+          retryable: false,
+        });
+        console.warn(
+          "send-outbound: mídia do funil indisponível:",
+          mediaKey.slice(0, 80),
+        );
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "midia-indisponivel",
+          failure_stage: "media_preflight",
+        }, 422);
       }
     }
 
@@ -364,18 +819,51 @@ export async function handle(req: Request): Promise<Response> {
     let registroTexto = "";
     if (type === "text") {
       const content = (payload.content as string) ?? "";
-      if (!content.trim()) return json({ error: "content vazio" }, 400);
+      if (!content.trim()) {
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "content vazio",
+        }, 400);
+      }
       metaBody = { type: "text", text: { body: content } };
       registroTexto = content;
     } else if (type === "image" || type === "video") {
       const link = payload.media_url as string;
       const caption = payload.caption as string | undefined;
-      if (!link) return json({ error: "media_url obrigatório" }, 400);
+      if (!link) {
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "media_url obrigatório",
+        }, 400);
+      }
       metaBody = { type, [type]: caption ? { link, caption } : { link } };
       registroTexto = caption ?? `[${type}]`;
     } else if (type === "audio") {
       const src = payload.media_url as string;
-      if (!src) return json({ error: "media_url obrigatório" }, 400);
+      if (!src) {
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "media_url obrigatório",
+        }, 400);
+      }
       // VOZ gravada (PTT): transcodifica pra ogg/opus E envia por MEDIA_ID (não link). Áudio por
       // link o WhatsApp mostra como ARQUIVO; só bytes subidos por media_id viram bolha de voz.
       // Fallback pro link se transcode/upload falhar (pelo menos o áudio toca).
@@ -416,7 +904,16 @@ export async function handle(req: Request): Promise<Response> {
       const buttons = (payload.buttons as { id: string; title: string }[]) ??
         [];
       if (!text || buttons.length === 0) {
-        return json({ error: "text e buttons obrigatórios" }, 400);
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "text e buttons obrigatórios",
+        }, 400);
       }
       const interactive: Json = {
         type: "button",
@@ -445,7 +942,16 @@ export async function handle(req: Request): Promise<Response> {
         rows: { id: string; title: string; description?: string }[];
       }[]) ?? [];
       if (!text || sections.length === 0) {
-        return json({ error: "text e sections obrigatórios" }, 400);
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+          error: "text e sections obrigatórios",
+        }, 400);
       }
       metaBody = {
         type: "interactive",
@@ -460,12 +966,29 @@ export async function handle(req: Request): Promise<Response> {
         ? text + " [" + allRows.map((r) => r.title).join(" / ") + "]"
         : `${text}\n[${allRows.length} opções enviadas como botões]`;
     } else {
-      return json({ error: "tipo desconhecido: " + type }, 400);
+      await writeDeliveryOutcome("rejected", "failed", {
+        failure_stage: "invalid_payload",
+        retryable: false,
+      });
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "invalid-payload",
+        error: "tipo desconhecido: " + type,
+      }, 400);
     }
 
     let res: { ok: boolean; status: number; data: unknown } | undefined;
+    if (!await beginDeliveryAttempt()) {
+      return json({
+        ok: false,
+        sent: false,
+        blocked: "attempt-state-persistence-failed",
+      }, 503);
+    }
 
     if (hybrid) {
+      dispatchStarted = true;
       if (type === "text") {
         const content = (payload.content as string) ?? "";
         res = (await hybridSendText(hybrid, to, content)) ?? undefined;
@@ -499,7 +1022,10 @@ export async function handle(req: Request): Promise<Response> {
         }
       }
       if (res) console.log("send-outbound hybrid:", type, "uazapi OK");
-      else console.log("send-outbound hybrid:", type, "fallback oficial");
+      else {
+        console.log("send-outbound hybrid:", type, "fallback oficial");
+        dispatchStarted = false;
+      }
     }
 
     // Se a rota híbrida falhou, a Meta só pode ser usada como fallback enquanto a
@@ -508,14 +1034,13 @@ export async function handle(req: Request): Promise<Response> {
     if (!res && isWhatsapp && hybrid) {
       const win = await windowState(db, conv as Json, channel as Json);
       if (!win.aberta) {
-        await db.from("events").insert({
-          source: "hybrid",
-          event_type: "fallback_blocked_window",
-          channel_id: channel.id,
-          payload: { conv: cwConvId, type, janela: win.tipo },
+        await writeDeliveryOutcome("blocked", "pending", {
+          failure_stage: "hybrid_fallback_window",
+          retryable: false,
         });
         return json({
           ok: false,
+          sent: false,
           blocked: "rota-hibrida-indisponivel-e-janela-fechada",
           janela: win.tipo,
         });
@@ -545,23 +1070,36 @@ export async function handle(req: Request): Promise<Response> {
         channel.type as "facebook" | "instagram",
       );
       if (socialMessages.length === 0) {
-        return json(
-          { error: `conteúdo ${type} inválido para canal social` },
-          400,
-        );
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "invalid_social_payload",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "invalid-payload",
+        }, 400);
       }
       for (const item of socialMessages) {
+        dispatchStarted = true;
         const itemResult = await sendMeta(channelToken!, "me/messages", {
           recipient: { id: to },
           message: item.message,
           messaging_type: "RESPONSE",
         });
         res = itemResult;
+        if (itemResult.ok) acceptedProviderMessages++;
         if (!itemResult.ok) break;
       }
-      if (!res?.ok && type === "audio" && channel.type === "instagram") {
+      if (
+        !res?.ok &&
+        type === "audio" &&
+        channel.type === "instagram" &&
+        !scheduledRow
+      ) {
         const audioUrl = instagramAudioUrl ?? String(payload.media_url ?? "");
         const fallbackText = `🎧 Ouça o áudio desta etapa:\n${audioUrl}`;
+        dispatchStarted = true;
         res = await sendMeta(channelToken!, "me/messages", {
           recipient: { id: to },
           message: { text: fallbackText },
@@ -583,6 +1121,7 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     if (!res) {
+      dispatchStarted = true;
       res = await sendMeta(
         channelToken!,
         `${channel.phone_number_id}/messages`,
@@ -594,10 +1133,17 @@ export async function handle(req: Request): Promise<Response> {
       );
     }
 
+    if (res.ok && acceptedProviderMessages === 0) acceptedProviderMessages++;
     const d = res.data as Json;
     const metaId =
       (d?.messages ? ((d.messages as Json[])[0]?.id as string) : null) ??
         ((d?.message_id as string) ?? null);
+
+    if (res.ok) {
+      const sentAt = new Date().toISOString();
+      await writeDeliveryOutcome("sent", "sent");
+      await advanceFunnelSequence(sentAt);
+    }
 
     // registra no Chatwoot pro atendente ver (não re-dispara webhook).
     let cwMsgId: number | undefined;
@@ -615,58 +1161,155 @@ export async function handle(req: Request): Promise<Response> {
       );
     }
 
-    await db.from("messages").insert({
-      conversation_id: conv.id,
-      channel_id: channel.id,
-      direction: "out",
-      // normalizeMsgType porque "list" (send-outbound aceita como tipo) não é valor do enum
-      // msg_type -- sem isso o insert falhava/virava "unknown" pra esse tipo de envio.
-      msg_type: normalizeMsgType(type),
-      content: registroTexto,
-      media_url: (payload.media_url as string) ?? null,
-      meta_message_id: metaId,
-      chatwoot_message_id: cwMsgId ?? null,
-      status: res.ok ? "sent" : "failed",
-      ...funnelLink,
-    });
+    try {
+      const { error: messageError } = await db.from("messages").insert({
+        conversation_id: conv.id,
+        channel_id: channel.id,
+        direction: "out",
+        // normalizeMsgType porque "list" (send-outbound aceita como tipo) não é valor do enum
+        // msg_type -- sem isso o insert falhava/virava "unknown" pra esse tipo de envio.
+        msg_type: normalizeMsgType(type),
+        content: registroTexto,
+        media_url: (payload.media_url as string) ?? null,
+        meta_message_id: metaId,
+        chatwoot_message_id: cwMsgId ?? null,
+        status: res.ok ? "sent" : "failed",
+        ...funnelLink,
+      });
+      if (messageError) {
+        console.error(
+          "send-outbound: registro da mensagem falhou",
+          messageError,
+        );
+      }
+    } catch (messageError) {
+      console.error(
+        "send-outbound: exceção ao registrar mensagem",
+        messageError,
+      );
+    }
 
     if (!res.ok) {
-      console.error("send-outbound falhou:", JSON.stringify(d).slice(0, 250));
-      // rejeição fica consultável em events (Meta recusa em silêncio -- ex: janela 24h fechada;
-      // Chatwoot mostra "sent" mesmo assim). select * from events where source='funil'.
-      db.from("events").insert({
-        source: "funil",
-        event_type: "send_failed",
-        payload: {
-          conv: cwConvId,
-          type,
+      const diagnostic = providerDiagnostic(d);
+      console.error(
+        "send-outbound falhou:",
+        res.status,
+        diagnostic.code ?? "sem código do provedor",
+      );
+      const details: Partial<FunnelDeliveryEvent> = {
+        http_status: res.status,
+        provider_code: diagnostic.code,
+        provider_subcode: diagnostic.subcode,
+        provider_error_type: diagnostic.type,
+        retryable: res.status === 429,
+        partial: acceptedProviderMessages > 0,
+      };
+      if (
+        res.status === 429 &&
+        acceptedProviderMessages === 0 &&
+        attemptNumber > 0 &&
+        attemptNumber <= MAX_AUTOMATIC_DELIVERY_RETRIES
+      ) {
+        const retryAt = nextFunnelRetryAt(attemptNumber);
+        const persisted = await writeDeliveryOutcome(
+          "retry_scheduled",
+          "pending",
+          details,
+          retryAt,
+        );
+        return json({
+          ok: false,
+          sent: false,
+          retry_scheduled: persisted,
+          retry_at: persisted ? retryAt : undefined,
           status: res.status,
-          error: (d as Json)?.error ?? d,
-        },
-      }).then(() => {}, () => {});
+        }, 503);
+      }
+      const uncertain = acceptedProviderMessages > 0 ||
+        res.status === 408 || res.status >= 500;
+      if (uncertain) {
+        await claimDelivery(
+          db,
+          "uncertain-" + claimKey,
+          "send-outbound-uncertain",
+        );
+      }
+      const outcome: FunnelDeliveryOutcome = acceptedProviderMessages > 0
+        ? "partial"
+        : uncertain
+        ? "uncertain"
+        : "rejected";
+      await writeDeliveryOutcome(outcome, "failed", details);
+      return json({
+        ok: false,
+        sent: false,
+        blocked: uncertain ? "envio-incerto" : "provedor-rejeitou-envio",
+        uncertain,
+        status: res.status,
+        provider_code: diagnostic.code,
+      }, uncertain ? 502 : 422);
     }
     return json({
-      ok: res.ok,
+      ok: true,
+      sent: true,
       meta_message_id: metaId,
       status: res.status,
-      error: res.ok ? undefined : (d as Json)?.error,
     });
   } catch (error) {
-    if (!(error instanceof Error) || error.name !== "UncertainDeliveryError") {
+    const uncertainByTransport = error instanceof Error &&
+      error.name === "UncertainDeliveryError";
+    if (!dispatchStarted && !uncertainByTransport) {
+      if (scheduledRow) {
+        await writeDeliveryOutcome("rejected", "failed", {
+          failure_stage: "send_preparation",
+          retryable: false,
+        });
+        return json({
+          ok: false,
+          sent: false,
+          blocked: "send-preparation-failed",
+        }, 500);
+      }
       throw error;
     }
-    await claimDelivery(db, `uncertain-${claimKey}`, "send-outbound-uncertain");
-    await db.from("events").insert({
-      source: "funil",
-      event_type: "send_uncertain",
-      channel_id: channel.id,
-      payload: {
-        conv: cwConvId,
-        type,
-        scheduled_message_id: funnelLink.scheduled_message_id,
-      },
-    });
-    return json({ ok: false, blocked: "envio-incerto", uncertain: true });
+    if (
+      acceptedProviderMessages > 0 || dispatchStarted || uncertainByTransport
+    ) {
+      const outcome: FunnelDeliveryOutcome = acceptedProviderMessages > 0
+        ? "partial"
+        : "uncertain";
+      await claimDelivery(
+        db,
+        "uncertain-" + claimKey,
+        "send-outbound-uncertain",
+      );
+      await writeDeliveryOutcome(outcome, "failed", {
+        failure_stage: "provider_transport",
+        retryable: false,
+        partial: acceptedProviderMessages > 0,
+      });
+      db.from("events").insert({
+        source: "funil",
+        event_type: "send_uncertain",
+        channel_id: channel.id,
+        payload: {
+          scheduled_message_id: funnelLink.scheduled_message_id,
+          funnel: funnelLink.funnel,
+          day: funnelLink.funnel_day,
+          type,
+          outcome,
+        },
+      }).then(() => {}, () => {});
+      return json({
+        ok: false,
+        sent: false,
+        blocked: acceptedProviderMessages > 0
+          ? "envio-parcial-incerto"
+          : "envio-incerto",
+        uncertain: true,
+      }, 502);
+    }
+    throw error;
   }
 }
 
