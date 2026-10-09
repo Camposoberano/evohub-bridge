@@ -979,6 +979,7 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     let res: { ok: boolean; status: number; data: unknown } | undefined;
+    const providerDispatchAt = Date.now();
     if (!await beginDeliveryAttempt()) {
       return json({
         ok: false,
@@ -1145,24 +1146,50 @@ export async function handle(req: Request): Promise<Response> {
       await advanceFunnelSequence(sentAt);
     }
 
-    // registra no Chatwoot pro atendente ver (não re-dispara webhook).
-    let cwMsgId: number | undefined;
-    try {
-      const cwMsg = await createConversationMessage(cwConvId, {
-        content: registroTexto,
-        messageType: "outgoing",
-        alreadySent: true,
-      }, acct);
-      cwMsgId = cwMsg?.id;
-    } catch (e) {
-      console.warn(
-        "send-outbound: registro Chatwoot falhou (entrega ok):",
-        String(e).slice(0, 150),
-      );
+    // O eco da Uazapi pode chegar ao Chatwoot antes de terminarmos o registro local.
+    // Dar tempo ao eco e reaproveitar sua linha evita duas bolhas da mesma peça.
+    let echo: Json | null = null;
+    if (res.ok && hybrid && scheduledRow && registroTexto.trim()) {
+      await sleep(1_800);
+      const { data: recentEcho, error: echoError } = await db.from("messages")
+        .select("id,chatwoot_message_id,meta_message_id")
+        .eq("conversation_id", conv.id)
+        .eq("direction", "out")
+        .eq("msg_type", normalizeMsgType(type))
+        .eq("content", registroTexto)
+        .is("scheduled_message_id", null)
+        .gte("sent_at", new Date(providerDispatchAt - 5_000).toISOString())
+        .order("sent_at", { ascending: false }).limit(1).maybeSingle();
+      if (echoError) {
+        console.warn(
+          "send-outbound: consulta do eco falhou:",
+          echoError.message,
+        );
+      } else {
+        echo = recentEcho as Json | null;
+      }
+    }
+
+    // Registra no Chatwoot só quando o eco ainda não o fez.
+    let cwMsgId = Number(echo?.chatwoot_message_id ?? 0) || undefined;
+    if (!cwMsgId) {
+      try {
+        const cwMsg = await createConversationMessage(cwConvId, {
+          content: registroTexto,
+          messageType: "outgoing",
+          alreadySent: true,
+        }, acct);
+        cwMsgId = cwMsg?.id;
+      } catch (e) {
+        console.warn(
+          "send-outbound: registro Chatwoot falhou (entrega ok):",
+          String(e).slice(0, 150),
+        );
+      }
     }
 
     try {
-      const { error: messageError } = await db.from("messages").insert({
+      const messageRecord: Json = {
         conversation_id: conv.id,
         channel_id: channel.id,
         direction: "out",
@@ -1175,7 +1202,17 @@ export async function handle(req: Request): Promise<Response> {
         chatwoot_message_id: cwMsgId ?? null,
         status: res.ok ? "sent" : "failed",
         ...funnelLink,
-      });
+      };
+      const { error: messageError } = echo
+        ? await db.from("messages").update({
+          ...funnelLink,
+          status: "sent",
+          chatwoot_message_id: cwMsgId ?? null,
+          ...(!echo.meta_message_id && metaId
+            ? { meta_message_id: metaId }
+            : {}),
+        }).eq("id", echo.id)
+        : await db.from("messages").insert(messageRecord);
       if (messageError) {
         console.error(
           "send-outbound: registro da mensagem falhou",

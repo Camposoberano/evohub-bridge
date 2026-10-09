@@ -355,8 +355,9 @@ const version = {
     "funil-anuncios-5895-cinco-momentos",
     "funil-completo-5895-30-09",
     "funil-botoes-historicos-roteados",
+    "funil-espelho-eco-sem-duplicidade",
   ],
-  build: "2026-10-09-funil-completo-5895-30-09",
+  build: "2026-10-09-funil-completo-5895-eco",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

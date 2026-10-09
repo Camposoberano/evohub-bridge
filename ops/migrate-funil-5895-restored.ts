@@ -71,10 +71,25 @@ if ((humanEvents ?? []).length === 5000) {
     "consulta de pedidos humanos atingiu limite; revisar paginação",
   );
 }
+const humanKindsByConversation = new Map<string, Set<string>>();
+for (const event of (humanEvents ?? []) as Json[]) {
+  const payload = (event.payload as Json | undefined) ?? {};
+  const conversationId = String(payload.conversation_id ?? "");
+  if (!conversationId) continue;
+  const kinds = humanKindsByConversation.get(conversationId) ??
+    new Set<string>();
+  kinds.add(String(payload.tipo_pedido ?? "atendimento"));
+  humanKindsByConversation.set(conversationId, kinds);
+}
+const quoteOnlyIds = new Set(
+  [...humanKindsByConversation].filter(([, kinds]) =>
+    [...kinds].every((kind) => kind === "cotacao")
+  ).map(([id]) => id),
+);
 const humanRequestedIds = new Set(
-  ((humanEvents ?? []) as Json[]).map((event) =>
-    String((event.payload as Json | undefined)?.conversation_id ?? "")
-  ).filter(Boolean),
+  [...humanKindsByConversation].filter(([, kinds]) =>
+    [...kinds].some((kind) => kind !== "cotacao")
+  ).map(([id]) => id),
 );
 
 const sequenceByConversation = new Map<string, Json[]>();
@@ -111,9 +126,10 @@ const candidates = ((conversations ?? []) as Json[]).map((conversation) => {
   const assigned = Boolean(String(conversation.assignee ?? "").trim());
   const humanRequested = humanRequestedIds.has(String(conversation.id));
   const explicitCase = FORCE_CHATWOOT_IDS.has(chatwootId);
+  const priceCase = quoteOnlyIds.has(String(conversation.id));
   const eligible = (ONLY.size === 0 || ONLY.has(chatwootId)) &&
     adEvidence && !terminal && !excluded &&
-    (!assigned && !humanRequested || explicitCase) &&
+    (!assigned && !humanRequested || explicitCase || priceCase) &&
     !restored &&
     Boolean(contact?.external_contact_id);
   const reason = restored
@@ -122,7 +138,7 @@ const candidates = ((conversations ?? []) as Json[]).map((conversation) => {
     ? "conversa encerrada, bloqueada ou com bot desligado"
     : excluded
     ? "contato excluído da automação"
-    : (assigned || humanRequested) && !explicitCase
+    : (assigned || humanRequested) && !explicitCase && !priceCase
     ? "atendimento humano atribuído ou solicitado"
     : ONLY.size && !ONLY.has(chatwootId)
     ? "fora do filtro --only"
@@ -163,6 +179,7 @@ const manifest = candidates.map((candidate) => ({
   opened_at: candidate.conversation.opened_at,
   assignee: candidate.conversation.assignee,
   human_requested: humanRequestedIds.has(String(candidate.conversation.id)),
+  quotation_only: quoteOnlyIds.has(String(candidate.conversation.id)),
   old_funnels: candidate.old.map((sequence) => sequence.funnel),
   old_rows: candidate.oldRows,
   future_rows_to_cancel: candidate.oldPending + candidate.oldPaused,
@@ -207,7 +224,8 @@ for (const candidate of candidates.filter((item) => item.eligible)) {
       current.bot_muted_at || isContactBlocked(currentContact) ||
       isContactExcludedFromAutomation(currentContact) ||
       (String(current.assignee ?? "").trim() &&
-        !FORCE_CHATWOOT_IDS.has(String(chatwoot)))
+        !FORCE_CHATWOOT_IDS.has(String(chatwoot)) &&
+        !quoteOnlyIds.has(conversationId))
     ) {
       results.push({ chatwoot, outcome: "skipped_state_changed" });
       continue;
