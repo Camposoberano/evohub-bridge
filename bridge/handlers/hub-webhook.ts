@@ -42,6 +42,7 @@ import {
   isComprovanteMsgType,
   isDuvidaTecnicaIntent,
   isFechamentoIntent,
+  isLogisticaIntent,
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
@@ -877,14 +878,33 @@ async function handleWhatsApp(db: Db, p: Json) {
               );
               if (claimed) {
                 try {
-                  await handleMenuClick(
-                    db,
-                    channel as Json,
-                    from,
-                    "menu_humano",
-                    acct,
-                    inboundMessageId ?? undefined,
-                  );
+                  if (isLogisticaIntent(intentText)) {
+                    const origem = channel.type === "facebook" ||
+                        channel.type === "instagram"
+                      ? "social"
+                      : "whatsapp";
+                    await handleHumanRequest(
+                      db,
+                      channel as Json,
+                      from,
+                      origem,
+                      acct,
+                      {
+                        tipo_pedido: "logistica",
+                        pergunta: intentText.slice(0, 400),
+                        message_id: inboundMessageId,
+                      },
+                    );
+                  } else {
+                    await handleMenuClick(
+                      db,
+                      channel as Json,
+                      from,
+                      "menu_humano",
+                      acct,
+                      inboundMessageId ?? undefined,
+                    );
+                  }
                 } catch (error) {
                   await releaseDelivery(db, handoffClaimId);
                   throw error;
@@ -3178,7 +3198,7 @@ async function handleSaudacao(
   from: string,
   _acct?: CwAcct,
 ): Promise<void> {
-  // saudação dispara o funil em QUALQUER canal (não depende de FUNIL_AUTO_ENROLL_CHANNEL).
+  // Helper legado: uma saudação isolada usa a abertura sem depender de palavra-chave.
   // A fase 1 peça 0 já abre com "Vida boa!" — não manda texto separado pra não duplicar.
   try {
     await enrollIfNew(db, channel, from);

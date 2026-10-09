@@ -87,4 +87,13 @@ O sinal confiável de origem do anúncio tem precedência sobre a classificaçã
 
 ## Estado
 
-O usuário aprovou a regra de precedência da origem de anúncio e a abertura sem duplicidade em 07/10/2026; em 08/10/2026 pediu a correção das entradas sociais e da perda de sequência após respostas. A implementação local está no worktree isolado. Nenhum dado de produção, envio real ou deploy foi executado.
+O usuário aprovou a regra de precedência da origem de anúncio e a abertura sem duplicidade em 07/10/2026. Em 09/10/2026, o escopo de ativação foi limitado a novos leads de anúncio no WhatsApp 5895.
+
+### Resultado da implementação
+
+- A inscrição automática e a recuperação são limitadas ao canal 5895; a recuperação cobre apenas conversas abertas nos últimos 15 minutos e com no máximo uma mensagem inbound.
+- Referral/origem persistida prevalecem. Respostas específicas e handoff humano substituem a abertura genérica; perguntas de custo seguem para preço e logística para atendimento humano.
+- A implementação foi integrada sobre a `main` atual para preservar as correções recentes de recuperação e entrega.
+- No worktree de release: 31 testes focados passaram, sem falhas, e `deno check` passou nos handlers e no servidor.
+- Auditoria somente de leitura: serviço HTTP 200, canal 5895 ativo, zero leads de anúncio abertos no recorte dos últimos 15 minutos e 173 mídias ativas em 39 combinações dia/slot. As URLs individuais das mídias e a fila histórica completa não foram verificadas.
+- Nenhuma mensagem de teste foi enviada. O código ainda aguarda publicação em produção.

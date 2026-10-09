@@ -1533,7 +1533,9 @@ function startDeclineGuardLoop() {
 function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
-      const result = await recoverEligibleFunnels(admin(), 48);
+      // Só recuperar uma abertura muito recente perdida pelo webhook. Evita que o deploy
+      // reinscreva uma fila histórica de anúncios; mensagens novas entram pelo webhook.
+      const result = await recoverEligibleFunnels(admin(), 0.25);
       const maintenance = await maintainFunnels(admin());
       const chain = await runRecoveryChain();
       if (

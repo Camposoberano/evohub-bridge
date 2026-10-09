@@ -15,6 +15,7 @@ import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isNutricaoIntent,
+  isLogisticaIntent,
   isPlantioIntent,
   isPrecoIntent,
   isVideoIntent,
@@ -28,6 +29,7 @@ import {
 } from "../shared/hybrid-menu.ts";
 import {
   handleMenuClick,
+  handleHumanRequest,
   handleNutricaoClick,
   handlePlantioClick,
   handlePrecoClick,
@@ -502,14 +504,22 @@ async function handleUazapiIntent(
       );
       if (claimed) {
         try {
-          await handleMenuClick(
-            db,
-            channel,
-            from,
-            "menu_humano",
-            acct,
-            messageId ?? undefined,
-          );
+          if (isLogisticaIntent(intentText)) {
+            await handleHumanRequest(db, channel, from, "whatsapp", acct, {
+              tipo_pedido: "logistica",
+              pergunta: intentText.slice(0, 400),
+              message_id: messageId,
+            });
+          } else {
+            await handleMenuClick(
+              db,
+              channel,
+              from,
+              "menu_humano",
+              acct,
+              messageId ?? undefined,
+            );
+          }
         } catch (error) {
           await releaseDelivery(db, handoffClaimId);
           throw error;

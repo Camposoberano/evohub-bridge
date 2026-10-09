@@ -37,9 +37,15 @@ import {
 } from "../shared/lead-block.ts";
 import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
+import {
+  canalAlvoFunil,
+  suprimirAberturaGenerica,
+} from "../shared/funil-anuncio.ts";
+import { isLogisticaIntent } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL = "mega-sorgo";
+const CANAL_ANUNCIO_ALVO = "5895";
 // Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
 // da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
@@ -683,9 +689,8 @@ function json(obj: unknown, status = 200): Response {
 }
 
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
-// Liga via env (desligado se não setar):
-//   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
-//   FUNIL_KEYWORD             = (opcional) só entra se a msg contiver a palavra-chave do anúncio
+// Para anúncios, o canal 5895 é fixo; referral/origem/mensagem padrão são os sinais principais.
+//   FUNIL_KEYWORD = fallback opcional por palavra-chave quando não há sinal de anúncio.
 // Chamado pelo hub-webhook a cada entrada. Dedup: 1 funil por conversa (sales_sequences).
 const CANAIS_SOCIAIS = new Set(["facebook", "instagram"]);
 
@@ -891,6 +896,9 @@ export async function autoEnrollFunil(
     sourceMessageId?: string | null;
   } = {},
 ): Promise<AutoEnrollResult> {
+  if (!canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) {
+    return { adOrigin: false, humanHandoff: false, deferIntent: false };
+  }
   const conversation = await activeConversationForContact(db, channel, from);
   let originSignal: string | null = fromAd
     ? "meta_referral"
@@ -929,13 +937,9 @@ export async function autoEnrollFunil(
       return { adOrigin: false, humanHandoff: false, deferIntent: false };
     }
 
-    const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
-    if (!alvo || (channel.name !== alvo && channel.external_id !== alvo)) {
-      return { adOrigin: false, humanHandoff: false, deferIntent: false };
-    }
     const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
-    // Match tolerante: ignora maiúsculas/minúsculas e acentos.
-    if (kw && !foldText(content).includes(foldText(kw))) {
+    // Sem referral/origem, só a mensagem padrão ou uma palavra-chave explícita são sinais.
+    if (!kw || !foldText(content).includes(foldText(kw))) {
       return { adOrigin: false, humanHandoff: false, deferIntent: false };
     }
     originSignal = "configured_keyword";
@@ -948,7 +952,8 @@ export async function autoEnrollFunil(
     parecePerguntaDeAnuncio(content);
   // Perguntas iniciais de anúncio recebem a abertura; o handoff ou a rota específica
   // são executados em seguida, pela fila da etapa adiada.
-  const automaticHandoff = unsupportedQuestion;
+  const automaticHandoff = unsupportedQuestion ||
+    (adFunnelOrigin && isLogisticaIntent(content));
   const openingReason = humanHandoffWillHandle || automaticHandoff
     ? "human_handoff"
     : options.responseWillHandle
@@ -958,8 +963,8 @@ export async function autoEnrollFunil(
   let outcome: EnrollOutcome;
   try {
     outcome = await enrollIfNew(db, channel, from, {
-      // Anúncio sempre recebe a abertura principal antes de qualquer rota lateral.
-      skipOpening: !adFunnelOrigin && Boolean(openingReason),
+      // A resposta específica ou o handoff humano substitui a abertura genérica.
+      skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
       openingReason,
       originSignal,
       conversation,
@@ -968,9 +973,10 @@ export async function autoEnrollFunil(
     console.error("autoEnrollFunil inscrição falhou:", error);
     outcome = "in_progress";
   }
-  let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome);
+  let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome) &&
+    !openingReason;
   if (
-    !deferIntent && adFunnelOrigin && outcome === "already" &&
+    !openingReason && !deferIntent && adFunnelOrigin && outcome === "already" &&
     conversation?.id
   ) {
     try {
@@ -1184,11 +1190,13 @@ export async function recoverEligibleFunnels(
     (existing ?? []).map((item: Json) => String(item.conversation_id)),
   );
   const latestInbound = new Map<string, string>();
+  const inboundCounts = new Map<string, number>();
   for (const item of inbound ?? []) {
     const key = String(item.conversation_id);
     if (!latestInbound.has(key)) {
       latestInbound.set(key, String(item.content ?? ""));
     }
+    inboundCounts.set(key, (inboundCounts.get(key) ?? 0) + 1);
   }
   const contactMap = new Map(
     (contacts ?? []).map((item: Json) => [String(item.id), item]),
@@ -1203,6 +1211,11 @@ export async function recoverEligibleFunnels(
       enrolledIds.has(String(conversation.id)) ||
       !conversation.chatwoot_conversation_id
     ) continue;
+    const channel = channelMap.get(String(conversation.channel_id)) as
+      | Json
+      | undefined;
+    if (!channel || !canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) continue;
+    if ((inboundCounts.get(String(conversation.id)) ?? 0) > 1) continue;
     const content = latestInbound.get(String(conversation.id)) ?? "";
     if (conversation.origem !== "anuncio" && !isDefaultAdMessage(content)) {
       continue;
@@ -1211,12 +1224,17 @@ export async function recoverEligibleFunnels(
     const contact = contactMap.get(String(conversation.contact_id)) as
       | Json
       | undefined;
-    const channel = channelMap.get(String(conversation.channel_id)) as
-      | Json
-      | undefined;
     if (!contact?.external_contact_id || !channel) continue;
-    await enrollIfNew(db, channel, String(contact.external_contact_id));
-    enrolled++;
+    const originSignal = conversation.origem === "anuncio"
+      ? "persisted_ad_origin"
+      : "default_ad_message";
+    const outcome = await enrollIfNew(
+      db,
+      channel,
+      String(contact.external_contact_id),
+      { originSignal, conversation },
+    );
+    if (outcome === "created") enrolled++;
   }
   return { scanned: conversations.length, eligible, enrolled };
 }

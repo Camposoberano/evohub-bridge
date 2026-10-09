@@ -1,0 +1,95 @@
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  canalAlvoFunil,
+  inscricaoPrecisaDeRecuperacao,
+  motivoEntradaAnuncio,
+  suprimirAberturaGenerica,
+} from "../shared/funil-anuncio.ts";
+
+Deno.test("identifica 5895 por nome, ID ou final do telefone", () => {
+  assertEquals(canalAlvoFunil({ name: "Campo Soberano 5895" }), true);
+  assertEquals(canalAlvoFunil({ external_id: "5895" }), true);
+  assertEquals(canalAlvoFunil({ phone_number: "+55 19 99971-5895" }), true);
+});
+
+Deno.test("não inclui outro canal nem corresponde pelo WABA", () => {
+  assertEquals(canalAlvoFunil({ name: "Campo Soberano 6836" }), false);
+  assertEquals(canalAlvoFunil({ phone_number: "+55 19 99971-6836" }), false);
+  assertEquals(canalAlvoFunil({ phone_number_id: "5895" }), false);
+  assertEquals(canalAlvoFunil({ name: "5895" }, ""), false);
+});
+
+Deno.test("referral e origem persistida vencem intenção comercial", () => {
+  assertEquals(
+    motivoEntradaAnuncio({
+      fromAd: true,
+      origemPersistida: false,
+      mensagemPadrao: false,
+      palavraConfigurada: false,
+      aberturaSocial: false,
+      intencaoComercial: true,
+    }),
+    "meta-referral",
+  );
+  assertEquals(
+    motivoEntradaAnuncio({
+      fromAd: false,
+      origemPersistida: true,
+      mensagemPadrao: false,
+      palavraConfigurada: false,
+      aberturaSocial: false,
+      intencaoComercial: true,
+    }),
+    "origem-persistida",
+  );
+});
+
+Deno.test("texto fallback só inscreve com evidência positiva configurada", () => {
+  const base = {
+    fromAd: false,
+    origemPersistida: false,
+    mensagemPadrao: false,
+    palavraConfigurada: false,
+    aberturaSocial: false,
+    intencaoComercial: false,
+  };
+  assertEquals(motivoEntradaAnuncio(base), null);
+  assertEquals(
+    motivoEntradaAnuncio({ ...base, palavraConfigurada: true }),
+    "palavra-configurada",
+  );
+  assertEquals(
+    motivoEntradaAnuncio({ ...base, mensagemPadrao: true }),
+    "mensagem-padrao",
+  );
+});
+
+Deno.test("abertura social não engole intenção já reconhecida", () => {
+  const base = {
+    fromAd: false,
+    origemPersistida: false,
+    mensagemPadrao: false,
+    palavraConfigurada: false,
+    aberturaSocial: true,
+  };
+  assertEquals(
+    motivoEntradaAnuncio({ ...base, intencaoComercial: true }),
+    null,
+  );
+  assertEquals(
+    motivoEntradaAnuncio({ ...base, intencaoComercial: false }),
+    "abertura-social",
+  );
+});
+
+Deno.test("intenção direta substitui a abertura genérica", () => {
+  assertEquals(suprimirAberturaGenerica(true), true);
+  assertEquals(suprimirAberturaGenerica(false), false);
+});
+
+Deno.test("recupera só sequência ativa sem fila e sem evento de sucesso", () => {
+  assertEquals(inscricaoPrecisaDeRecuperacao("running", false, false), true);
+  assertEquals(inscricaoPrecisaDeRecuperacao("paused", false, false), false);
+  assertEquals(inscricaoPrecisaDeRecuperacao("running", true, false), false);
+  assertEquals(inscricaoPrecisaDeRecuperacao("running", false, true), false);
+});
