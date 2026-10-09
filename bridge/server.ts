@@ -337,8 +337,9 @@ const version = {
     "pediu-humano-pausa-e-alerta",
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
+    "funil-anuncio-whatsapp-5895",
   ],
-  build: "2026-10-06-funil-comercial-ramificado",
+  build: "2026-10-09-funil-anuncios-5895-d148d10",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

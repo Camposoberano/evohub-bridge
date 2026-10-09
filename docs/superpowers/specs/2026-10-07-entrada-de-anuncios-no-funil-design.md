@@ -96,4 +96,4 @@ O usuário aprovou a regra de precedência da origem de anúncio e a abertura se
 - A implementação foi integrada sobre a `main` atual para preservar as correções recentes de recuperação e entrega.
 - No worktree de release: 31 testes focados passaram, sem falhas, e `deno check` passou nos handlers e no servidor.
 - Auditoria somente de leitura: serviço HTTP 200, canal 5895 ativo, zero leads de anúncio abertos no recorte dos últimos 15 minutos e 173 mídias ativas em 39 combinações dia/slot. As URLs individuais das mídias e a fila histórica completa não foram verificadas.
-- Nenhuma mensagem de teste foi enviada. O código ainda aguarda publicação em produção.
+- Nenhuma mensagem de teste foi enviada. O commit `d148d10` foi publicado em `main`, implantado pelo Coolify e confirmado em produção: `/health` respondeu HTTP 200 e o processo reiniciou após o deploy. O rótulo explícito em `/version` está sendo publicado para tornar esse release identificável externamente.
