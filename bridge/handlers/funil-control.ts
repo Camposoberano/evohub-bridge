@@ -2,7 +2,12 @@
 // Chamado por macros do Chatwoot ou API direta.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
+import {
+  admin,
+  claimDelivery,
+  claimDeliveryWithTtl,
+  releaseDelivery,
+} from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import {
@@ -82,7 +87,9 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-control")) {
+  if (
+    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-control")
+  ) {
     return json({ error: "unauthorized" }, 401);
   }
 
@@ -106,7 +113,9 @@ export async function handle(req: Request): Promise<Response> {
     "id, channel_id, contact_id, chatwoot_conversation_id",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-  if (!conv) return json({ error: "conversa não encontrada", terminal: true }, 404);
+  if (!conv) {
+    return json({ error: "conversa não encontrada", terminal: true }, 404);
+  }
 
   const acct = await accountForChannel(conv.channel_id as string);
 
@@ -400,7 +409,7 @@ export async function handle(req: Request): Promise<Response> {
         "ℹ️ *O início do funil já está em andamento.* Não criei outra fila.";
     } else if (openingComplete) {
       message =
-        "ℹ️ *A abertura do funil foi confirmada como enviada.* Não criei outra sequência para evitar duplicação.";
+        "ℹ️ *Já há evidência da abertura no histórico do sistema.* Não criei outra sequência para evitar duplicação. O registro de envio não confirma a entrega da mensagem ao aparelho do cliente.";
     } else if (deliveryEvidence) {
       message =
         "⚠️ *A abertura não está confirmada como concluída.* Há uma tentativa registrada; não repliquei as mensagens para evitar duplicação. Confira a macro Status.";
@@ -420,7 +429,12 @@ export async function handle(req: Request): Promise<Response> {
 
   if (action === "catalogo" || action === "abrir-catalogo") {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+    if (!resolved) {
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
+    }
     await sendCatalogRootMenu(
       db,
       resolved.channel,
@@ -438,7 +452,12 @@ export async function handle(req: Request): Promise<Response> {
 
   if (action === "catalogo-sair" || action === "voltar-mega-sorgo") {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+    if (!resolved) {
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
+    }
     await leaveCatalogJourney(db, resolved.channel, resolved.from, acct);
     await nota(
       cwConvId,
@@ -478,7 +497,12 @@ export async function handle(req: Request): Promise<Response> {
   const menuId = DISPATCH_MAP[action];
   if (menuId) {
     const resolved = await resolveChannelAndContact(db, conv);
-    if (!resolved) return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+    if (!resolved) {
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
+    }
     try {
       // Uma sequencia comercial manual substitui a conversa automatica naquele
       // momento. Pausa o funil principal antes de enviar para nao misturar

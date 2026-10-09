@@ -23,7 +23,10 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
-import { janelaProfunda, recuperarEntradaUazapi } from "./shared/catchup-uazapi.ts";
+import {
+  janelaProfunda,
+  recuperarEntradaUazapi,
+} from "./shared/catchup-uazapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import {
   handle as funilEnroll,
@@ -69,7 +72,12 @@ import {
 import { env, optionalEnv } from "./shared/env.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
 import { agendarLoop } from "./shared/loop-guard.ts";
-import { admin, claimDelivery, publicTable, releaseDelivery } from "./shared/supabase.ts";
+import {
+  admin,
+  claimDelivery,
+  publicTable,
+  releaseDelivery,
+} from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
@@ -79,7 +87,11 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
-import { limparPausa, pausasVencidas, podeRetomar } from "./shared/funil-pausa.ts";
+import {
+  limparPausa,
+  pausasVencidas,
+  podeRetomar,
+} from "./shared/funil-pausa.ts";
 import {
   maintainFunnels,
   resumeSequenceRebased,
@@ -93,8 +105,8 @@ import {
   enviadosHoje,
   marcarEnviado,
   marcarFalha,
-  marcarPulado,
   marcarProcessamentosAbandonados,
+  marcarPulado,
   marcarResultadoIncerto,
   pausarCampanha,
   reservarProximoItem,
@@ -105,7 +117,10 @@ import { runFlow } from "./shared/flow-runner.ts";
 import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
-import { bloqueioPorContato, motivoDoBloqueio } from "./shared/gate-comercial.ts";
+import {
+  bloqueioPorContato,
+  motivoDoBloqueio,
+} from "./shared/gate-comercial.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
 import { runDeclineGuard } from "./shared/decline-guard.ts";
 
@@ -337,9 +352,9 @@ const version = {
     "pediu-humano-pausa-e-alerta",
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
-    "funil-anuncio-whatsapp-5895",
+    "funil-anuncios-5895-cinco-momentos",
   ],
-  build: "2026-10-09-funil-anuncios-5895-d148d10",
+  build: "2026-10-09-funil-anuncios-5895-cinco-momentos",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -1204,7 +1219,13 @@ function startFunnelResumeLoop() {
       for (const id of conversas) {
         const { data: conv } = await db.from("conversations")
           .select("outcome,bot_muted_at").eq("id", id).maybeSingle();
-        if (!podeRetomar(conv as { outcome?: string | null; bot_muted_at?: string | null } | null)) {
+        if (
+          !podeRetomar(
+            conv as
+              | { outcome?: string | null; bot_muted_at?: string | null }
+              | null,
+          )
+        ) {
           // Já comprou, desistiu ou está com o bot travado: some o marcador, não a conversa.
           await limparPausa(db, id);
           puladas++;
@@ -1371,11 +1392,19 @@ function startCampaignQueueLoop() {
               item.contact_key,
             );
           } catch (e) {
-            await marcarFalha(db, item, `etiqueta indisponível: ${String(e).slice(0, 120)}`);
+            await marcarFalha(
+              db,
+              item,
+              `etiqueta indisponível: ${String(e).slice(0, 120)}`,
+            );
             continue;
           }
           if (bloqueioComercial) {
-            await marcarPulado(db, item.id, motivoDoBloqueio(bloqueioComercial));
+            await marcarPulado(
+              db,
+              item.id,
+              motivoDoBloqueio(bloqueioComercial),
+            );
             continue;
           }
 
@@ -1594,7 +1623,9 @@ function startFlowTimeoutLoop() {
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
-  const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+  const bearer =
+    (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ??
+      "";
   const informado = bearer || url.searchParams.get("token") || "";
   const esperado = segredoParaChamadaInterna();
   return confereSegredo(informado, [esperado], "server");
@@ -1612,7 +1643,9 @@ function startUazapiCatchupLoop() {
   // de segurança podia estar furada há dias sem ninguém ter como saber de fora.
   const run = async () => {
     try {
-      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), { apply: true });
+      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), {
+        apply: true,
+      });
       console.log("uazapi-catchup:", JSON.stringify(resumo));
       if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
         console.log("uazapi-catchup detalhe:", JSON.stringify(resultados));
@@ -1637,7 +1670,10 @@ function startUazapiCatchupLoop() {
       });
       console.log("uazapi-catchup-profundo:", JSON.stringify(resumo));
       if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
-        console.log("uazapi-catchup-profundo detalhe:", JSON.stringify(resultados));
+        console.log(
+          "uazapi-catchup-profundo detalhe:",
+          JSON.stringify(resultados),
+        );
       }
     } catch (error) {
       console.error("uazapi-catchup-profundo erro:", error);

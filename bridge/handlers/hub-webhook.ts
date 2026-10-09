@@ -24,10 +24,10 @@ import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { registrarPedidoHumano } from "../shared/pedido-humano.ts";
 import {
-  OPCOES_DE_USO,
   classificarIntencaoComercial,
   extrairAreaHectares,
   isAreaAcimaDosPacotes,
+  OPCOES_DE_USO,
   pacotePorId,
   registrarEventoComercial,
   textoCondicaoComercial,
@@ -72,12 +72,12 @@ import {
   socialPriceActionClaimKey,
 } from "../shared/social-funnel.ts";
 import {
+  inferSocialMenuAction,
   inferSocialSalesIntent,
   salesContactImageFallback,
   salesWhatsAppUrl,
   SOCIAL_INFO_TEXT,
   socialContactText,
-  inferSocialMenuAction,
   socialSalesClaimKey,
   type SocialSalesIntent,
 } from "../shared/social-sales.ts";
@@ -386,7 +386,10 @@ async function handleWhatsApp(db: Db, p: Json) {
               from,
               "explicit-reply",
             );
-            console.log("hub: contato bloqueado por desinteresse", JSON.stringify(result));
+            console.log(
+              "hub: contato bloqueado por desinteresse",
+              JSON.stringify(result),
+            );
           } catch (e) {
             console.error("hub: falha ao encerrar desinteresse", e);
           }
@@ -399,7 +402,10 @@ async function handleWhatsApp(db: Db, p: Json) {
         if (
           await isBotMutedForContact(db, channel.id as string, from)
         ) {
-          console.log("bot-mute: entrada ignorada pelo bot, conv de", sufixoContato(from));
+          console.log(
+            "bot-mute: entrada ignorada pelo bot, conv de",
+            sufixoContato(from),
+          );
           continue;
         }
 
@@ -421,18 +427,48 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         // Menu de ação do funil (lista/botão clicado pelo cliente) -> entrega o conteúdo na
         // hora, em qualquer fase, sem esperar o roteiro chegar lá.
+        if (menuClick) {
+          try {
+            await autoEnrollFunil(
+              db,
+              channel as Json,
+              from,
+              menuClick.title,
+              Boolean(m.referral),
+              {
+                responseWillHandle: menuClick.id !== "menu_humano",
+                humanHandoffWillHandle: menuClick.id === "menu_humano",
+                sourceMessageId: String(m.id ?? m.message_id ?? "") || null,
+              },
+            );
+          } catch (error) {
+            console.error("autoEnrollFunil clique interativo erro:", error);
+          }
+        }
         if (
           menuClick?.id.startsWith("menu_") &&
-          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+          await claimDelivery(
+            db,
+            `wa-action-${channel.id}-${m.id}-${menuClick.id}`,
+            "wa-action",
+          )
         ) {
           try {
             if (menuClick.id === "menu_preco") {
               await recordInboundCommercialIntent(
-                db, channel as Json, from, "preco", String(m.id ?? "") || null,
+                db,
+                channel as Json,
+                from,
+                "preco",
+                String(m.id ?? "") || null,
               );
             } else if (menuClick.id === "menu_uso") {
               await recordInboundCommercialIntent(
-                db, channel as Json, from, "interesse_geral", String(m.id ?? "") || null,
+                db,
+                channel as Json,
+                from,
+                "interesse_geral",
+                String(m.id ?? "") || null,
               );
             }
             await handleMenuClick(
@@ -451,9 +487,14 @@ async function handleWhatsApp(db: Db, p: Json) {
         if (
           menuClick &&
           (menuClick.id.startsWith("preco_") ||
-            menuClick.id.startsWith("tam_") || menuClick.id.startsWith("pag_") ||
+            menuClick.id.startsWith("tam_") ||
+            menuClick.id.startsWith("pag_") ||
             menuClick.id.startsWith("uso_")) &&
-          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+          await claimDelivery(
+            db,
+            `wa-action-${channel.id}-${m.id}-${menuClick.id}`,
+            "wa-action",
+          )
         ) {
           try {
             await handlePrecoClick(
@@ -471,7 +512,11 @@ async function handleWhatsApp(db: Db, p: Json) {
         // botões da sequência de plantio (plantio_1..plantio_10).
         if (
           menuClick?.id.startsWith("plantio_") &&
-          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+          await claimDelivery(
+            db,
+            `wa-action-${channel.id}-${m.id}-${menuClick.id}`,
+            "wa-action",
+          )
         ) {
           try {
             await handlePlantioClick(
@@ -488,7 +533,11 @@ async function handleWhatsApp(db: Db, p: Json) {
         // botões da sequência nutricional (nutricao_1..nutricao_10).
         if (
           menuClick?.id.startsWith("nutricao_") &&
-          await claimDelivery(db, `wa-action-${channel.id}-${m.id}-${menuClick.id}`, "wa-action")
+          await claimDelivery(
+            db,
+            `wa-action-${channel.id}-${m.id}-${menuClick.id}`,
+            "wa-action",
+          )
         ) {
           try {
             await handleNutricaoClick(
@@ -601,13 +650,16 @@ async function handleWhatsApp(db: Db, p: Json) {
               isNutricaoIntent(intentText) ||
               (isAreaAcimaDosPacotes(intentText) &&
                 extrairAreaHectares(intentText) !== null);
-            const humanHandoffWillHandle = commercialIntent === "duvida_tecnica" ||
+            const humanHandoffWillHandle =
+              commercialIntent === "duvida_tecnica" ||
               (isAreaAcimaDosPacotes(intentText) &&
                 extrairAreaHectares(intentText) !== null);
 
             // Enroll depois da transcrição para decidir a abertura com a mesma intenção que
             // será roteada. Referral/origem persistida prevalece mesmo quando há intenção.
-            let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+            let adEnrollment:
+              | Awaited<ReturnType<typeof autoEnrollFunil>>
+              | null = null;
             try {
               adEnrollment = await autoEnrollFunil(
                 db,
@@ -616,7 +668,8 @@ async function handleWhatsApp(db: Db, p: Json) {
                 intentText,
                 Boolean(m.referral),
                 {
-                  responseWillHandle: routeWillHandle && !humanHandoffWillHandle,
+                  responseWillHandle: routeWillHandle &&
+                    !humanHandoffWillHandle,
                   humanHandoffWillHandle,
                   sourceMessageId: String(m.id ?? m.message_id ?? "") || null,
                 },
@@ -649,6 +702,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                     // Resposta automática pausa só pelo prazo; atendimento humano espera
                     // decisão do agente e não retoma mensagens sozinho.
                     comPrazo: !humanHandoffWillHandle,
+                    adOrigin: adEnrollment?.adOrigin === true,
                   });
                 }
               }
@@ -665,16 +719,25 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 const hectares = extrairAreaHectares(intentText);
                 if (hectares !== null && isAreaAcimaDosPacotes(intentText)) {
-                  const origem = channel.type === "facebook" || channel.type === "instagram"
-                    ? "social"
-                    : "whatsapp";
-                  await handleHumanRequest(db, channel as Json, from, origem, acct, {
-                    tipo_pedido: "cotacao_area_livre",
-                    area_hectares: hectares,
-                    uso: usoPorResposta(intentText),
-                    regiao_uf: extrairUF(intentText),
-                    message_id: String(m.id ?? m.message_id ?? "") || null,
-                  });
+                  const origem =
+                    channel.type === "facebook" || channel.type === "instagram"
+                      ? "social"
+                      : "whatsapp";
+                  await handleHumanRequest(
+                    db,
+                    channel as Json,
+                    from,
+                    origem,
+                    acct,
+                    {
+                      tipo_pedido: "cotacao_area_livre",
+                      area_hectares: hectares,
+                      uso: usoPorResposta(intentText),
+                      regiao_uf: extrairUF(intentText),
+                      message_id: String(m.id ?? m.message_id ?? "") || null,
+                      ad_origin: adEnrollment?.adOrigin === true,
+                    },
+                  );
                 } else {
                   await handleMenuClick(
                     db,
@@ -718,7 +781,9 @@ async function handleWhatsApp(db: Db, p: Json) {
                   }
                 }
               }
-            } else if (isVideoIntent(intentText) && !adEnrollment?.deferIntent) {
+            } else if (
+              isVideoIntent(intentText) && !adEnrollment?.deferIntent
+            ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -761,7 +826,9 @@ async function handleWhatsApp(db: Db, p: Json) {
                   }
                 }
               }
-            } else if (isPlantioIntent(intentText) && !adEnrollment?.deferIntent) {
+            } else if (
+              isPlantioIntent(intentText) && !adEnrollment?.deferIntent
+            ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -773,7 +840,9 @@ async function handleWhatsApp(db: Db, p: Json) {
               ) {
                 await handlePlantioSequence(db, channel as Json, from, acct);
               }
-            } else if (isNutricaoIntent(intentText) && !adEnrollment?.deferIntent) {
+            } else if (
+              isNutricaoIntent(intentText) && !adEnrollment?.deferIntent
+            ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
               if (
@@ -786,7 +855,8 @@ async function handleWhatsApp(db: Db, p: Json) {
                 await handleNutricaoSequence(db, channel as Json, from, acct);
               }
             } else if (
-              commercialIntent === "duvida_tecnica" && !adEnrollment?.deferIntent
+              commercialIntent === "duvida_tecnica" &&
+              !adEnrollment?.deferIntent
             ) {
               // Pergunta técnica (espaçamento, densidade, irrigação, que animal come):
               // não existe resposta pronta e chutar sobre plantio queima a confiança de
@@ -812,10 +882,18 @@ async function handleWhatsApp(db: Db, p: Json) {
                   String(m.id ?? m.message_id ?? "") || undefined,
                 );
               }
-            } else if (commercialIntent === "uso" && !adEnrollment?.deferIntent) {
+            } else if (
+              commercialIntent === "uso" && !adEnrollment?.deferIntent
+            ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
-              if (await claimDelivery(db, `intent-uso-${channel.id}-${from}-${intentKey}`, "intent")) {
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-uso-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
                 const detectedUse = intentText.match(/silagem|ensilagem|silo/i)
                   ? "uso_silagem"
                   : intentText.match(/pastejo|pasto|pastoreio|pastorear/i)
@@ -832,11 +910,18 @@ async function handleWhatsApp(db: Db, p: Json) {
                 );
               }
             } else if (
-              commercialIntent === "interesse_geral" && !adEnrollment?.deferIntent
+              commercialIntent === "interesse_geral" &&
+              !adEnrollment?.deferIntent
             ) {
               const intentKey = (m.id as string) ?? (m.message_id as string) ??
                 new Date().toISOString();
-              if (await claimDelivery(db, `intent-interesse-${channel.id}-${from}-${intentKey}`, "intent")) {
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-interesse-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
                 await handleMenuClick(
                   db,
                   channel as Json,
@@ -851,23 +936,33 @@ async function handleWhatsApp(db: Db, p: Json) {
             ) {
               const hectares = extrairAreaHectares(intentText);
               if (hectares !== null) {
-                const origem = channel.type === "facebook" || channel.type === "instagram"
-                  ? "social"
-                  : "whatsapp";
-                await handleHumanRequest(db, channel as Json, from, origem, acct, {
-                  tipo_pedido: "cotacao_area_livre",
-                  area_hectares: hectares,
-                  uso: usoPorResposta(intentText),
-                  regiao_uf: extrairUF(intentText),
-                  message_id: String(m.id ?? m.message_id ?? "") || null,
-                });
+                const origem =
+                  channel.type === "facebook" || channel.type === "instagram"
+                    ? "social"
+                    : "whatsapp";
+                await handleHumanRequest(
+                  db,
+                  channel as Json,
+                  from,
+                  origem,
+                  acct,
+                  {
+                    tipo_pedido: "cotacao_area_livre",
+                    area_hectares: hectares,
+                    uso: usoPorResposta(intentText),
+                    regiao_uf: extrairUF(intentText),
+                    message_id: String(m.id ?? m.message_id ?? "") || null,
+                    ad_origin: adEnrollment?.adOrigin === true,
+                  },
+                );
               }
             }
 
             // Pergunta de anúncio sem resposta automática: aciona uma única vez o caminho
             // de atendimento humano já existente. O texto inbound já está no Chatwoot.
             if (adEnrollment?.humanHandoff) {
-              const inboundMessageId = String(m.id ?? m.message_id ?? "") || null;
+              const inboundMessageId = String(m.id ?? m.message_id ?? "") ||
+                null;
               const handoffClaimId = inboundMessageId
                 ? `ad-question-handoff-${channel.id}-${from}-${inboundMessageId}`
                 : null;
@@ -893,6 +988,7 @@ async function handleWhatsApp(db: Db, p: Json) {
                         tipo_pedido: "logistica",
                         pergunta: intentText.slice(0, 400),
                         message_id: inboundMessageId,
+                        ad_origin: adEnrollment?.adOrigin === true,
                       },
                     );
                   } else {
@@ -1009,7 +1105,7 @@ function interactiveReplyId(m: Json): { id: string; title: string } | null {
 // Conteúdo de fallback do menu de ação; preço sempre segue para cotação por pacote.
 const MENU_CONTENT: Record<string, string> = {
   menu_preco:
-    "🚚 Frete grátis e descontos progressivos conforme a quantidade — que podem chegar a 30% em pedidos acima de 100 kg. Escolha o pacote e o Cícero confirma o valor exato para o seu pedido.",
+    "Escolha o pacote e o Cícero confirma o valor exato conforme a quantidade e a região.",
   menu_plantio:
     "🌱 Em breve te mando o passo a passo completo de plantio (época, adubação, espaçamento). Qualquer dúvida me chama aqui! — Cícero",
   menu_nutricao:
@@ -1022,7 +1118,7 @@ const MENU_CONTENT: Record<string, string> = {
 // O bot identifica pacote/área, mas não expõe preço: o valor exato depende da quantidade
 // negociada. O Cícero confirma a cotação após o cliente solicitar atendimento.
 function cotacaoCard(pacote: string, cobre: string): string {
-  return `🌱 *Opção de ${pacote} — atende ${cobre}*\n\n🚚 *Frete grátis.*\n💸 Desconto progressivo conforme a quantidade, podendo chegar a *30% em pedidos acima de 100 kg*.\n\nO Cícero confirma o valor exato para o seu pedido.`;
+  return `🌱 *Opção de ${pacote} — atende ${cobre}*\n\nAs condições comerciais dependem da quantidade e da região. O Cícero confirma a cotação exata para você.`;
 }
 
 function tamanhoCard(id: string): string | null {
@@ -1158,7 +1254,8 @@ async function handlePrecoSequence(
       interactive: {
         type: "list",
         body: {
-          text: `📐 *Qual área você pretende plantar?*\n\n${textoCondicaoComercial()}\n\nPara áreas acima de 4 hectares, informe a área real na conversa para o Cícero calcular o volume.`,
+          text:
+            `📐 *Qual área você pretende plantar?*\n\n${textoCondicaoComercial()}\n\nPara áreas acima de 4 hectares, informe a área real na conversa para o Cícero calcular o volume.`,
         },
         action: {
           button: "Escolher pacote",
@@ -1168,24 +1265,25 @@ async function handlePrecoSequence(
               {
                 id: "tam_4kg",
                 title: "1 hectare",
-                description: "4 kg; frete grátis; valor confirmado pelo Cícero.",
+                description: "4 kg; valor confirmado pelo Cícero.",
               },
               {
                 id: "tam_10kg",
                 title: "2 hectares",
-                description: "10 kg; frete grátis; valor confirmado pelo Cícero.",
+                description: "10 kg; valor confirmado pelo Cícero.",
               },
               {
                 id: "tam_20kg",
                 title: "4 hectares",
-                description: "20 kg; frete grátis; valor confirmado pelo Cícero.",
+                description: "20 kg; valor confirmado pelo Cícero.",
               },
             ],
           }],
         },
       },
     },
-    registro: "📐 Selecione a área [1 ha → 4 kg / 2 ha → 10 kg / 4 ha → 20 kg] para pedir cotação",
+    registro:
+      "📐 Selecione a área [1 ha → 4 kg / 2 ha → 10 kg / 4 ha → 20 kg] para pedir cotação",
   });
 
   const { data: contact } = await db.from("contacts").select("id").eq(
@@ -1280,14 +1378,19 @@ async function handleSocialPrecoSequence(
       }]);
     } catch (error) {
       // A imagem é complementar; uma falha não deve impedir o envio do seletor.
-      console.warn("imagem do pacote social não enviada:", id, String(error).slice(0, 120));
+      console.warn(
+        "imagem do pacote social não enviada:",
+        id,
+        String(error).slice(0, 120),
+      );
     }
   }
 
   const pieces: { type: string; payload: Json }[] = [{
     type: "interactive",
     payload: {
-      text: `📐 Qual área você pretende plantar? 1 hectare = 4 kg, 2 hectares = 10 kg e 4 hectares = 20 kg. ${textoCondicaoComercial()} Para áreas acima de 4 hectares, informe a área na conversa para calcularmos o volume.`,
+      text:
+        `📐 Qual área você pretende plantar? 1 hectare = 4 kg, 2 hectares = 10 kg e 4 hectares = 20 kg. ${textoCondicaoComercial()} Para áreas acima de 4 hectares, informe a área na conversa para calcularmos o volume.`,
       buttons: [
         { id: "tam_4kg", title: "1 hectare" },
         { id: "tam_10kg", title: "2 hectares" },
@@ -1457,7 +1560,9 @@ async function sendWhatsAppPiece(
     status: "sent",
     sent_at: new Date().toISOString(),
   });
-  if (error) console.warn("commercial message log:", String(error).slice(0, 120));
+  if (error) {
+    console.warn("commercial message log:", String(error).slice(0, 120));
+  }
   return true;
 }
 
@@ -1593,16 +1698,35 @@ async function handleUsoSelecionado(
       { origin: "automatico", messageId: eventMessageId ?? null },
     );
   } else if (proofResult.error) {
-    console.warn("prova comercial indisponível:", String(proofResult.error).slice(0, 120));
+    console.warn(
+      "prova comercial indisponível:",
+      String(proofResult.error).slice(0, 120),
+    );
   }
 
   if (!proofSent) {
-    const useText = use === "silagem" ? "silagem" : use === "pastejo" ? "pastejo" : "essa finalidade";
-    const text = `Entendi: o senhor pretende usar para ${useText}. Vou te mostrar as opções de área e volume.`;
+    const useText = use === "silagem"
+      ? "silagem"
+      : use === "pastejo"
+      ? "pastejo"
+      : "essa finalidade";
+    const text =
+      `Entendi: o senhor pretende usar para ${useText}. Vou te mostrar as opções de área e volume.`;
     if (channel.type === "facebook" || channel.type === "instagram") {
-      await sendSocialPieces(db, channel, from, [{ type: "text", payload: { content: text } }], actionScope ? `${actionScope}:context` : undefined);
+      await sendSocialPieces(db, channel, from, [{
+        type: "text",
+        payload: { content: text },
+      }], actionScope ? `${actionScope}:context` : undefined);
     } else {
-      await sendWhatsAppPiece(db, channel, from, { type: "text", text: { body: text } }, text, "text", acct);
+      await sendWhatsAppPiece(
+        db,
+        channel,
+        from,
+        { type: "text", text: { body: text } },
+        text,
+        "text",
+        acct,
+      );
     }
   }
   if (channel.type === "facebook" || channel.type === "instagram") {
@@ -1671,7 +1795,15 @@ export async function handleSocialPrecoClick(
     ? `social-price-action:${actionEventId}`
     : undefined;
   if (id.startsWith("uso_")) {
-    await handleUsoSelecionado(db, channel, from, id, actionScope, undefined, actionEventId);
+    await handleUsoSelecionado(
+      db,
+      channel,
+      from,
+      id,
+      actionScope,
+      undefined,
+      actionEventId,
+    );
     return;
   }
   if (id.startsWith("preco_area_livre:")) {
@@ -1690,7 +1822,8 @@ export async function handleSocialPrecoClick(
     await sendSocialPieces(db, channel, from, [{
       type: "interactive",
       payload: {
-        text: "📐 Escolha a área: 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
+        text:
+          "📐 Escolha a área: 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
         buttons: [
           { id: "tam_4kg", title: "1 hectare" },
           { id: "tam_10kg", title: "2 hectares" },
@@ -1704,7 +1837,8 @@ export async function handleSocialPrecoClick(
     await sendSocialPieces(db, channel, from, [{
       type: "text",
       payload: {
-        content: "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.",
+        content:
+          "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.",
       },
     }], actionScope);
     return;
@@ -1732,18 +1866,28 @@ export async function handleSocialPrecoClick(
     const text = pedido.registrado
       ? `✅ Seu pedido de cotação de ${packageLabel} foi registrado para atendimento. O valor será confirmado conforme quantidade e região. ${textoCondicaoComercial()}`
       : "Não consegui confirmar o registro automático da cotação agora. Envie sua região nesta conversa e a equipe poderá conferir o pedido; não vou informar preço sem confirmar o pacote e o frete.";
-    await recordCommercialEvent(db, channel, (conversation?.id as string | undefined) ?? null, "cotacao_solicitada", {
-      pacote_id: pacote?.id ?? selectedPackage,
-      pacote_kg: pacote?.quilos ?? null,
-      area_hectares: pacote?.area ?? null,
-      encaminhado: pedido.registrado,
-    }, { origin: "cliente", messageId: actionEventId ?? null });
+    await recordCommercialEvent(
+      db,
+      channel,
+      (conversation?.id as string | undefined) ?? null,
+      "cotacao_solicitada",
+      {
+        pacote_id: pacote?.id ?? selectedPackage,
+        pacote_kg: pacote?.quilos ?? null,
+        area_hectares: pacote?.area ?? null,
+        encaminhado: pedido.registrado,
+      },
+      { origin: "cliente", messageId: actionEventId ?? null },
+    );
     await sendSocialPieces(db, channel, from, [{
       type: "text",
       payload: { content: text },
     }], actionScope);
     const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
-    if (pedido.registrado && assignee > 0 && conversation?.chatwoot_conversation_id) {
+    if (
+      pedido.registrado && assignee > 0 &&
+      conversation?.chatwoot_conversation_id
+    ) {
       const acct = await accountForChannel(channel.id as string);
       await assignConversation(
         conversation.chatwoot_conversation_id as number,
@@ -1946,7 +2090,8 @@ export async function handleSocialSalesIntent(
       // 09 a 13/09, nenhum tinha atendente no dia seguinte. O alerta é o que fecha o laço.
       {
         const { data: ct } = await db.from("contacts").select("id")
-          .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+          .eq("channel_id", channel.id).eq("external_contact_id", from)
+          .maybeSingle();
         const { data: cv } = ct
           ? await db.from("conversations").select("id,chatwoot_conversation_id")
             .eq("contact_id", ct.id).neq("status", "resolved")
@@ -1958,13 +2103,17 @@ export async function handleSocialSalesIntent(
               comPrazo: false,
             });
           } catch (error) {
-            console.error("handleSocialSalesIntent pausa de funil falhou:", error);
+            console.error(
+              "handleSocialSalesIntent pausa de funil falhou:",
+              error,
+            );
           }
         }
         const pedido = await registrarPedidoHumano(db, {
           conversationId: (cv?.id as string | undefined) ?? null,
           channelId: String(channel.id),
-          chatwootConversationId: (cv?.chatwoot_conversation_id as number | undefined) ?? null,
+          chatwootConversationId:
+            (cv?.chatwoot_conversation_id as number | undefined) ?? null,
           origem: "social",
           contato: from,
         });
@@ -2019,7 +2168,15 @@ export async function handlePrecoClick(
   _actionEventId?: string,
 ): Promise<void> {
   if (id.startsWith("uso_")) {
-    await handleUsoSelecionado(db, channel, from, id, undefined, acct, _actionEventId);
+    await handleUsoSelecionado(
+      db,
+      channel,
+      from,
+      id,
+      undefined,
+      acct,
+      _actionEventId,
+    );
     return;
   }
   const { data: secret } = await db.from("channel_secrets").select(
@@ -2127,12 +2284,19 @@ export async function handlePrecoClick(
     const text = pedido.registrado
       ? `✅ Seu pedido de cotação de ${packageLabel} foi registrado para atendimento. O valor será confirmado conforme quantidade e região. ${textoCondicaoComercial()}`
       : "Não consegui confirmar o registro automático da cotação agora. Envie sua região nesta conversa para a equipe conferir o pedido; não vou informar preço sem confirmar o pacote e o frete.";
-    await recordCommercialEvent(db, channel, (conv?.id as string | undefined) ?? null, "cotacao_solicitada", {
-      pacote_id: pacote?.id ?? selectedPackage,
-      pacote_kg: pacote?.quilos ?? null,
-      area_hectares: pacote?.area ?? null,
-      encaminhado: pedido.registrado,
-    }, { origin: "cliente", messageId: _actionEventId ?? null });
+    await recordCommercialEvent(
+      db,
+      channel,
+      (conv?.id as string | undefined) ?? null,
+      "cotacao_solicitada",
+      {
+        pacote_id: pacote?.id ?? selectedPackage,
+        pacote_kg: pacote?.quilos ?? null,
+        area_hectares: pacote?.area ?? null,
+        encaminhado: pedido.registrado,
+      },
+      { origin: "cliente", messageId: _actionEventId ?? null },
+    );
     await envia({ type: "text", text: { body: text } }, text, "text");
     const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
     if (pedido.registrado && assignee > 0 && conv?.chatwoot_conversation_id) {
@@ -2152,7 +2316,8 @@ export async function handlePrecoClick(
   }
 
   if (id === "preco_area_maior") {
-    const text = "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.";
+    const text =
+      "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.";
     await envia({ type: "text", text: { body: text } }, text, "text");
     return;
   }
@@ -2248,7 +2413,8 @@ export async function handlePrecoClick(
         interactive: {
           type: "button",
           body: {
-            text: "📐 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
+            text:
+              "📐 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
           },
           action: {
             buttons: [
@@ -2272,7 +2438,8 @@ export async function handlePrecoClick(
         interactive: {
           type: "button",
           body: {
-            text: "🌱 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
+            text:
+              "🌱 *Escolha a área:* 1 hectare = 4 kg, 2 hectares = 10 kg ou 4 hectares = 20 kg.",
           },
           action: {
             buttons: [
@@ -2309,7 +2476,9 @@ export async function handlePrecoClick(
         type: "interactive",
         interactive: {
           type: "button",
-          body: { text: "Quer que o Cícero confirme o valor exato deste pacote?" },
+          body: {
+            text: "Quer que o Cícero confirme o valor exato deste pacote?",
+          },
           action: {
             buttons: [
               {
@@ -2516,8 +2685,7 @@ async function handlePlantioSequence(
       to: from,
       mediaUrl: pdfMedia.url as string,
       fileName: "Instrucoes-Plantio-Mega-Sorgo.pdf",
-      caption:
-        "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa",
+      caption: "📄 *Instruções completas de plantio* — Mega Sorgo Santa Elisa",
       registro: "[PDF Instruções de Plantio]",
     }, acct);
     await pause(3000);
@@ -3221,7 +3389,9 @@ async function handleIscaSequence(
     .eq("funnel", "mega-sorgo").eq("slot", isca.slot).eq("active", true)
     .limit(1).maybeSingle();
   const link = media?.url as string | undefined;
-  if (!link) throw new Error(`isca "${isca.id}" sem PDF ativo no slot ${isca.slot}`);
+  if (!link) {
+    throw new Error(`isca "${isca.id}" sem PDF ativo no slot ${isca.slot}`);
+  }
 
   await sendFunnelDocument(db, channel, {
     to: from,
@@ -3247,6 +3417,7 @@ export async function handleHumanRequest(
     try {
       await autoPauseFunil(String(conversation.id), tipoPedido, {
         comPrazo: false,
+        adOrigin: contexto.ad_origin === true,
       });
     } catch (error) {
       console.error("handleHumanRequest pausa de funil falhou:", error);
@@ -3265,7 +3436,11 @@ export async function handleHumanRequest(
   const textoRegistrado = tipoPedido === "duvida_tecnica"
     ? "✅ Registrei sua dúvida para o Cícero confirmar com segurança. O funil ficará pausado enquanto a equipe verifica a resposta."
     : tipoPedido === "cotacao_area_livre"
-    ? `✅ Registrei sua solicitação para ${area} hectares. O Cícero confirma o volume e a cotação exata.${contexto.regiao_uf ? " Região anotada: " + String(contexto.regiao_uf) + "." : " Envie também seu município e UF para confirmar o frete."}`
+    ? `✅ Registrei sua solicitação para ${area} hectares. O Cícero confirma o volume e a cotação exata.${
+      contexto.regiao_uf
+        ? " Região anotada: " + String(contexto.regiao_uf) + "."
+        : " Envie também seu município e UF para confirmar o frete."
+    }`
     : "✅ Seu pedido foi registrado para atendimento. O Cícero vai conferir sua necessidade e, se for cotação, confirma o valor conforme quantidade e região.";
   const textoFalha = tipoPedido === "duvida_tecnica"
     ? "Recebi sua dúvida, mas não consegui confirmar o encaminhamento automático. Ela está visível nesta conversa; por segurança, não vou arriscar uma resposta técnica sem confirmação."
@@ -3293,24 +3468,38 @@ export async function handleHumanRequest(
           acct,
         );
       } catch (error) {
-        console.warn("pedido humano: atribuição falhou:", String(error).slice(0, 120));
+        console.warn(
+          "pedido humano: atribuição falhou:",
+          String(error).slice(0, 120),
+        );
       }
     }
     try {
       await createConversationMessage(
         conversation.chatwoot_conversation_id as number,
         {
-          content: `🧑‍🌾 Cliente pediu atendimento. Contexto: ${JSON.stringify(contexto).slice(0, 500)}.`,
+          content: `🧑‍🌾 Cliente pediu atendimento. Contexto: ${
+            JSON.stringify(contexto).slice(0, 500)
+          }.`,
           messageType: "outgoing",
           private: true,
         },
         acct,
       );
     } catch (error) {
-      console.warn("pedido humano: nota privada falhou:", String(error).slice(0, 120));
+      console.warn(
+        "pedido humano: nota privada falhou:",
+        String(error).slice(0, 120),
+      );
     }
     if (origem === "social") {
-      await markSocialLead(db, channel, from, ["lead-quente", "pediu-contato"], "Cliente pediu atendimento humano; confirmar necessidade, quantidade e região.");
+      await markSocialLead(
+        db,
+        channel,
+        from,
+        ["lead-quente", "pediu-contato"],
+        "Cliente pediu atendimento humano; confirmar necessidade, quantidade e região.",
+      );
     }
   }
   if (origem === "social") {
@@ -3364,7 +3553,12 @@ export async function handleMenuClick(
   const iscaMatch = matchIsca(menuId);
   if (iscaMatch?.acao === "sim") {
     const { isca } = iscaMatch;
-    const daily = await claimDailyTag(db, String(channel.id), from, isca.botaoSim);
+    const daily = await claimDailyTag(
+      db,
+      String(channel.id),
+      from,
+      isca.botaoSim,
+    );
     if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
     try {
       await handleIscaSequence(db, channel, from, isca, acct);
@@ -3472,7 +3666,8 @@ export async function handleMenuClick(
     await registrarPedidoHumano(db, {
       conversationId: (conv?.id as string | undefined) ?? null,
       channelId: String(channel.id),
-      chatwootConversationId: (conv?.chatwoot_conversation_id as number | undefined) ?? null,
+      chatwootConversationId:
+        (conv?.chatwoot_conversation_id as number | undefined) ?? null,
       origem: "whatsapp",
       contato: from,
     });
@@ -3506,7 +3701,9 @@ export async function dispatchDeferredFunnelIntent(
     "conversations",
   ).select("id,contact_id").eq("id", conversationId).maybeSingle();
   if (conversationError) throw conversationError;
-  if (!conversation?.contact_id) throw new Error("conversa da rota adiada ausente");
+  if (!conversation?.contact_id) {
+    throw new Error("conversa da rota adiada ausente");
+  }
   const { data: contact, error: contactError } = await db.from("contacts")
     .select("channel_id,external_contact_id").eq("id", conversation.contact_id)
     .maybeSingle();
@@ -3522,7 +3719,9 @@ export async function dispatchDeferredFunnelIntent(
 
   // A abertura já terminou. Agora o pedido original pode pausar a régua
   // informativa e seguir pelo fluxo específico, como numa resposta posterior.
-  await autoPauseFunil(conversationId, action, { comPrazo: action !== "menu_humano" });
+  await autoPauseFunil(conversationId, action, {
+    comPrazo: action !== "menu_humano",
+  });
   const dispatch = await handleMenuClick(
     db,
     channel as Json,
@@ -3678,12 +3877,14 @@ async function handleMessenger(db: Db, p: Json) {
         ? classificarIntencaoComercial(text)
         : null;
       const salesIntent = !actionId ? inferSocialSalesIntent(text) : null;
-      const recognizedAction = /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso|humano)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
-        .test(actionId);
+      const recognizedAction =
+        /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso|humano)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
+          .test(actionId);
       const humanHandoffWillHandle = actionId === "menu_humano" ||
         commercialIntent === "duvida_tecnica" ||
         (isAreaAcimaDosPacotes(text) && extrairAreaHectares(text) !== null);
-      let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+      let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null =
+        null;
       try {
         adEnrollment = await autoEnrollFunil(
           db,
@@ -3693,8 +3894,9 @@ async function handleMessenger(db: Db, p: Json) {
           Boolean(referral),
           {
             responseWillHandle: Boolean(
-              (recognizedAction || inferredReply || menuAction || commercialIntent || salesIntent) &&
-                !humanHandoffWillHandle
+              (recognizedAction || inferredReply || menuAction ||
+                commercialIntent || salesIntent) &&
+                !humanHandoffWillHandle,
             ),
             humanHandoffWillHandle,
             sourceMessageId: inboundEventId,
@@ -3729,11 +3931,30 @@ async function handleMessenger(db: Db, p: Json) {
         );
         if (claimed && actionId.startsWith("menu_")) {
           if (actionId === "menu_preco") {
-            await recordInboundCommercialIntent(db, channel as Json, sender, "preco", inboundEventId);
+            await recordInboundCommercialIntent(
+              db,
+              channel as Json,
+              sender,
+              "preco",
+              inboundEventId,
+            );
           } else if (actionId === "menu_uso") {
-            await recordInboundCommercialIntent(db, channel as Json, sender, "interesse_geral", inboundEventId);
+            await recordInboundCommercialIntent(
+              db,
+              channel as Json,
+              sender,
+              "interesse_geral",
+              inboundEventId,
+            );
           }
-          await handleMenuClick(db, channel as Json, sender, actionId, acct, inboundEventId);
+          await handleMenuClick(
+            db,
+            channel as Json,
+            sender,
+            actionId,
+            acct,
+            inboundEventId,
+          );
         } else if (claimed && actionId.startsWith("plantio_")) {
           await handlePlantioClick(db, channel as Json, sender, actionId, acct);
         } else if (claimed && actionId.startsWith("nutricao_")) {
@@ -3765,13 +3986,21 @@ async function handleMessenger(db: Db, p: Json) {
       } else if (!adEnrollment?.deferIntent && !actionId) {
         if (commercialIntent) {
           await recordInboundCommercialIntent(
-            db, channel as Json, sender, commercialIntent, inboundEventId,
+            db,
+            channel as Json,
+            sender,
+            commercialIntent,
+            inboundEventId,
           );
         }
         if (inferredReply) {
           const claimed = await claimDelivery(
             db,
-            socialPriceActionClaimKey(String(channel.id), inboundEventId, inferredReply),
+            socialPriceActionClaimKey(
+              String(channel.id),
+              inboundEventId,
+              inferredReply,
+            ),
             "social-price-action",
           );
           if (claimed) {
@@ -3786,19 +4015,49 @@ async function handleMessenger(db: Db, p: Json) {
         } else if (menuAction) {
           const claimed = await claimDelivery(
             db,
-            socialPriceActionClaimKey(String(channel.id), inboundEventId, menuAction),
+            socialPriceActionClaimKey(
+              String(channel.id),
+              inboundEventId,
+              menuAction,
+            ),
             "social-menu-action",
           );
           if (claimed) {
             if (menuAction === "menu_preco") {
-              await recordInboundCommercialIntent(db, channel as Json, sender, "preco", inboundEventId);
+              await recordInboundCommercialIntent(
+                db,
+                channel as Json,
+                sender,
+                "preco",
+                inboundEventId,
+              );
             } else if (menuAction === "menu_uso") {
-              await recordInboundCommercialIntent(db, channel as Json, sender, "interesse_geral", inboundEventId);
+              await recordInboundCommercialIntent(
+                db,
+                channel as Json,
+                sender,
+                "interesse_geral",
+                inboundEventId,
+              );
             }
-            await handleMenuClick(db, channel as Json, sender, menuAction, acct, inboundEventId);
+            await handleMenuClick(
+              db,
+              channel as Json,
+              sender,
+              menuAction,
+              acct,
+              inboundEventId,
+            );
           }
         } else if (commercialIntent === "preco") {
-          await handleMenuClick(db, channel as Json, sender, "menu_preco", acct, inboundEventId);
+          await handleMenuClick(
+            db,
+            channel as Json,
+            sender,
+            "menu_preco",
+            acct,
+            inboundEventId,
+          );
         } else if (commercialIntent === "uso") {
           const use = usoPorResposta(text);
           if (use) {
@@ -3811,13 +4070,27 @@ async function handleMessenger(db: Db, p: Json) {
             );
           }
         } else if (commercialIntent === "interesse_geral") {
-          await handleMenuClick(db, channel as Json, sender, "menu_uso", acct, inboundEventId);
+          await handleMenuClick(
+            db,
+            channel as Json,
+            sender,
+            "menu_uso",
+            acct,
+            inboundEventId,
+          );
         } else if (commercialIntent === "duvida_tecnica") {
-          await handleHumanRequest(db, channel as Json, sender, "social", acct, {
-            tipo_pedido: "duvida_tecnica",
-            pergunta: text.slice(0, 400),
-            message_id: inboundEventId,
-          });
+          await handleHumanRequest(
+            db,
+            channel as Json,
+            sender,
+            "social",
+            acct,
+            {
+              tipo_pedido: "duvida_tecnica",
+              pergunta: text.slice(0, 400),
+              message_id: inboundEventId,
+            },
+          );
         } else {
           const handled = await handleSocialSalesIntent(
             db,

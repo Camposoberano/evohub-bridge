@@ -1,5 +1,6 @@
 import { admin } from "./supabase.ts";
 import { chaveDaPausa, limparPausa, marcarPausa } from "./funil-pausa.ts";
+import { deveAdiarPausaDaAbertura } from "./funil-anuncio.ts";
 
 /** A request may replace a stale sequence only when no queue or sent-opening evidence exists. */
 export function canRecreateMissingOpening(input: {
@@ -96,14 +97,19 @@ export async function openingMessagesComplete(
 export async function autoPauseFunil(
   conversationId: string,
   reason = "intencao comercial",
-  opts: { comPrazo?: boolean } = {},
+  opts: { comPrazo?: boolean; adOrigin?: boolean } = {},
 ): Promise<boolean> {
   // `comPrazo: false` = pausa que NAO se retoma sozinha. Serve para quem pediu falar com uma
   // pessoa: devolver o funil em 2h por cima de quem esta esperando atendente e exatamente a
   // reclamacao que originou isto (13/09: 2 conversas receberam 19 e 15 pecas depois do pedido).
   const comPrazo = opts.comPrazo !== false;
   const db = admin();
-  if (await hasPendingOpeningMessages(db, conversationId)) {
+  if (
+    deveAdiarPausaDaAbertura(
+      await hasPendingOpeningMessages(db, conversationId),
+      opts.adOrigin === true,
+    )
+  ) {
     console.log(
       "funil auto-pause adiado: abertura principal ainda tem mensagens pendentes",
       conversationId,

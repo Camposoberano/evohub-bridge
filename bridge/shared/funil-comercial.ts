@@ -65,7 +65,7 @@ export function textoPerguntaUso(): string {
 }
 
 export function textoCondicaoComercial(): string {
-  return "🚚 O frete é grátis. O desconto é progressivo por quantidade e pode chegar a 30% em pedidos acima de 100 kg. O Cícero confirma o valor exato conforme a quantidade e a região.";
+  return "As condições comerciais dependem da quantidade e da região. O Cícero confirma a cotação exata para você.";
 }
 
 export function textoPacote(pacote: PacoteComercial): string {

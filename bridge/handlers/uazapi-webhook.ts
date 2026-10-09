@@ -14,8 +14,8 @@ import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
-  isNutricaoIntent,
   isLogisticaIntent,
+  isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
   isVideoIntent,
@@ -28,8 +28,8 @@ import {
   normalizeHybridMenuClick,
 } from "../shared/hybrid-menu.ts";
 import {
-  handleMenuClick,
   handleHumanRequest,
+  handleMenuClick,
   handleNutricaoClick,
   handlePlantioClick,
   handlePrecoClick,
@@ -251,7 +251,10 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
             "explicit-reply",
           );
-          console.log("uazapi: contato bloqueado por desinteresse", JSON.stringify(result));
+          console.log(
+            "uazapi: contato bloqueado por desinteresse",
+            JSON.stringify(result),
+          );
         } catch (e) {
           console.error("uazapi: falha ao encerrar desinteresse", e);
         }
@@ -263,7 +266,10 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       // sem isso o alerta que cai no 11910 aciona o bot de intenção, que responde pro 5895,
       // que ingere de volta: laço entre dois números da casa.
       if (msg.from && await isNumeroDaCasa(db, msg.from)) {
-        console.log("entrada de número interno: automação ignorada,", sufixoContato(msg.from));
+        console.log(
+          "entrada de número interno: automação ignorada,",
+          sufixoContato(msg.from),
+        );
         continue;
       }
 
@@ -274,7 +280,10 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         msg.from &&
         await isBotMutedForContact(db, String(channel.id), msg.from)
       ) {
-        console.log("bot-mute: entrada uazapi ignorada pelo bot,", sufixoContato(msg.from));
+        console.log(
+          "bot-mute: entrada uazapi ignorada pelo bot,",
+          sufixoContato(msg.from),
+        );
         continue;
       }
 
@@ -405,6 +414,15 @@ async function handleUazapiClick(
     await sendCatalogJourneyReminder(db, channel, from, acct);
     console.log("uazapi-webhook: clique Mega Sorgo bloqueado no catálogo", id);
     return;
+  }
+
+  try {
+    await autoEnrollFunil(db, channel, from, id, false, {
+      responseWillHandle: id !== "menu_humano",
+      humanHandoffWillHandle: id === "menu_humano",
+    });
+  } catch (error) {
+    console.error("uazapi-webhook click auto-enroll erro:", error);
   }
 
   if (id.startsWith("menu_")) {
@@ -544,12 +562,18 @@ async function handleUazapiIntent(
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
     if (conversation?.id) {
-      await autoPauseFunil(conversation.id as string, intent.name);
+      await autoPauseFunil(conversation.id as string, intent.name, {
+        adOrigin: enrollment?.adOrigin === true,
+      });
     }
   }
 
   await handleMenuClick(db, channel, from, intent.menu, acct);
-  console.log("uazapi-webhook: intent disparado", intent.name, sufixoContato(from));
+  console.log(
+    "uazapi-webhook: intent disparado",
+    intent.name,
+    sufixoContato(from),
+  );
 }
 
 // Cache curto: a lista de números próprios muda quando alguém cadastra canal, não a cada

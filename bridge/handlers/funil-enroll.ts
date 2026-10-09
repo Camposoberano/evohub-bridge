@@ -1,7 +1,6 @@
 // funil-enroll — coloca um lead no funil de apresentação Mega Sorgo: gera a fila
-// (scheduled_messages) com os 5 acessos, sorteando mídia da "faixa" (funnel_media) pra variar.
-// Textos e botões são fixos (roteiro v2 — docs/funil-mega-sorgo-playbook.md). Imagem/áudios/
-// vídeo vêm da faixa (rotação por slot). Slot sem mídia cadastrada -> peça é pulada (não trava).
+// (scheduled_messages) com os 5 momentos. As peças legadas usam textos/botões e mídia da faixa;
+// a régua atual de anúncio é somente texto.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
@@ -39,7 +38,9 @@ import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 import {
   canalAlvoFunil,
+  deveIgnorarInscricaoHistorica,
   suprimirAberturaGenerica,
+  usaNovoFunilNoCanal,
 } from "../shared/funil-anuncio.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
 
@@ -50,16 +51,15 @@ const CANAL_ANUNCIO_ALVO = "5895";
 // da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
 const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
-// modo TESTE (body.fast=true): fases fluem em sequência (~70s entre fases, sem horário comercial),
-// pra revisar o funil todo em ~30min sem clicar. Produção usa a jornada comercial de até 48h.
+// modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
+// Produção usa a jornada comercial de até 48h.
 const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
-// Teto do acesso: a próxima fase começa em ini+FIM_ACESSO, então peça agendada além disso
-// invade a fase seguinte. Exportado pra tests/funil-offsets.test.ts vigiar.
-export const FIM_ACESSO = 560; // último disparo do acesso (lista de fechamento) = +9min20
-// (a fase 5 ganhou a oferta de isca no offset 490, empurrando o fechamento de 490 p/ 560)
+// Cada momento novo tem uma única peça no instante de início; não há sequência interna.
+// O intervalo entre momentos, portanto, corresponde exatamente a GAPS.
+export const FIM_ACESSO = 0;
 const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 type Botao = { id: string; title: string };
@@ -302,7 +302,70 @@ function fase5(): Peca[] {
   ];
 }
 
-function faseComercialV2(): Peca[] {
+function faseAnuncio1(): Peca[] {
+  return [{
+    offset: 0,
+    kind: "text",
+    text:
+      "Olá! Aqui é o Cícero, da Campo Soberano. Vi que você chegou pelo anúncio do Mega Sorgo Santa Elisa. Como posso te ajudar?",
+  }];
+}
+
+function faseAnuncio2(): Peca[] {
+  return [{
+    offset: 0,
+    kind: "text",
+    text:
+      "Se ainda não me contou, você pretende usar o sorgo para silagem, pastejo ou outra finalidade? Se já me contou, obrigado — sigo acompanhando por aqui.",
+  }];
+}
+
+function faseAnuncio3(): Peca[] {
+  return [{
+    offset: 0,
+    kind: "text",
+    text:
+      "Se ainda não me contou, em qual cidade fica a área? Assim o Cícero pode considerar sua região na orientação e na cotação.",
+  }];
+}
+
+function faseAnuncio4(): Peca[] {
+  return [{
+    offset: 0,
+    kind: "text",
+    text:
+      "Para referência: 1 hectare corresponde a 4 kg; 2 hectares, a 10 kg; e 4 hectares, a 20 kg. O Cícero confirma a opção adequada para sua área.",
+  }];
+}
+
+function faseAnuncio5(): Peca[] {
+  return [{
+    offset: 0,
+    kind: "text",
+    text:
+      "Quer pedir uma cotação ou tirar outra dúvida? Responda por aqui que a conversa continua com a equipe.",
+  }];
+}
+
+// FASES representa a jornada usada em novas inscrições. A antiga sequência longa permanece
+// exportada apenas para leitura/teste de filas históricas; nenhum reenvio é feito aqui.
+export const FASES_LEGADAS: (() => Peca[])[] = [
+  fase1,
+  fase2,
+  fase3,
+  fase4,
+  fase5,
+];
+export const FASES: (() => Peca[])[] = [
+  faseAnuncio1,
+  faseAnuncio2,
+  faseAnuncio3,
+  faseAnuncio4,
+  faseAnuncio5,
+];
+
+// Inícios manuais fora de um lead de anúncio no 5895 preservam a abertura anterior.
+function faseAberturaForaDoAnuncio(): Peca[] {
   return [
     {
       offset: 0,
@@ -328,28 +391,20 @@ function faseComercialV2(): Peca[] {
     },
   ];
 }
+const FASES_FORA_DO_ANUNCIO: (() => Peca[])[] = [faseAberturaForaDoAnuncio];
+const FIM_ABERTURA_FORA_DO_ANUNCIO = 560;
 
-// FASES representa a jornada usada em novas inscrições. A antiga sequência longa permanece
-// exportada apenas para leitura/teste de filas históricas; nenhum reenvio é feito aqui.
-export const FASES_LEGADAS: (() => Peca[])[] = [
-  fase1,
-  fase2,
-  fase3,
-  fase4,
-  fase5,
-];
-export const FASES: (() => Peca[])[] = [faseComercialV2];
-
-// calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
-// fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
+// Calcula o início de cada momento encadeando GAPS a partir da peça anterior e aplica a janela
+// comercial. Para a régua atual, cada momento tem duração zero, pois contém só um texto.
 export function iniciosDosAcessos(
   agora: number,
   gaps: number[],
   skipClamp: boolean,
   immediateFirst = false,
+  phaseDurationSec = FIM_ACESSO,
 ): number[] {
   const clamp = (ms: number) =>
-    skipClamp ? ms : clampBusinessTime(ms, FIM_ACESSO);
+    skipClamp ? ms : clampBusinessTime(ms, phaseDurationSec);
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
@@ -359,9 +414,9 @@ export function iniciosDosAcessos(
       ? immediateFirst ? agora : clamp(agora)
       : skipClamp
       ? fimAnterior + gaps[i] * 1000
-      : addBusinessSeconds(fimAnterior, gaps[i], FIM_ACESSO);
+      : addBusinessSeconds(fimAnterior, gaps[i], phaseDurationSec);
     inicios.push(ini);
-    fimAnterior = ini + FIM_ACESSO * 1000;
+    fimAnterior = ini + phaseDurationSec * 1000;
   }
   return inicios;
 }
@@ -406,7 +461,7 @@ export async function handle(req: Request): Promise<Response> {
   const { data: conv, error: conversationError } = await db.from(
     "conversations",
   ).select(
-    "id, chatwoot_conversation_id, contacts(attributes)",
+    "id, channel_id, origem, chatwoot_conversation_id, contacts(attributes)",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
   if (conversationError) {
@@ -415,6 +470,27 @@ export async function handle(req: Request): Promise<Response> {
     }, 500);
   }
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
+
+  const { data: funnelChannel, error: channelError } = await db.from("channels")
+    .select("name,external_id,phone_number")
+    .eq("id", conv.channel_id).maybeSingle();
+  if (channelError) {
+    return json(
+      { error: `falha ao consultar canal: ${channelError.message}` },
+      500,
+    );
+  }
+  if (!funnelChannel) {
+    return json({ error: "canal da conversa não encontrado" }, 500);
+  }
+  const usaReguaDoCanal = usaNovoFunilNoCanal(
+    funnelChannel,
+    CANAL_ANUNCIO_ALVO,
+  );
+  const fasesDaInscricao = usaReguaDoCanal ? FASES : FASES_FORA_DO_ANUNCIO;
+  const duracaoDaFase = usaReguaDoCanal
+    ? FIM_ACESSO
+    : FIM_ABERTURA_FORA_DO_ANUNCIO;
 
   // Contato marcado com a etiqueta "nao-compra" (bridge/handlers/funil-control.ts,
   // ação marcar-nao-compra) nunca mais entra no funil -- nem auto-enroll, nem clique manual
@@ -479,7 +555,10 @@ export async function handle(req: Request): Promise<Response> {
     );
     if (deleteError) return json({ error: deleteError.message }, 500);
   } else if (repairMissingOpening) {
-    const openingEvidence = await hasFunnelDeliveryEvidence(db, String(conv.id));
+    const openingEvidence = await hasFunnelDeliveryEvidence(
+      db,
+      String(conv.id),
+    );
     if (openingEvidence) {
       const openingComplete = await openingMessagesComplete(
         db,
@@ -513,19 +592,18 @@ export async function handle(req: Request): Promise<Response> {
   const fast = body.fast === true || body.fast === "true";
   const turbo = body.turbo === true || body.turbo === "true";
   const agora = Date.now();
-  // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.
-  // Assim o teste cabe em ~45min sem misturar as aberturas, mídias e botões das fases.
-  const turboGaps = [0, 0, 0, 0, 0];
+  // TURBO (teste): começa agora e mantém 70s entre momentos, sem horário comercial.
+  const turboGaps = [0, 70, 70, 70, 70];
   const inicios = turbo
-    ? iniciosDosAcessos(agora, turboGaps, true)
+    ? iniciosDosAcessos(agora, turboGaps, true, false, duracaoDaFase)
     : fast
-    ? iniciosDosAcessos(agora, GAPS_FAST, true)
-    : iniciosDosAcessos(agora, GAPS, false, manual);
+    ? iniciosDosAcessos(agora, GAPS_FAST, true, false, duracaoDaFase)
+    : iniciosDosAcessos(agora, GAPS, false, manual, duracaoDaFase);
   const rows: Json[] = [];
 
-  for (let i = 0; i < FASES.length; i++) {
+  for (let i = 0; i < fasesDaInscricao.length; i++) {
     const dia = i + 1;
-    for (const p of FASES[i]()) {
+    for (const p of fasesDaInscricao[i]()) {
       if (skipOpening && "opening" in p && p.opening) continue;
       const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
       if (p.kind === "text") {
@@ -946,6 +1024,26 @@ export async function autoEnrollFunil(
   }
 
   const adFunnelOrigin = isAdFunnelOriginSignal(originSignal);
+  if (adFunnelOrigin && conversation?.id) {
+    const { data: existingSequence, error: sequenceLookupError } = await db
+      .from("sales_sequences").select("id")
+      .eq("conversation_id", conversation.id).eq("funnel", FUNNEL)
+      .maybeSingle();
+    if (sequenceLookupError) throw sequenceLookupError;
+    if (!existingSequence) {
+      const { count, error: inboundCountError } = await db.from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversation.id).eq("direction", "in");
+      if (inboundCountError) throw inboundCountError;
+      if (deveIgnorarInscricaoHistorica(false, count ?? 0)) {
+        console.log(
+          "autoEnrollFunil: inscrição histórica ignorada",
+          String(conversation.id),
+        );
+        return { adOrigin: true, humanHandoff: false, deferIntent: false };
+      }
+    }
+  }
   const humanHandoffWillHandle = options.humanHandoffWillHandle === true;
   const unsupportedQuestion = !options.responseWillHandle &&
     !humanHandoffWillHandle &&
@@ -1041,6 +1139,7 @@ export async function autoEnrollFunil(
     try {
       await autoPauseFunil(String(conversation.id), openingReason, {
         comPrazo: openingReason !== "human_handoff",
+        adOrigin: true,
       });
     } catch (error) {
       console.error("autoEnrollFunil pausa de sequência falhou:", error);

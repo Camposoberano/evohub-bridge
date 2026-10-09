@@ -57,6 +57,14 @@ export function canalAlvoFunil(
   return telefone.endsWith(alvoNumerico);
 }
 
+/** The target channel never falls back to the obsolete two-message opening. */
+export function usaNovoFunilNoCanal(
+  channel: CanalFunil,
+  target = "5895",
+): boolean {
+  return canalAlvoFunil(channel, target);
+}
+
 /**
  * Decide a inscrição sem deixar uma intenção textual apagar evidência autoritativa de anúncio.
  * A pergunta comercial só serve como fallback social quando não foi classificada como intenção.
@@ -77,6 +85,22 @@ export function motivoEntradaAnuncio(
 /** A resposta/encaminhamento imediato já abre a conversa; não enviar fase genérica por cima. */
 export function suprimirAberturaGenerica(hasDirectIntent: boolean): boolean {
   return hasDirectIntent;
+}
+
+/** Ad leads keep the scheduled moments when a direct reply arrives during the first moment. */
+export function deveAdiarPausaDaAbertura(
+  hasPendingOpeningMessages: boolean,
+  adOrigin: boolean,
+): boolean {
+  return hasPendingOpeningMessages && !adOrigin;
+}
+
+/** Historical conversations without a sequence are never enrolled retroactively. */
+export function deveIgnorarInscricaoHistorica(
+  hasSequence: boolean,
+  inboundMessageCount: number,
+): boolean {
+  return !hasSequence && inboundMessageCount > 1;
 }
 
 /** Detecta apenas a falha parcial: sequência ativa criada, sem fila nem evento de sucesso. */

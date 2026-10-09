@@ -1,15 +1,23 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canalAlvoFunil,
+  deveAdiarPausaDaAbertura,
+  deveIgnorarInscricaoHistorica,
   inscricaoPrecisaDeRecuperacao,
   motivoEntradaAnuncio,
   suprimirAberturaGenerica,
+  usaNovoFunilNoCanal,
 } from "../shared/funil-anuncio.ts";
 
 Deno.test("identifica 5895 por nome, ID ou final do telefone", () => {
   assertEquals(canalAlvoFunil({ name: "Campo Soberano 5895" }), true);
   assertEquals(canalAlvoFunil({ external_id: "5895" }), true);
   assertEquals(canalAlvoFunil({ phone_number: "+55 19 99971-5895" }), true);
+});
+
+Deno.test("canal 5895 nunca volta à abertura antiga de duas mensagens", () => {
+  assertEquals(usaNovoFunilNoCanal({ name: "Campo Soberano 5895" }), true);
+  assertEquals(usaNovoFunilNoCanal({ name: "Campo Soberano 6836" }), false);
 });
 
 Deno.test("não inclui outro canal nem corresponde pelo WABA", () => {
@@ -85,6 +93,18 @@ Deno.test("abertura social não engole intenção já reconhecida", () => {
 Deno.test("intenção direta substitui a abertura genérica", () => {
   assertEquals(suprimirAberturaGenerica(true), true);
   assertEquals(suprimirAberturaGenerica(false), false);
+});
+
+Deno.test("resposta direta pausa o lead de anúncio sem travar na primeira etapa", () => {
+  assertEquals(deveAdiarPausaDaAbertura(true, true), false);
+  assertEquals(deveAdiarPausaDaAbertura(true, false), true);
+  assertEquals(deveAdiarPausaDaAbertura(false, true), false);
+});
+
+Deno.test("não reinscreve conversa histórica sem sequência", () => {
+  assertEquals(deveIgnorarInscricaoHistorica(false, 2), true);
+  assertEquals(deveIgnorarInscricaoHistorica(false, 1), false);
+  assertEquals(deveIgnorarInscricaoHistorica(true, 5), false);
 });
 
 Deno.test("recupera só sequência ativa sem fila e sem evento de sucesso", () => {
