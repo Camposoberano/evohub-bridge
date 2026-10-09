@@ -1,30 +1,29 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { FASES } from "../handlers/funil-enroll.ts";
+import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { FASES, FIM_ACESSO } from "../handlers/funil-enroll.ts";
 
-Deno.test("funil ativo tem cinco momentos com uma mensagem de texto cada", () => {
-  assertEquals(FASES.length, 5);
-  const momentos = FASES.map((fase) => fase());
-  assertEquals(momentos.map((fase) => fase.length), [1, 1, 1, 1, 1]);
-  assertEquals(momentos.flatMap((fase) => fase.map((peca) => peca.kind)), [
-    "text",
-    "text",
-    "text",
-    "text",
-    "text",
-  ]);
-  assertEquals(
-    momentos.flatMap((fase) => fase).filter((peca) =>
-      "opening" in peca && peca.opening
-    ).length,
-    0,
-  );
-  const copy = momentos.flatMap((fase) => fase).map((peca) =>
-    peca.kind === "text" ? peca.text : ""
-  ).join("\n");
-  assertEquals(/R\$|\b\d+(?:[.,]\d+)?\s*%/i.test(copy), false);
-  assertEquals(
-    /30%|desconto|frete grátis|produtividade|resistente à seca/i.test(copy),
-    false,
-  );
-  assertEquals(copy.includes("1 hectare corresponde a 4 kg"), true);
+Deno.test("funil 5895 recupera as 31 etapas multimídia de 30/09", () => {
+  const fases = FASES.map((fase) => fase());
+  assertEquals(fases.map((fase) => fase.length), [7, 5, 5, 6, 8]);
+  assertEquals(FIM_ACESSO, 560);
+  assertEquals(fases.flat().length, 31);
+  assertEquals(fases.flat().filter((p) => p.kind === "media" && p.mediaType === "audio").length, 10);
+  assertEquals(fases.flat().filter((p) => p.kind === "media" && p.mediaType === "video").length, 4);
+  assertEquals(fases[0].map((p) => p.kind), ["text", "media", "interactive", "media", "media", "media", "list"]);
+  assertEquals(fases[4].map((p) => p.kind), ["interactive", "media", "media", "text_sequence", "media", "media", "interactive", "list"]);
+});
+
+Deno.test("texto, perguntas e botões da versão de 30/09", () => {
+  const fases = FASES.map((fase) => fase());
+  const phase2 = fases[1][0];
+  const phase4 = fases[3][0];
+  assertEquals(phase2.kind, "interactive");
+  assertEquals(phase4.kind, "interactive");
+  if (phase2.kind !== "interactive" || phase4.kind !== "interactive") return;
+  assertStringIncludes(phase2.text, "140 toneladas de silagem por hectare ao ano");
+  assertStringIncludes(phase4.text, "Resistente às pragas!");
+  assertEquals(phase2.buttons.map((b) => b.id), ["f2_leite", "f2_corte", "f2_ambos"]);
+  const final = fases[4][7];
+  assertEquals(final.kind, "list");
+  if (final.kind !== "list") return;
+  assertEquals(final.sections[0].rows[0].id, "f5_local");
 });

@@ -2,6 +2,8 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   AD_5895_FUNNEL,
   AD_5895_FUNNEL_LABEL,
+  RESTORED_5895_FUNNEL,
+  RESTORED_5895_FUNNEL_LABEL,
   funnelLabel,
   isMainFunnel,
   LEGACY_MAIN_FUNNEL,
@@ -9,14 +11,14 @@ import {
   mainFunnelForChannel,
 } from "../shared/funnel-identity.ts";
 
-Deno.test("o canal 5895 usa um identificador próprio para os cinco momentos", () => {
+Deno.test("o canal 5895 usa um identificador próprio para a versão de 30/09", () => {
   assertEquals(
     mainFunnelForChannel({ name: "WA Oficial 5895" }),
-    AD_5895_FUNNEL,
+    RESTORED_5895_FUNNEL,
   );
   assertEquals(
     mainFunnelForChannel({ phone_number: "+55 19 99971-5895" }),
-    AD_5895_FUNNEL,
+    RESTORED_5895_FUNNEL,
   );
   assertEquals(
     mainFunnelForChannel({ name: "Outro WhatsApp" }),
@@ -28,7 +30,9 @@ Deno.test("o canal 5895 usa um identificador próprio para os cinco momentos", (
 Deno.test("os identificadores antigo e novo aparecem com rótulos distintos", () => {
   assertEquals(funnelLabel(LEGACY_MAIN_FUNNEL), LEGACY_MAIN_FUNNEL_LABEL);
   assertEquals(funnelLabel(AD_5895_FUNNEL), AD_5895_FUNNEL_LABEL);
+  assertEquals(funnelLabel(RESTORED_5895_FUNNEL), RESTORED_5895_FUNNEL_LABEL);
   assertEquals(isMainFunnel(LEGACY_MAIN_FUNNEL), true);
   assertEquals(isMainFunnel(AD_5895_FUNNEL), true);
+  assertEquals(isMainFunnel(RESTORED_5895_FUNNEL), true);
   assertEquals(isMainFunnel("mega-sorgo-followup"), false);
 });

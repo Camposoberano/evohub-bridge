@@ -19,7 +19,7 @@ Deno.test("peças de uma fase ficam >=70s uma da outra", () => {
   });
 });
 
-// Cada momento novo contém uma única peça no instante inicial.
+// O último item de cada fase precisa caber antes do início da próxima.
 Deno.test("nenhuma peça passa do teto do acesso", () => {
   FASES.forEach((fase, i) => {
     const ultimo = Math.max(...fase().map((p) => p.offset));
@@ -29,15 +29,9 @@ Deno.test("nenhuma peça passa do teto do acesso", () => {
   });
 });
 
-// A régua de anúncios tem cinco momentos individuais, sem sequência longa por momento.
-Deno.test("cinco momentos são enviados individualmente", () => {
-  assertEquals(FASES.length, 5);
-  for (const fase of FASES) {
-    const pecas = fase();
-    assertEquals(pecas.length, 1);
-    assertEquals(pecas[0].kind, "text");
-    assertEquals(pecas[0].offset, 0);
-  }
+// A fase 5 não ganhou um vídeo novo: o catálogo de 30/09 não possuía esse slot.
+Deno.test("fase 5 não depende de vídeo ausente", () => {
+  assertEquals(FASES[4]().some((p) => p.kind === "media" && p.mediaType === "video"), false);
 });
 
 // Artes do catálogo vivem em day=0, que não é fase nenhuma. Sem mediaDay o pick() procura
