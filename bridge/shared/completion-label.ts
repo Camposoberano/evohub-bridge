@@ -12,16 +12,29 @@ function rules(): Record<string, Rule> {
   const raw = optionalEnv("FUNNEL_COMPLETION_LABELS_JSON");
   const parsed = raw ? JSON.parse(raw) as Record<string, Json> : {};
   if (!Object.keys(parsed).length) {
-    return { "mega-sorgo": { label: "SUL", targets: ["whatsapp", "chatwoot"] } };
+    return {
+      "mega-sorgo": { label: "SUL", targets: ["whatsapp", "chatwoot"] },
+      "mega-sorgo-5895-v2": {
+        label: "SUL",
+        targets: ["whatsapp", "chatwoot"],
+      },
+    };
   }
   const out: Record<string, Rule> = {};
   for (const [funnel, value] of Object.entries(parsed)) {
     const label = String(value.label ?? "").trim();
     const targets = (Array.isArray(value.targets) ? value.targets : [])
       .map((x) => String(x).toLowerCase())
-      .flatMap((x): Target[] => x === "both" ? ["whatsapp", "chatwoot"] :
-        x === "whatsapp" || x === "chatwoot" ? [x] : []);
-    if (label && targets.length) out[funnel] = { label, targets: [...new Set(targets)] };
+      .flatMap((x): Target[] =>
+        x === "both"
+          ? ["whatsapp", "chatwoot"]
+          : x === "whatsapp" || x === "chatwoot"
+          ? [x]
+          : []
+      );
+    if (label && targets.length) {
+      out[funnel] = { label, targets: [...new Set(targets)] };
+    }
   }
   return out;
 }
@@ -35,12 +48,17 @@ export async function applyCompletionLabel(
   const errors: string[] = [];
   const applied: string[] = [];
   const { data: conversation } = await db.from("conversations")
-    .select("id,channel_id,chatwoot_conversation_id,labels,contacts(external_contact_id),channels(name,type)")
+    .select(
+      "id,channel_id,chatwoot_conversation_id,labels,contacts(external_contact_id),channels(name,type)",
+    )
     .eq("id", String(sequence.conversation_id)).maybeSingle();
   if (!conversation) return { applied: [], errors: ["conversation not found"] };
 
   for (const target of rule.targets) {
-    if (target === "whatsapp" && String(conversation.channels?.type ?? "") !== "whatsapp") {
+    if (
+      target === "whatsapp" &&
+      String(conversation.channels?.type ?? "") !== "whatsapp"
+    ) {
       continue;
     }
     const claim = `completion-label-${sequence.id}-${rule.label}-${target}`;
@@ -50,18 +68,28 @@ export async function applyCompletionLabel(
         const cwId = Number(conversation.chatwoot_conversation_id ?? 0);
         if (!cwId) throw new Error("conversation sem chatwoot id");
         const current = await getConversationLabels(cwId);
-        if (!current.includes(rule.label)) await setConversationLabels(cwId, [...current, rule.label]);
+        if (!current.includes(rule.label)) {
+          await setConversationLabels(cwId, [...current, rule.label]);
+        }
       } else {
         const instances = await listInstances();
-        const inst = instances.find((x) => x.name === conversation.channels?.name);
+        const inst = instances.find((x) =>
+          x.name === conversation.channels?.name
+        );
         if (!inst) throw new Error("instância WhatsApp não encontrada");
         const labelRes = await instGet("/labels", inst.token);
         if (!labelRes.ok) throw new Error(`GET /labels ${labelRes.status}`);
         const body = labelRes.data as Json | unknown[];
-        const list = (Array.isArray(body) ? body : (body?.labels ?? [])) as Json[];
-        const label = list.find((x) => String(x.name ?? x.title ?? "").trim() === rule.label);
-        if (!label) throw new Error(`etiqueta WhatsApp não encontrada: ${rule.label}`);
-        const number = String(conversation.contacts?.external_contact_id ?? "").replace(/\D/g, "");
+        const list =
+          (Array.isArray(body) ? body : (body?.labels ?? [])) as Json[];
+        const label = list.find((x) =>
+          String(x.name ?? x.title ?? "").trim() === rule.label
+        );
+        if (!label) {
+          throw new Error(`etiqueta WhatsApp não encontrada: ${rule.label}`);
+        }
+        const number = String(conversation.contacts?.external_contact_id ?? "")
+          .replace(/\D/g, "");
         if (!number) throw new Error("contato sem número");
         const result = await instPost("/chat/labels", inst.token, {
           number,
@@ -81,7 +109,12 @@ export async function applyCompletionLabel(
       source: "funil",
       event_type: "completion_label_applied",
       channel_id: conversation.channel_id,
-      payload: { sequence_id: sequence.id, funnel: sequence.funnel, label: rule.label, targets: applied },
+      payload: {
+        sequence_id: sequence.id,
+        funnel: sequence.funnel,
+        label: rule.label,
+        targets: applied,
+      },
     });
   }
   return { applied, errors };

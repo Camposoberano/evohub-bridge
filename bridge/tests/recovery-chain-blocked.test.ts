@@ -49,6 +49,7 @@ function database(inbound: number | null, variation = 1, readError = false) {
             data = [{
               conversation_id: "c1",
               chatwoot_conversation_id: 787,
+              funnel: "mega-sorgo",
               last_sent_at: new Date(now - 5 * day).toISOString(),
               status: "completed",
             }];
@@ -85,6 +86,7 @@ function recoveryDatabase(conversationIds: string[]) {
   const sequences = conversationIds.map((id, index) => ({
     conversation_id: id,
     chatwoot_conversation_id: 1342 + index,
+    funnel: "mega-sorgo",
     last_sent_at: new Date(now - 5 * day).toISOString(),
     status: "completed",
   }));

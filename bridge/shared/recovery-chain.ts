@@ -11,6 +11,11 @@ import type { DbClient } from "./supabase.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
 import { consultaEmLotes } from "./lotes.ts";
+import {
+  AD_5895_FUNNEL,
+  LEGACY_MAIN_FUNNEL,
+  mainFunnelForChannel,
+} from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -224,18 +229,66 @@ export async function pumpRecoveryChain(
   // sem isso o lead some dos dois sistemas. Sem filtro de data no SQL porque last_sent_at
   // vem nulo em parte das pausadas (35 de 76 em 04/08) — o corte é feito abaixo, depois
   // de resolver a data real pela fila.
-  const { data: sequences, error } = await db.from("sales_sequences")
-    .select("conversation_id,chatwoot_conversation_id,last_sent_at,status")
-    .eq("funnel", "mega-sorgo")
+  const { data: candidateSequences, error } = await db.from("sales_sequences")
+    .select(
+      "conversation_id,chatwoot_conversation_id,last_sent_at,status,funnel",
+    )
+    .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
     .in("status", ["completed", "paused"])
     .limit(500);
   if (error) throw error;
-  if (!sequences?.length) return result;
+  if (!candidateSequences?.length) return result;
 
-  const ids = (sequences as Json[]).map((s) => String(s.conversation_id));
+  const candidateIds = [
+    ...new Set(
+      (candidateSequences as Json[]).map((s) => String(s.conversation_id))
+        .filter(Boolean),
+    ),
+  ];
+  const identityConversations = await consultaEmLotes<Json>(
+    candidateIds,
+    (lote) => db.from("conversations").select("id,channel_id").in("id", lote),
+  );
+  const channelIds = [
+    ...new Set(
+      identityConversations.map((c) => String(c.channel_id ?? "")).filter(
+        Boolean,
+      ),
+    ),
+  ];
+  const channelRows = await consultaEmLotes<Json>(
+    channelIds,
+    (lote) =>
+      db.from("channels").select("id,name,external_id,phone_number")
+        .in("id", lote),
+  );
+  const channelById = new Map(channelRows.map((channel) => [
+    String(channel.id),
+    channel,
+  ]));
+  const conversationById = new Map(identityConversations.map((c) => [
+    String(c.id),
+    c,
+  ]));
+  const funnelByConversation = new Map<string, string>();
+  for (const conversation of identityConversations) {
+    funnelByConversation.set(
+      String(conversation.id),
+      mainFunnelForChannel(
+        channelById.get(String(conversation.channel_id ?? "")),
+      ),
+    );
+  }
+  const sequences = (candidateSequences as Json[]).filter((sequence) =>
+    sequence.funnel ===
+      funnelByConversation.get(String(sequence.conversation_id))
+  );
+  if (!sequences.length) return result;
+
+  const ids = sequences.map((s) => String(s.conversation_id));
 
   // Fim real do funil pra quem não tem last_sent_at gravado: a última peça que saiu.
-  const semData = (sequences as Json[])
+  const semData = sequences
     .filter((s) => !s.last_sent_at)
     .map((s) => String(s.conversation_id));
   const fimPorFila = new Map<string, number>();
@@ -246,14 +299,15 @@ export async function pumpRecoveryChain(
       semData,
       (lote) =>
         db.from("scheduled_messages")
-          .select("conversation_id,sent_at")
-          .eq("funnel", "mega-sorgo")
+          .select("conversation_id,funnel,sent_at")
+          .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
           .eq("status", "sent")
           .in("conversation_id", lote)
           .order("sent_at", { ascending: false }),
     );
     for (const row of enviadas) {
       const id = String(row.conversation_id);
+      if (row.funnel !== funnelByConversation.get(id)) continue;
       const at = Date.parse(String(row.sent_at ?? ""));
       // ordenado do mais novo pro mais velho: o primeiro de cada conversa é o último envio
       if (Number.isFinite(at) && !fimPorFila.has(id)) fimPorFila.set(id, at);

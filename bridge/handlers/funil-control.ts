@@ -33,6 +33,10 @@ import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
+import {
+  funnelLabel,
+  mainFunnelForChannel,
+} from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 
 /**
@@ -118,15 +122,24 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   const acct = await accountForChannel(conv.channel_id as string);
+  const { data: controlChannel, error: controlChannelError } = await db
+    .from("channels").select("name,external_id,phone_number")
+    .eq("id", conv.channel_id).maybeSingle();
+  if (controlChannelError) {
+    return json({ error: "canal da conversa indisponível" }, 500);
+  }
+  const funnelId = mainFunnelForChannel(controlChannel);
 
   if (action === "pause") {
     const { count: paused } = await db.from("scheduled_messages").update({
       status: "paused",
     })
-      .eq("conversation_id", conv.id).eq("status", "pending")
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "pending")
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "paused" })
-      .eq("conversation_id", conv.id).eq("status", "running");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "running");
     await db.from("events").insert({
       source: "funil",
       event_type: "manual_paused",
@@ -169,7 +182,11 @@ export async function handle(req: Request): Promise<Response> {
         String(e).slice(0, 150),
       );
     }
-    const retomadas = await resumeSequenceRebased(db, String(conv.id));
+    const retomadas = await resumeSequenceRebased(
+      db,
+      String(conv.id),
+      funnelId,
+    );
     if (retomadas > 0) {
       await db.from("events").insert({
         source: "funil",
@@ -196,10 +213,12 @@ export async function handle(req: Request): Promise<Response> {
     const { count: cancelled } = await db.from("scheduled_messages").update({
       status: "cancelled",
     })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["running", "paused"]);
     await nota(
       cwConvId,
       `⏹️ *Funil cancelado* — ${cancelled ?? 0} mensagens removidas da fila.`,
@@ -215,10 +234,12 @@ export async function handle(req: Request): Promise<Response> {
     const { count: cancelled } = await db.from("scheduled_messages").update({
       status: "cancelled",
     })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["running", "paused"]);
     await db.from("conversations").update({
       outcome: "won",
       outcome_source: "label",
@@ -238,10 +259,12 @@ export async function handle(req: Request): Promise<Response> {
     const { count: cancelled } = await db.from("scheduled_messages").update({
       status: "cancelled",
     })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["running", "paused"]);
     await db.from("conversations").update({
       outcome: "lost",
       outcome_source: "label",
@@ -270,7 +293,11 @@ export async function handle(req: Request): Promise<Response> {
     // um funil parado por dias despejaria o resto do roteiro no cliente em minutos.
     // resumeSequenceRebased preserva os intervalos e reancora em agora+60s; é a mesma
     // função que o auto-resume usa, pra não voltarem a divergir.
-    const resumed = await resumeSequenceRebased(db, String(conv.id));
+    const resumed = await resumeSequenceRebased(
+      db,
+      String(conv.id),
+      funnelId,
+    );
     await db.from("events").insert({
       source: "funil",
       event_type: "manual_resumed",
@@ -293,30 +320,35 @@ export async function handle(req: Request): Promise<Response> {
   if (action === "status") {
     const { data: seq, error: seqError } = await db.from("sales_sequences")
       .select("funnel, status")
-      .eq("conversation_id", conv.id).limit(1).maybeSingle();
+      .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
     const { count: pending, error: pendingError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "pending");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "pending");
     const { count: paused, error: pausedError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "paused");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "paused");
     const { count: sent, error: sentError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "sent");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "sent");
     const { data: next, error: nextError } = await db.from("scheduled_messages")
       .select("id, type, send_at, status").eq("conversation_id", conv.id)
+      .eq("funnel", funnelId)
       .in("status", ["pending", "paused"]).order("send_at", { ascending: true })
       .limit(1).maybeSingle();
     const { data: upcoming, error: upcomingError } = await db.from(
       "scheduled_messages",
     )
       .select("day, step, type, send_at, status").eq("conversation_id", conv.id)
+      .eq("funnel", funnelId)
       .order("send_at", { ascending: true }).limit(40);
     const { data: mediaRows, error: mediaError } = await db.from("funnel_media")
-      .select("day, slot, type").eq("funnel", "mega-sorgo").eq("active", true);
+      .select("day, slot, type").eq("funnel", funnelId).eq("active", true);
     const media = (mediaRows ?? []).reduce(
       (acc: Record<string, number>, row: Json) => {
         const key = `dia${row.day}:${row.slot}:${row.type ?? "unknown"}`;
@@ -327,7 +359,8 @@ export async function handle(req: Request): Promise<Response> {
     );
     return json({
       ok: true,
-      funnel: seq?.funnel ?? null,
+      funnel: seq?.funnel ?? funnelId,
+      funnel_label: funnelLabel(seq?.funnel ?? funnelId),
       sequence_status: seq?.status ?? null,
       pending: pending ?? 0,
       paused: paused ?? 0,
@@ -386,10 +419,10 @@ export async function handle(req: Request): Promise<Response> {
     }
 
     const [openingComplete, deliveryEvidence, newRows] = await Promise.all([
-      openingMessagesComplete(db, String(conv.id)),
-      hasFunnelDeliveryEvidence(db, String(conv.id)),
+      openingMessagesComplete(db, String(conv.id), funnelId),
+      hasFunnelDeliveryEvidence(db, String(conv.id), funnelId),
       db.from("scheduled_messages").select("id", { count: "exact", head: true })
-        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
+        .eq("conversation_id", conv.id).eq("funnel", funnelId)
         .eq("day", 1).neq("type", "deferred_intent"),
     ]);
     if (newRows.error) {
@@ -402,14 +435,18 @@ export async function handle(req: Request): Promise<Response> {
     let message: string;
     if (outcome === "created") {
       message =
-        "🚀 *Funil de apresentação iniciado!* A abertura foi adicionada à fila (" +
+        `🚀 *${
+          funnelLabel(funnelId)
+        } iniciado!* A abertura foi adicionada à fila (` +
         (newRows.count ?? 0) + " mensagem(ns)).";
     } else if (outcome === "in_progress") {
-      message =
-        "ℹ️ *O início do funil já está em andamento.* Não criei outra fila.";
+      message = `ℹ️ *O início de ${
+        funnelLabel(funnelId)
+      } já está em andamento.* Não criei outra fila.`;
     } else if (openingComplete) {
-      message =
-        "ℹ️ *Já há evidência da abertura no histórico do sistema.* Não criei outra sequência para evitar duplicação. O registro de envio não confirma a entrega da mensagem ao aparelho do cliente.";
+      message = `ℹ️ *Já há evidência da abertura de ${
+        funnelLabel(funnelId)
+      } no histórico do sistema.* Não criei outra sequência para evitar duplicação. O registro de envio não confirma a entrega da mensagem ao aparelho do cliente.`;
     } else if (deliveryEvidence) {
       message =
         "⚠️ *A abertura não está confirmada como concluída.* Há uma tentativa registrada; não repliquei as mensagens para evitar duplicação. Confira a macro Status.";
@@ -423,6 +460,8 @@ export async function handle(req: Request): Promise<Response> {
       action: "funil",
       already,
       outcome,
+      funnel: funnelId,
+      funnel_label: funnelLabel(funnelId),
       enfileiradas: outcome === "created" ? (newRows.count ?? 0) : 0,
     });
   }
@@ -510,6 +549,7 @@ export async function handle(req: Request): Promise<Response> {
       const funnelPaused = await autoPauseFunil(
         String(conv.id),
         `macro manual: ${action}`,
+        { funnel: funnelId },
       );
       const dispatch = await handleMenuClick(
         db,

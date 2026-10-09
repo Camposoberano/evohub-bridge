@@ -12,6 +12,7 @@ import {
   nextFunnelSendAt,
 } from "./business-hours.ts";
 import { openingMessagesComplete } from "./funnel-state.ts";
+import { isMainFunnel, mainFunnelForChannel } from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -200,6 +201,7 @@ export async function pumpFunnelQueue(
     ].sort((a: Json, b: Json) =>
       Date.parse(String(a.send_at)) - Date.parse(String(b.send_at))
     ).slice(0, limit);
+    if (!data.length) return { found: 0, sent: 0, failed: 0, held: 0 };
 
     // Quem já comprou e quem disse que não compra saem da cadeia. A etiqueta é posta pelo
     // atendente no WhatsApp/Chatwoot e `bloqueiosPorConversa` lê a ETIQUETA junto com o
@@ -216,6 +218,26 @@ export async function pumpFunnelQueue(
       ),
     ];
     const closed = await bloqueiosPorConversa(db, convIds);
+    const { data: conversations, error: conversationsError } = await db
+      .from("conversations").select("id,channel_id").in("id", convIds);
+    if (conversationsError) throw conversationsError;
+    const channelIds = [
+      ...new Set(
+        (conversations ?? []).map((conv: Json) => String(conv.channel_id ?? ""))
+          .filter(Boolean),
+      ),
+    ];
+    const { data: channels, error: channelsError } = await db.from("channels")
+      .select("id,name,external_id,phone_number").in("id", channelIds);
+    if (channelsError) throw channelsError;
+    const channelById = new Map((channels ?? []).map((channel: Json) => [
+      String(channel.id),
+      channel,
+    ]));
+    const conversationById = new Map((conversations ?? []).map((conv: Json) => [
+      String(conv.id),
+      conv,
+    ]));
     // Bot travado na conversa (label bot-off): a peça fica esperando, não é cancelada nem
     // marcada como falha. Marcar 'failed' aqui recriaria o defeito que travou 16
     // sequências por 24 dias — falha segura a conclusão do funil e o lead some dos dois
@@ -233,7 +255,27 @@ export async function pumpFunnelQueue(
 
       const conversationId = String(row.conversation_id ?? "");
       const funnel = String(row.funnel ?? "mega-sorgo");
-      if (funnel === "mega-sorgo") {
+      const conversation = conversationById.get(conversationId) as
+        | Json
+        | undefined;
+      const channel = conversation
+        ? channelById.get(String(conversation.channel_id ?? "")) as
+          | Json
+          | undefined
+        : undefined;
+      const expectedMainFunnel = mainFunnelForChannel(channel);
+      if (
+        isMainFunnel(funnel) && funnel !== expectedMainFunnel &&
+        row.type !== "deferred_intent"
+      ) {
+        const { error: disableError } = await db.from("scheduled_messages")
+          .update({ status: "cancelled" }).eq("id", id)
+          .eq("status", "pending");
+        if (disableError) throw disableError;
+        cancelled++;
+        continue;
+      }
+      if (isMainFunnel(funnel)) {
         const { data: sequence, error: sequenceError } = await db.from(
           "sales_sequences",
         ).select("status")
@@ -256,7 +298,8 @@ export async function pumpFunnelQueue(
         const { data: sequence, error: sequenceError } = await db.from(
           "sales_sequences",
         ).select("last_sent_at")
-          .eq("conversation_id", conversationId).eq("funnel", "mega-sorgo")
+          .eq("conversation_id", conversationId)
+          .eq("funnel", expectedMainFunnel)
           .maybeSingle();
         if (sequenceError) throw sequenceError;
         const { data: inbound, error: inboundError } = await db.from("messages")
@@ -339,7 +382,11 @@ export async function pumpFunnelQueue(
         }
         let openingComplete: boolean;
         try {
-          openingComplete = await openingMessagesComplete(db, conversationId);
+          openingComplete = await openingMessagesComplete(
+            db,
+            conversationId,
+            funnel,
+          );
         } catch (error) {
           await releaseQueueClaim(db, claimKey);
           throw error;

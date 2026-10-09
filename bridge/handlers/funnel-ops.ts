@@ -3,6 +3,7 @@ import { env } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { handle as funnelControl } from "./funil-control.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
+import { funnelLabel } from "../shared/funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -171,7 +172,10 @@ export async function handle(req: Request): Promise<Response> {
     sequenceMap.set(String(item.id), item);
   }
   const sequences = [...sequenceMap.values()];
-  const messages = messageResult.data ?? [];
+  const messages = (messageResult.data ?? []).map((item: Json) => ({
+    ...item,
+    funnel_label: funnelLabel(item.funnel),
+  }));
   const commercialRows = (commercialResult.data ?? []).map((item: Json) => ({
     ...item,
     intent: commercialIntent(String(item.content ?? "")),
@@ -232,6 +236,7 @@ export async function handle(req: Request): Promise<Response> {
   }
   const enrichedSequences = sequences.map((item: Json) => ({
     ...item,
+    funnel_label: funnelLabel(item.funnel),
     conversation: conversationMap.get(item.conversation_id) ?? null,
     pause_event: pauseReasonMap.get(String(item.conversation_id)) ?? null,
   }));

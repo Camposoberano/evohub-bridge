@@ -3,6 +3,11 @@ import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
 import { applyCompletionLabel } from "./completion-label.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
+import {
+  AD_5895_FUNNEL,
+  LEGACY_MAIN_FUNNEL,
+  mainFunnelForChannel,
+} from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -57,13 +62,25 @@ export function rebasePausedSchedule(
 export async function resumeSequenceRebased(
   db: DbClient,
   conversationId: string,
-  funnel = "mega-sorgo",
+  funnel?: string,
   now = Date.now(),
 ): Promise<number> {
+  const funnelId = funnel ?? await (async () => {
+    const { data: conversation, error: conversationError } = await db
+      .from("conversations").select("channel_id").eq("id", conversationId)
+      .maybeSingle();
+    if (conversationError) throw conversationError;
+    if (!conversation?.channel_id) return LEGACY_MAIN_FUNNEL;
+    const { data: channel, error: channelError } = await db.from("channels")
+      .select("name,external_id,phone_number")
+      .eq("id", conversation.channel_id).maybeSingle();
+    if (channelError) throw channelError;
+    return mainFunnelForChannel(channel);
+  })();
   const { data: paused, error } = await db.from("scheduled_messages")
     .select("id,send_at,type")
     .eq("conversation_id", conversationId)
-    .eq("funnel", funnel)
+    .eq("funnel", funnelId)
     .eq("status", "paused")
     .order("send_at", { ascending: true })
     .limit(500);
@@ -87,7 +104,7 @@ export async function resumeSequenceRebased(
   }
   await db.from("sales_sequences").update({ status: "running" })
     .eq("conversation_id", conversationId)
-    .eq("funnel", funnel)
+    .eq("funnel", funnelId)
     .eq("status", "paused");
   return rows.length + deferredRoutes.length;
 }
@@ -160,20 +177,59 @@ export async function maintainFunnels(
   const result = { scanned: 0, completed: 0, resumed: 0, followups: 0 };
   const { data: sequences, error } = await db.from("sales_sequences")
     .select("id,conversation_id,chatwoot_conversation_id,funnel,status")
-    .eq("funnel", "mega-sorgo")
+    .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
     .in("status", ["running", "paused"])
     .limit(500);
   if (error) throw error;
   if (!sequences?.length) return result;
 
-  const conversationIds = sequences.map((item: Json) => String(item.conversation_id))
+  const conversationIds = sequences.map((item: Json) =>
+    String(item.conversation_id)
+  )
     .filter(Boolean);
   const idBatches = batches(conversationIds, POSTGREST_ID_BATCH_SIZE);
+  const identityConversationBatches = await Promise.all(
+    idBatches.map((ids) =>
+      db.from("conversations").select("id,channel_id,outcome").in("id", ids)
+    ),
+  );
+  for (const response of identityConversationBatches) {
+    if (response.error) throw response.error;
+  }
+  const identityConversations = identityConversationBatches.flatMap((
+    response,
+  ) => response.data ?? []) as Json[];
+  const channelIds = [
+    ...new Set(
+      identityConversations.map((item) => String(item.channel_id ?? "")).filter(
+        Boolean,
+      ),
+    ),
+  ];
+  const channelBatches = await Promise.all(
+    batches(channelIds, POSTGREST_ID_BATCH_SIZE).map((ids) =>
+      db.from("channels").select("id,name,external_id,phone_number").in(
+        "id",
+        ids,
+      )
+    ),
+  );
+  for (const response of channelBatches) {
+    if (response.error) throw response.error;
+  }
+  const channels = channelBatches.flatMap((response) =>
+    response.data ?? []
+  ) as Json[];
+  const channelById = new Map(channels.map((channel) => [
+    String(channel.id),
+    channel,
+  ]));
+  const conversationById = new Map(identityConversations.map((item) => [
+    String(item.id),
+    item,
+  ]));
   const since = new Date(now - 48 * 60 * 60_000).toISOString();
-  const [conversationBatches, pauseEventsResult, catalogStateBatches] = await Promise.all([
-    Promise.all(idBatches.map((ids) => db.from("conversations")
-      .select("id,channel_id,outcome")
-      .in("id", ids))),
+  const [pauseEventsResult, catalogStateBatches] = await Promise.all([
     db.from("events")
       .select("event_type,received_at,payload")
       .eq("source", "funil")
@@ -181,18 +237,22 @@ export async function maintainFunnels(
       .gte("received_at", since)
       .order("received_at", { ascending: false })
       .limit(2_000),
-    Promise.all(idBatches.map((ids) => db.from("catalog_nav_state")
-      .select("conversation_id")
-      .in("conversation_id", ids)
-      .eq("journey", "catalogo"))),
+    Promise.all(idBatches.map((ids) =>
+      db.from("catalog_nav_state")
+        .select("conversation_id")
+        .in("conversation_id", ids)
+        .eq("journey", "catalogo")
+    )),
   ]);
-  for (const response of [...conversationBatches, ...catalogStateBatches]) {
+  for (const response of [...catalogStateBatches]) {
     if (response.error) throw response.error;
   }
   if (pauseEventsResult.error) throw pauseEventsResult.error;
-  const conversations = conversationBatches.flatMap((response) => response.data ?? []);
+  const conversations = identityConversations;
   const pauseEvents = pauseEventsResult.data;
-  const catalogStates = catalogStateBatches.flatMap((response) => response.data ?? []);
+  const catalogStates = catalogStateBatches.flatMap((response) =>
+    response.data ?? []
+  );
   const conversationMap = new Map(
     (conversations ?? []).map((item: Json) => [String(item.id), item]),
   );
@@ -215,6 +275,25 @@ export async function maintainFunnels(
   for (const sequence of sequences as Json[]) {
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
+    const identityConversation = conversationById.get(conversationId);
+    const channel = identityConversation
+      ? channelById.get(String(identityConversation.channel_id ?? ""))
+      : null;
+    const expectedFunnel = mainFunnelForChannel(channel);
+    if (sequence.funnel !== expectedFunnel) {
+      const { error: cancelRowsError } = await db
+        .from("scheduled_messages").update({ status: "cancelled" })
+        .eq("conversation_id", conversationId)
+        .eq("funnel", String(sequence.funnel ?? LEGACY_MAIN_FUNNEL))
+        .neq("type", "deferred_intent")
+        .in("status", ["pending", "paused"]);
+      if (cancelRowsError) throw cancelRowsError;
+      const { error: cancelSequenceError } = await db
+        .from("sales_sequences").update({ status: "cancelled" })
+        .eq("id", sequence.id).in("status", ["running", "paused"]);
+      if (cancelSequenceError) throw cancelSequenceError;
+      continue;
+    }
     if (muted.has(conversationId)) continue;
     const { data: queue, error: queueError } = await db.from(
       "scheduled_messages",
@@ -357,24 +436,29 @@ async function scheduleSilentFollowup(
     .order("received_at", { ascending: false }).limit(2_000);
   if (humanRequestError) throw humanRequestError;
   const humanRequested = (humanRequests ?? []).some((event: Json) =>
-    String((event.payload as Json | undefined)?.conversation_id ?? "") === conversationId
+    String((event.payload as Json | undefined)?.conversation_id ?? "") ===
+      conversationId
   );
 
   const activity = await latestActivity(db, conversationId);
-  if (!canSendSilentFollowup({
-    now,
-    lastInboundAt: activity.lastInboundAt,
-    lastMainOutAt: lastSentAt,
-    assignee: conversation.data.assignee,
-    humanRequested,
-    outcome: conversation.data.outcome as string | null,
-  })) return false;
+  if (
+    !canSendSilentFollowup({
+      now,
+      lastInboundAt: activity.lastInboundAt,
+      lastMainOutAt: lastSentAt,
+      assignee: conversation.data.assignee,
+      humanRequested,
+      outcome: conversation.data.outcome as string | null,
+    })
+  ) return false;
   if (
     (activity.lastActivityAt && activity.lastActivityAt > lastSentAt)
   ) {
     return false;
   }
-  const { data: existing, error: existingError } = await db.from("scheduled_messages")
+  const { data: existing, error: existingError } = await db.from(
+    "scheduled_messages",
+  )
     .select("id")
     .eq("conversation_id", conversationId)
     .eq("funnel", FOLLOW_UP_FUNNEL)

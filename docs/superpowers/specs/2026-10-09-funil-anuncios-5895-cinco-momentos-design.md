@@ -104,7 +104,7 @@ confirmadas na fonte operacional, não declarar percentual.
    agrupadas por momento.
 3. Um novo inbound durante a sequência aciona o handler correspondente; as
    mensagens restantes continuam pausadas e depois retomam sem duplicidade.
-4. Os cinco envios pertencem ao funil `mega-sorgo`, ao canal 5895 e respeitam o
+4. Os cinco envios pertencem ao funil `mega-sorgo-5895-v2`, ao canal 5895 e respeitam o
    horário operacional configurado.
 5. Opt-out, venda confirmada e pausa manual mantêm as proteções terminais;
    pedido de preço/ajuda não cancela a régua.
@@ -127,8 +127,10 @@ confirmadas na fonte operacional, não declarar percentual.
   duas mensagens no canal 5895 e impedir que essas peças antigas sejam enviadas.
 - A auditoria de produção não encontrou linhas pendentes/pausadas com o texto
   exato da abertura antiga de duas mensagens no 5895; nenhuma fila foi cancelada.
-- Não reenfileirar automaticamente conversas históricas ou falhas antigas.
-  Qualquer recuperação específica será revisada separadamente para evitar
-  duplicidade.
+- O deploy sozinho não reenfileira conversas históricas. A recuperação específica
+  aprovada em 09/10 cobre quem teve a abertura antiga registrada nos últimos 72h;
+  etapas novas já tentadas ficam preservadas e só as faltantes são retomadas.
+- O identificador `mega-sorgo` fica reservado ao histórico legado. O canal 5895
+  usa `mega-sorgo-5895-v2`, exibido como “Anúncios 5895 — 5 momentos”.
 - Publicar o novo código no branch de produção e confirmar o build ativo.
   Nenhuma mensagem de teste será enviada a clientes.

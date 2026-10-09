@@ -42,10 +42,14 @@ import {
   suprimirAberturaGenerica,
   usaNovoFunilNoCanal,
 } from "../shared/funil-anuncio.ts";
+import {
+  LEGACY_MAIN_FUNNEL,
+  mainFunnelForChannel,
+} from "../shared/funnel-identity.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
 
 type Json = Record<string, unknown>;
-const FUNNEL = "mega-sorgo";
+const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
 const CANAL_ANUNCIO_ALVO = "5895";
 // Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
 // da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
@@ -487,6 +491,7 @@ export async function handle(req: Request): Promise<Response> {
     funnelChannel,
     CANAL_ANUNCIO_ALVO,
   );
+  const funnelId = mainFunnelForChannel(funnelChannel);
   const fasesDaInscricao = usaReguaDoCanal ? FASES : FASES_FORA_DO_ANUNCIO;
   const duracaoDaFase = usaReguaDoCanal
     ? FIM_ACESSO
@@ -511,7 +516,7 @@ export async function handle(req: Request): Promise<Response> {
   ).select(
     "id,status",
   )
-    .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
+    .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
   if (existingError) {
     return json({
       error: `falha ao consultar sequência: ${existingError.message}`,
@@ -522,7 +527,7 @@ export async function handle(req: Request): Promise<Response> {
     const forceEligible = force &&
       ["completed", "cancelled"].includes(existingStatus);
     const hasDeliveryEvidence = repairMissingOpening
-      ? await hasFunnelDeliveryEvidence(db, String(conv.id))
+      ? await hasFunnelDeliveryEvidence(db, String(conv.id), funnelId)
       : true;
     const repairEligible = canRecreateMissingOpening({
       requested: repairMissingOpening,
@@ -531,8 +536,8 @@ export async function handle(req: Request): Promise<Response> {
     });
     if (!forceEligible && !repairEligible) {
       const [openingComplete, openingEvidence] = await Promise.all([
-        openingMessagesComplete(db, String(conv.id)),
-        hasFunnelDeliveryEvidence(db, String(conv.id)),
+        openingMessagesComplete(db, String(conv.id), funnelId),
+        hasFunnelDeliveryEvidence(db, String(conv.id), funnelId),
       ]);
       return json({
         ok: true,
@@ -544,7 +549,7 @@ export async function handle(req: Request): Promise<Response> {
     }
     const { error: cancelError } = await db.from("scheduled_messages").update({
       status: "cancelled",
-    }).eq("conversation_id", conv.id).eq("funnel", FUNNEL).in(
+    }).eq("conversation_id", conv.id).eq("funnel", funnelId).in(
       "status",
       ["pending", "paused"],
     );
@@ -558,11 +563,13 @@ export async function handle(req: Request): Promise<Response> {
     const openingEvidence = await hasFunnelDeliveryEvidence(
       db,
       String(conv.id),
+      funnelId,
     );
     if (openingEvidence) {
       const openingComplete = await openingMessagesComplete(
         db,
         String(conv.id),
+        funnelId,
       );
       return json({
         ok: true,
@@ -577,7 +584,7 @@ export async function handle(req: Request): Promise<Response> {
   const { data: media } = await db.from("funnel_media").select(
     "day,slot,url,caption,type",
   )
-    .eq("funnel", FUNNEL).eq("active", true);
+    .eq("funnel", FUNNEL_LEGACY).eq("active", true);
   const banco = new Map<string, Json[]>();
   for (const m of (media ?? []) as Json[]) {
     const k = `${m.day}:${m.slot}`;
@@ -610,7 +617,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "text",
@@ -621,7 +628,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "text_sequence",
@@ -637,7 +644,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "interactive",
@@ -653,7 +660,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "list",
@@ -669,7 +676,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: p.mediaType,
@@ -705,7 +712,7 @@ export async function handle(req: Request): Promise<Response> {
     .from("sales_sequences").insert({
       conversation_id: conv.id,
       chatwoot_conversation_id: cwConvId,
-      funnel: FUNNEL,
+      funnel: funnelId,
       status: sequenceStatus,
     }).select("id").single();
   if (sequenceError) {
@@ -880,6 +887,7 @@ async function enqueueDeferredAdRoute(
   conversation: Json,
   route: string,
   sourceMessageId: string | null,
+  funnelId: string,
 ): Promise<void> {
   const conversationId = String(conversation.id ?? "");
   const chatwootConversationId = Number(conversation.chatwoot_conversation_id);
@@ -890,14 +898,14 @@ async function enqueueDeferredAdRoute(
   const { data: existing, error: existingError } = await db.from(
     "scheduled_messages",
   ).select("id,status").eq("conversation_id", conversationId)
-    .eq("funnel", FUNNEL).eq("type", "deferred_intent")
+    .eq("funnel", funnelId).eq("type", "deferred_intent")
     .in("status", ["pending", "paused"]).limit(1);
   if (existingError) throw existingError;
 
   const { data: openingRows, error: openingError } = await db.from(
     "scheduled_messages",
   ).select("step,send_at,type").eq("conversation_id", conversationId)
-    .eq("funnel", FUNNEL).eq("day", 1).limit(100);
+    .eq("funnel", funnelId).eq("day", 1).limit(100);
   if (openingError) throw openingError;
   const openings = (openingRows ?? []).filter((row: Json) =>
     row.type !== "deferred_intent"
@@ -935,7 +943,7 @@ async function enqueueDeferredAdRoute(
       : (await db.from("scheduled_messages").insert({
         conversation_id: conversationId,
         chatwoot_conversation_id: chatwootConversationId,
-        funnel: FUNNEL,
+        funnel: funnelId,
         day: 1,
         step,
         type: "deferred_intent",
@@ -977,6 +985,7 @@ export async function autoEnrollFunil(
   if (!canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) {
     return { adOrigin: false, humanHandoff: false, deferIntent: false };
   }
+  const funnelId = mainFunnelForChannel(channel);
   const conversation = await activeConversationForContact(db, channel, from);
   let originSignal: string | null = fromAd
     ? "meta_referral"
@@ -1027,7 +1036,7 @@ export async function autoEnrollFunil(
   if (adFunnelOrigin && conversation?.id) {
     const { data: existingSequence, error: sequenceLookupError } = await db
       .from("sales_sequences").select("id")
-      .eq("conversation_id", conversation.id).eq("funnel", FUNNEL)
+      .eq("conversation_id", conversation.id).eq("funnel", funnelId)
       .maybeSingle();
     if (sequenceLookupError) throw sequenceLookupError;
     if (!existingSequence) {
@@ -1079,7 +1088,11 @@ export async function autoEnrollFunil(
   ) {
     try {
       const conversationId = String(conversation.id);
-      const openingComplete = await openingMessagesComplete(db, conversationId);
+      const openingComplete = await openingMessagesComplete(
+        db,
+        conversationId,
+        funnelId,
+      );
       deferIntent = !openingComplete;
 
       // Uma sequência sem fila nem mensagem de abertura é lixo de estado:
@@ -1088,6 +1101,7 @@ export async function autoEnrollFunil(
         const hasDeliveryEvidence = await hasFunnelDeliveryEvidence(
           db,
           conversationId,
+          funnelId,
         );
         if (!hasDeliveryEvidence) {
           outcome = await enrollIfNew(db, channel, from, {
@@ -1095,7 +1109,11 @@ export async function autoEnrollFunil(
             originSignal,
             conversation,
           });
-          deferIntent = !await openingMessagesComplete(db, conversationId);
+          deferIntent = !await openingMessagesComplete(
+            db,
+            conversationId,
+            funnelId,
+          );
         }
       }
     } catch (error) {
@@ -1114,6 +1132,7 @@ export async function autoEnrollFunil(
           conversation,
           route,
           options.sourceMessageId ?? null,
+          funnelId,
         );
       } catch (error) {
         console.error(
@@ -1140,6 +1159,7 @@ export async function autoEnrollFunil(
       await autoPauseFunil(String(conversation.id), openingReason, {
         comPrazo: openingReason !== "human_handoff",
         adOrigin: true,
+        funnel: funnelId,
       });
     } catch (error) {
       console.error("autoEnrollFunil pausa de sequência falhou:", error);
@@ -1181,6 +1201,7 @@ export async function enrollIfNew(
   if (!options.conversation && !conv) return "no_contact";
   if (!conv) return "no_conversation";
   if (!conv.chatwoot_conversation_id) return "no_conversation";
+  const funnelId = mainFunnelForChannel(channel);
 
   const claimKey = `funil-enroll-${String(conv.id)}`;
   if (!await claimDeliveryWithTtl(db, claimKey, "funil-enroll", 2 * 60_000)) {
@@ -1191,7 +1212,7 @@ export async function enrollIfNew(
     const { data: existing, error: existingError } = await db.from(
       "sales_sequences",
     ).select("id,status")
-      .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
+      .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
     if (existingError) throw existingError;
     const forceEligible = options.force === true && existing &&
       ["completed", "cancelled"].includes(String(existing.status ?? ""));
