@@ -1,7 +1,7 @@
 # Funil de anúncios 5895 — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `executing-plans` to
-> implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for
+> implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for
 > tracking.
 
 **Goal:** Replace the two-message ad opening with five short scheduled touches
@@ -80,7 +80,7 @@ client, Deno tests, Coolify deployment, `/health` and `/version` verification.
 - Produces: `FASES` with five builders; each builder returns exactly one
   `{ kind: "text" }` piece with a stable day index.
 
-- [ ] **Step 1: Add a failing five-moment test**
+- [x] **Step 1: Add a failing five-moment test**
 
 ```ts
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
@@ -106,7 +106,7 @@ Deno.test("funil ativo tem cinco momentos com uma mensagem de texto cada", () =>
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails on the current
+- [x] **Step 2: Run the focused test and verify it fails on the current
       two-piece phase**
 
 Run:
@@ -114,7 +114,7 @@ Run:
 
 Expected: FAIL because active `FASES` currently has one builder and two pieces.
 
-- [ ] **Step 3: Replace `faseComercialV2` as the active `FASES` source**
+- [x] **Step 3: Replace `faseComercialV2` as the active `FASES` source**
 
 Create five concise text builders from the approved spec: introduction; intended
 use; missing locality/context; approved area-to-weight reference; final
@@ -124,14 +124,14 @@ a numeric price, a discount percent, or unvalidated agronomic/logistics
 promises. Compute the inter-phase spacing from the new one-piece stages so the
 configured business-time gaps remain the actual pauses between touches.
 
-- [ ] **Step 4: Run phase and timing tests**
+- [x] **Step 4: Run phase and timing tests**
 
 Run:
 `deno test --no-check --allow-env --allow-net bridge/tests/funil-five-moments.test.ts bridge/tests/funil-offsets.test.ts`
 
 Expected: PASS with five one-text moments and existing business-hour bounds.
 
-- [ ] **Step 5: Commit the five-moment sequence**
+- [x] **Step 5: Commit the five-moment sequence**
 
 ```bash
 git add bridge/handlers/funil-enroll.ts bridge/tests/funil-five-moments.test.ts
@@ -159,7 +159,7 @@ git commit -m "feat: replace two-message ad funnel"
   handler, then resume the same remaining queue; it cannot turn the sequence
   into `replied` or `cancelled`.
 
-- [ ] **Step 1: Add failing tests for price-intent enrollment and queue
+- [x] **Step 1: Add failing tests for price-intent enrollment and queue
       preservation**
 
 Add `deveAdiarPausaDaAbertura(hasPendingOpeningMessages, adOrigin)` to
@@ -174,7 +174,7 @@ assertEquals(deveAdiarPausaDaAbertura(false, true), false);
 The five active pieces must have no `opening: true` flag, so `skipOpening`
 cannot remove a funnel moment.
 
-- [ ] **Step 2: Run the focused tests and verify the current behavior is not
+- [x] **Step 2: Run the focused tests and verify the current behavior is not
       covered or fails**
 
 Run:
@@ -183,7 +183,7 @@ Run:
 Expected: the new queue-preservation assertions fail against the current
 `skipOpening`/opening-pause guard.
 
-- [ ] **Step 3: Keep every scheduled ad moment when `skipOpening` is requested**
+- [x] **Step 3: Keep every scheduled ad moment when `skipOpening` is requested**
 
 In the queue builder, remove `opening: true` from all five new scheduled pieces.
 Keep `skipOpening` compatibility for historical/manual payloads, but ensure it
@@ -196,7 +196,7 @@ the lead's first inbound message. Keep existing sequences eligible for their
 direct response route, and leave historical conversations without a sequence
 untouched.
 
-- [ ] **Step 4: Pause and resume without cancelling the ad queue**
+- [x] **Step 4: Pause and resume without cancelling the ad queue**
 
 Add `adOrigin?: boolean` to the `autoPauseFunil` options. Use
 `deveAdiarPausaDaAbertura()` so the existing opening guard remains for other
@@ -208,7 +208,7 @@ and terminal opt-out/sale/block behavior. Pass `enrollment?.adOrigin` from the
 WhatsApp text-intent handler and verify ad origin from the stored conversation
 before pausing a menu-click route.
 
-- [ ] **Step 5: Run the focused pause, recovery, and enrollment tests**
+- [x] **Step 5: Run the focused pause, recovery, and enrollment tests**
 
 Run:
 `deno test --no-check --allow-env --allow-net bridge/tests/funil-anuncio.test.ts bridge/tests/funil-pausa.test.ts bridge/tests/missing-opening-recovery.test.ts bridge/tests/funil-offsets.test.ts`
@@ -216,7 +216,7 @@ Run:
 Expected: PASS; the price response is independent, all remaining funnel rows are
 still pending or paused, and recovery does not duplicate a sequence.
 
-- [ ] **Step 6: Commit the reply/interleaving behavior**
+- [x] **Step 6: Commit the reply/interleaving behavior**
 
 ```bash
 git add bridge/handlers/funil-enroll.ts bridge/shared/funnel-state.ts bridge/handlers/uazapi-webhook.ts bridge/handlers/hub-webhook.ts bridge/shared/funil-anuncio.ts bridge/tests/funil-anuncio.test.ts bridge/tests/funil-pausa.test.ts bridge/tests/missing-opening-recovery.test.ts
@@ -238,13 +238,13 @@ git commit -m "fix: preserve ad funnel after customer intent"
   directs exact conditions to Cícero without asserting the conflicting 30%
   figure.
 
-- [ ] **Step 1: Change the price test to reject the unsupported 30% copy**
+- [x] **Step 1: Change the price test to reject the unsupported 30% copy**
 
 In `funil-comercial.test.ts`, replace `assertEquals(copy.includes("30%"), true)`
 with assertions that `copy.includes("30%")` is false and that the copy still
 says the exact quote is confirmed by Cícero.
 
-- [ ] **Step 2: Run the commercial copy test and verify it fails**
+- [x] **Step 2: Run the commercial copy test and verify it fails**
 
 Run:
 `deno test --no-check --allow-env --allow-net bridge/tests/funil-comercial.test.ts`
@@ -252,7 +252,7 @@ Run:
 Expected: FAIL because `textoCondicaoComercial()` and the price-choice text
 currently say “30%”.
 
-- [ ] **Step 3: Use neutral price-condition copy until rates are confirmed**
+- [x] **Step 3: Use neutral price-condition copy until rates are confirmed**
 
 Remove the 30% promise from `textoCondicaoComercial()` and every price-selector
 response in `hub-webhook.ts`. Keep the existing package map and freight
@@ -260,7 +260,7 @@ statement only where operationally confirmed; state that Cícero confirms the
 current quote for quantity and region. Do not replace 30% with another
 percentage in this change.
 
-- [ ] **Step 4: Run price and package tests**
+- [x] **Step 4: Run price and package tests**
 
 Run:
 `deno test --no-check --allow-env --allow-net bridge/tests/funil-comercial.test.ts bridge/tests/hybrid-menu.test.ts`
@@ -268,7 +268,7 @@ Run:
 Expected: PASS; packages still map correctly, no numeric price or discount
 percentage is added, and the price response remains routable.
 
-- [ ] **Step 5: Commit the corrected price copy**
+- [x] **Step 5: Commit the corrected price copy**
 
 ```bash
 git add bridge/shared/funil-comercial.ts bridge/handlers/hub-webhook.ts bridge/tests/funil-comercial.test.ts
@@ -290,12 +290,12 @@ git commit -m "fix: remove stale discount promise from price replies"
 - Produces: no old two-piece row remains eligible to send on 5895; the active
   service identifies the new build and health checks pass.
 
-- [ ] **Step 1: Update the build marker**
+- [x] **Step 1: Update the build marker**
 
 Set the public build name to `2026-10-09-funil-anuncios-5895-cinco-momentos` and
 list only the new 5895 funnel behavior as the feature marker.
 
-- [ ] **Step 2: Audit and cancel only confirmed old queued rows**
+- [x] **Step 2: Audit and cancel only confirmed old queued rows**
 
 Use read-only PostgREST `GET` queries against `conversations` and
 `scheduled_messages`, filtering channel `cf316d59-f6da-4683-adcc-29095a805dde`,
@@ -305,7 +305,7 @@ exact row IDs to `cancelled` and mark their matching old sequence terminal; do
 not change sent rows, other channels, or historical conversations without
 pending legacy content. Verify a second read returns zero eligible old rows.
 
-- [ ] **Step 3: Run focused tests, type check, and repository whitespace check**
+- [x] **Step 3: Run focused tests, type check, and repository whitespace check**
 
 Run:
 `deno test --no-check --allow-env --allow-net bridge/tests/funil-five-moments.test.ts bridge/tests/funil-anuncio.test.ts bridge/tests/funil-pausa.test.ts bridge/tests/missing-opening-recovery.test.ts bridge/tests/funil-comercial.test.ts bridge/tests/funil-offsets.test.ts`
@@ -317,7 +317,7 @@ Run: `git diff --check`
 Expected: all focused tests pass, the server type-checks, and the diff has no
 whitespace errors.
 
-- [ ] **Step 4: Commit, push to the production branch, and deploy**
+- [x] **Step 4: Commit, push to the production branch, and deploy**
 
 Commit the build marker with
 `git commit -m "chore: identify five-moment ad funnel build"`. Confirm the
@@ -325,7 +325,7 @@ target is the current production `main` at or ahead of `3827372`; push only the
 reviewed commits, then trigger the existing Coolify deployment endpoint without
 printing credentials.
 
-- [ ] **Step 5: Verify production without sending test messages**
+- [x] **Step 5: Verify production without sending test messages**
 
 GET `/health` and `/version`. Expected: HTTP 200; build
 `2026-10-09-funil-anuncios-5895-cinco-momentos`; feature

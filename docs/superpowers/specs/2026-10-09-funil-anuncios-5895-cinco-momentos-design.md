@@ -2,8 +2,8 @@
 
 ## Status
 
-Aprovada pelo usuário em 09/10/2026. Implementação em validação final antes da
-publicação.
+Publicada em produção em 09/10/2026. Build ativo:
+`2026-10-09-funil-anuncios-5895-cinco-momentos`.
 
 ## Objetivo
 
@@ -125,6 +125,8 @@ confirmadas na fonte operacional, não declarar percentual.
 
 - Antes do deploy, conferir se há linhas `pending` ou `paused` do roteiro de
   duas mensagens no canal 5895 e impedir que essas peças antigas sejam enviadas.
+- A auditoria de produção não encontrou linhas pendentes/pausadas com o texto
+  exato da abertura antiga de duas mensagens no 5895; nenhuma fila foi cancelada.
 - Não reenfileirar automaticamente conversas históricas ou falhas antigas.
   Qualquer recuperação específica será revisada separadamente para evitar
   duplicidade.
