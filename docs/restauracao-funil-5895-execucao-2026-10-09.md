@@ -19,6 +19,8 @@
 
 Cinco pares de mensagens de saída com mesmo conteúdo apareceram no espelho do Chatwoot com diferença inferior a três segundos. Um registro estava vinculado à etapa do funil, e o outro era eco sem vínculo. A correção posterior aguarda o eco híbrido e reaproveita sua linha antes de criar a mensagem espelhada. Ainda é preciso conferir a incidência após o próximo deploy. Esses pares, por si só, não provam dois envios ao aparelho.
 
+Na primeira fase do lote, o vídeo da #3402 terminou `failed/uncertain` após um erro de transporte no worker do bridge. A consulta somente leitura ao histórico da Uazapi encontrou **dois** envios do mesmo arquivo para esse chat, ambos com status `Delivered`, às 20:56:39 e 20:57:20 UTC. Assim, o problema real era a concorrência entre o cron do n8n e o worker local do bridge sobre a mesma etapa. A correção seguinte retira as peças normais da versão restaurada da seleção do worker local. O cron do n8n continua consumindo essa versão; o bridge conserva a rota de intenção adiada, manutenção e auditoria. A etapa #3402 precisa ser reconciliada com a evidência do provedor sem novo envio ao WhatsApp.
+
 ## Critério operacional
 
 Não reenviar uma etapa marcada como `sent` apenas porque o cliente não a vê no Chatwoot. Conferir `messages`, `funnel_delivery_attempt`, o provedor e o recibo antes de repetir o envio. A sequência completa leva aproximadamente dois dias úteis; acompanhar as etapas restantes e qualquer `failed` ou `uncertain`.

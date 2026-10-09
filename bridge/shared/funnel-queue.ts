@@ -12,7 +12,11 @@ import {
   nextFunnelSendAt,
 } from "./business-hours.ts";
 import { openingMessagesComplete } from "./funnel-state.ts";
-import { isMainFunnel, mainFunnelForChannel } from "./funnel-identity.ts";
+import {
+  isMainFunnel,
+  mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
+} from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -182,6 +186,9 @@ export async function pumpFunnelQueue(
           "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
         )
         .eq("status", "pending")
+        // A régua restaurada já é consumida pelo cron do n8n. Dois consumidores
+        // enviaram o mesmo vídeo do #3402; o bridge cuida apenas da rota adiada.
+        .neq("funnel", RESTORED_5895_FUNNEL)
         .lte("send_at", now)
         .order("send_at", { ascending: true })
         .limit(limit),
