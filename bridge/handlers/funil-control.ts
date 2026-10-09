@@ -35,7 +35,9 @@ import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { blockContact } from "../shared/lead-block.ts";
 import {
   funnelLabel,
+  LEGACY_MAIN_FUNNEL,
   mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 
@@ -347,8 +349,11 @@ export async function handle(req: Request): Promise<Response> {
       .select("day, step, type, send_at, status").eq("conversation_id", conv.id)
       .eq("funnel", funnelId)
       .order("send_at", { ascending: true }).limit(40);
+    const mediaFunnel = funnelId === RESTORED_5895_FUNNEL
+      ? LEGACY_MAIN_FUNNEL
+      : funnelId;
     const { data: mediaRows, error: mediaError } = await db.from("funnel_media")
-      .select("day, slot, type").eq("funnel", funnelId).eq("active", true);
+      .select("day, slot, type").eq("funnel", mediaFunnel).eq("active", true);
     const media = (mediaRows ?? []).reduce(
       (acc: Record<string, number>, row: Json) => {
         const key = `dia${row.day}:${row.slot}:${row.type ?? "unknown"}`;

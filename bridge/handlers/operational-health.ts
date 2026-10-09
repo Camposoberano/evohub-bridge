@@ -13,10 +13,7 @@ import {
   claimDeliveryWithTtl,
   type DbClient,
 } from "../shared/supabase.ts";
-import {
-  AD_5895_FUNNEL,
-  LEGACY_MAIN_FUNNEL,
-} from "../shared/funnel-identity.ts";
+import { MAIN_FUNNELS } from "../shared/funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -112,7 +109,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const { data: firstStepRows, error: firstStepError } = await db
     .from("scheduled_messages")
     .select("id,conversation_id,status,send_at,payload")
-    .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
+    .in("funnel", MAIN_FUNNELS)
     .eq("step", 0)
     .gte("send_at", since24h)
     .order("send_at", { ascending: false })

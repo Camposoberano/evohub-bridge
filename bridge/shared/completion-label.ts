@@ -18,6 +18,10 @@ function rules(): Record<string, Rule> {
         label: "SUL",
         targets: ["whatsapp", "chatwoot"],
       },
+      "mega-sorgo-5895-20260930": {
+        label: "SUL",
+        targets: ["whatsapp", "chatwoot"],
+      },
     };
   }
   const out: Record<string, Rule> = {};

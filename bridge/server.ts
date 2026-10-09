@@ -353,8 +353,10 @@ const version = {
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
     "funil-anuncios-5895-cinco-momentos",
+    "funil-completo-5895-30-09",
+    "funil-botoes-historicos-roteados",
   ],
-  build: "2026-10-09-funil-anuncios-5895-cinco-momentos",
+  build: "2026-10-09-funil-completo-5895-30-09",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

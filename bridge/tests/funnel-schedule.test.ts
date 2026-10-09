@@ -25,7 +25,7 @@ Deno.test("manual funnel starts now but later phases respect business hours", ()
       `expected immediate first phase ${receivedAt}, got ${starts[0]}`,
     );
   }
-  const expectedSecond = Date.parse("2026-07-12T09:30:00.000Z"); // 6:30 BRT
+  const expectedSecond = Date.parse("2026-07-12T09:30:00.000Z"); // 6:30 BRT: a fase manual acabou fora da janela
   if (starts[1] !== expectedSecond) {
     throw new Error(`expected ${expectedSecond}, got ${starts[1]}`);
   }
@@ -34,8 +34,8 @@ Deno.test("manual funnel starts now but later phases respect business hours", ()
 Deno.test("automatic funnel pauses gap clock from 22h until 6h BRT", () => {
   const receivedAt = Date.parse("2026-07-12T00:00:00.000Z"); // 21h BRT
   const starts = iniciosDosAcessos(receivedAt, [0, 6 * 60 * 60], false);
-  // O primeiro momento sai às 21h; restam 5h do intervalo quando chega 22h.
-  const expected = Date.parse("2026-07-12T14:00:00.000Z"); // 11h BRT
+  // A fase 1 dura 560s; o intervalo de 6h para após 22h e retoma às 6h.
+  const expected = Date.parse("2026-07-12T14:09:20.000Z"); // 11:09:20 BRT
   if (starts[1] !== expected) {
     throw new Error(`expected ${expected}, got ${starts[1]}`);
   }

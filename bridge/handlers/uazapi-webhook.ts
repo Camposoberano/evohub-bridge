@@ -23,6 +23,7 @@ import {
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { isRestoredFunnelButton } from "../shared/restored-funnel-buttons.ts";
 import {
   normalizeHybridButtonReply,
   normalizeHybridMenuClick,
@@ -425,7 +426,7 @@ async function handleUazapiClick(
     console.error("uazapi-webhook click auto-enroll erro:", error);
   }
 
-  if (id.startsWith("menu_")) {
+  if (id.startsWith("menu_") || isRestoredFunnelButton(id)) {
     await handleMenuClick(db, channel, from, id, acct);
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")

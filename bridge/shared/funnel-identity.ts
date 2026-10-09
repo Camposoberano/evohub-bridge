@@ -6,7 +6,8 @@ export const AD_5895_FUNNEL = "mega-sorgo-5895-v2";
 export const RESTORED_5895_FUNNEL = "mega-sorgo-5895-20260930";
 export const AD_5895_FUNNEL_LABEL = "Anúncios 5895 — 5 momentos";
 export const LEGACY_MAIN_FUNNEL_LABEL = "Funil principal antigo (legado)";
-export const RESTORED_5895_FUNNEL_LABEL = "Anúncios 5895 — funil completo 30/09";
+export const RESTORED_5895_FUNNEL_LABEL =
+  "Anúncios 5895 — funil completo 30/09";
 export const MAIN_FUNNELS = [
   LEGACY_MAIN_FUNNEL,
   AD_5895_FUNNEL,

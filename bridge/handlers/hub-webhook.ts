@@ -22,6 +22,10 @@ import {
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import {
+  isRestoredFunnelButton,
+  restoredButtonAction,
+} from "../shared/restored-funnel-buttons.ts";
 import { registrarPedidoHumano } from "../shared/pedido-humano.ts";
 import {
   classificarIntencaoComercial,
@@ -446,7 +450,9 @@ async function handleWhatsApp(db: Db, p: Json) {
           }
         }
         if (
-          menuClick?.id.startsWith("menu_") &&
+          menuClick &&
+          (menuClick.id.startsWith("menu_") ||
+            isRestoredFunnelButton(menuClick.id)) &&
           await claimDelivery(
             db,
             `wa-action-${channel.id}-${m.id}-${menuClick.id}`,
@@ -3528,6 +3534,31 @@ export async function handleMenuClick(
   acct?: CwAcct,
   inboundMessageId?: string,
 ): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+  const restoredAction = restoredButtonAction(menuId);
+  if (restoredAction) {
+    const { error } = await db.from("events").insert({
+      source: "funil",
+      event_type: "restored_funnel_button_clicked",
+      channel_id: channel.id,
+      payload: {
+        button_id: menuId,
+        inbound_message_id: inboundMessageId ?? null,
+      },
+    });
+    if (error) {
+      console.warn("registro de botão do funil falhou:", error.message);
+    }
+    if (restoredAction.kind === "route") {
+      return handleMenuClick(
+        db,
+        channel,
+        from,
+        restoredAction.menuId,
+        acct,
+        inboundMessageId,
+      );
+    }
+  }
   if (menuId === "menu_uso") {
     const daily = await claimDailyTag(db, String(channel.id), from, "uso");
     if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
@@ -3594,7 +3625,9 @@ export async function handleMenuClick(
     }
   }
   // "Agora não" da isca cai aqui e usa a mesma cauda de envio de texto do menu.
-  const content = iscaMatch?.acao === "nao"
+  const content = restoredAction?.kind === "text"
+    ? restoredAction.content
+    : iscaMatch?.acao === "nao"
     ? iscaMatch.isca.recusaMsg
     : MENU_CONTENT[menuId];
   if (!content) return { sent: false };
@@ -3917,7 +3950,7 @@ async function handleMessenger(db: Db, p: Json) {
       }
       if (
         !adEnrollment?.deferIntent &&
-        /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso)|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
+        /^(?:menu_(?:preco|depoimento|plantio|nutricao|uso)|f[1-5]_|preco_|tam_|pag_|uso_|plantio_|nutricao_)/
           .test(actionId)
       ) {
         const claimed = await claimDelivery(
@@ -3929,7 +3962,10 @@ async function handleMessenger(db: Db, p: Json) {
           ),
           "social-price-action",
         );
-        if (claimed && actionId.startsWith("menu_")) {
+        if (
+          claimed && (actionId.startsWith("menu_") ||
+            isRestoredFunnelButton(actionId))
+        ) {
           if (actionId === "menu_preco") {
             await recordInboundCommercialIntent(
               db,

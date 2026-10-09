@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
+    /^(menu_|f[1-5]_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
       .test(value)
   ) {
     return value;
@@ -57,7 +57,8 @@ export function normalizeHybridMenuClick(
     [/\bquero o material\b/, "menu_isca_silagem"],
     [/\bagora nao\b/, "menu_isca_nao_silagem"],
   ];
-  return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ?? value;
+  return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ??
+    normalizeHybridButtonReply(value) ?? value;
 }
 
 export function normalizeHybridButtonReply(
@@ -91,6 +92,21 @@ export function normalizeHybridButtonReply(
     "boleto": "pag_boleto",
     "quero o material": "menu_isca_silagem",
     "agora nao": "menu_isca_nao_silagem",
+    "quero saber mais": "f1_sim",
+    "so olhando": "f1_olhando",
+    "quanto produz": "f1_continuar",
+    "leite": "f2_leite",
+    "corte": "f2_corte",
+    "os dois": "f2_ambos",
+    "quero o segredo": "f2_continuar",
+    "milho": "f3_milho",
+    "capim": "f3_capim",
+    "nao planto": "f3_nao",
+    "quero ver": "f3_continuar",
+    "ja sim": "f4_ja",
+    "nunca gracas": "f4_nunca",
+    "sim quero": "f5_sim",
+    "vou informar": "f5_local",
   };
   return replies[normalized];
 }

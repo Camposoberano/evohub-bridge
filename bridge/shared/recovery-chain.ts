@@ -12,8 +12,8 @@ import { isClosedOutcome } from "./outcome-labels.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
 import { consultaEmLotes } from "./lotes.ts";
 import {
-  AD_5895_FUNNEL,
   LEGACY_MAIN_FUNNEL,
+  MAIN_FUNNELS,
   mainFunnelForChannel,
 } from "./funnel-identity.ts";
 
@@ -233,7 +233,7 @@ export async function pumpRecoveryChain(
     .select(
       "conversation_id,chatwoot_conversation_id,last_sent_at,status,funnel",
     )
-    .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
+    .in("funnel", MAIN_FUNNELS)
     .in("status", ["completed", "paused"])
     .limit(500);
   if (error) throw error;
@@ -300,7 +300,7 @@ export async function pumpRecoveryChain(
       (lote) =>
         db.from("scheduled_messages")
           .select("conversation_id,funnel,sent_at")
-          .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
+          .in("funnel", MAIN_FUNNELS)
           .eq("status", "sent")
           .in("conversation_id", lote)
           .order("sent_at", { ascending: false }),

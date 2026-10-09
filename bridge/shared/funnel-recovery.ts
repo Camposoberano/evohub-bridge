@@ -4,9 +4,10 @@ import { isClosedOutcome } from "./outcome-labels.ts";
 import { applyCompletionLabel } from "./completion-label.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
 import {
-  AD_5895_FUNNEL,
   LEGACY_MAIN_FUNNEL,
+  MAIN_FUNNELS,
   mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
 } from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
@@ -138,10 +139,13 @@ export function canAutoResume(input: {
 export function stillBlocksCompletion(
   row: { status?: unknown; send_at?: unknown; sent_at?: unknown },
   now: number,
+  funnel?: string,
 ): boolean {
   const status = String(row.status ?? "");
   if (status === "pending" || status === "paused") return true;
   if (status !== "failed") return false;
+  // A restauração não pode ser concluída com uma peça multimídia perdida.
+  if (funnel === RESTORED_5895_FUNNEL) return true;
   // send_at primeiro: quem falhou nunca chegou a ter sent_at.
   const at = Date.parse(String(row.send_at ?? row.sent_at ?? ""));
   return !Number.isFinite(at) || now - at < FAILED_GRACE_MS;
@@ -177,7 +181,7 @@ export async function maintainFunnels(
   const result = { scanned: 0, completed: 0, resumed: 0, followups: 0 };
   const { data: sequences, error } = await db.from("sales_sequences")
     .select("id,conversation_id,chatwoot_conversation_id,funnel,status")
-    .in("funnel", [LEGACY_MAIN_FUNNEL, AD_5895_FUNNEL])
+    .in("funnel", MAIN_FUNNELS)
     .in("status", ["running", "paused"])
     .limit(500);
   if (error) throw error;
@@ -306,11 +310,14 @@ export async function maintainFunnels(
     if (queueError) throw queueError;
     const rows = (queue ?? []) as Json[];
     const sentRows = rows.filter((row) => row.status === "sent");
-    const remaining = rows.filter((row) => stillBlocksCompletion(row, now));
+    const remaining = rows.filter((row) =>
+      stillBlocksCompletion(row, now, String(sequence.funnel ?? ""))
+    );
     // Falhas velhas deixaram de segurar o funil, mas o lead não recebeu essas mensagens:
     // registrar quantas para o evento não sugerir uma entrega completa.
     const abandoned = rows.filter((row) =>
-      String(row.status) === "failed" && !stillBlocksCompletion(row, now)
+      String(row.status) === "failed" &&
+      !stillBlocksCompletion(row, now, String(sequence.funnel ?? ""))
     );
 
     if (sentRows.length > 0 && remaining.length === 0) {

@@ -4,6 +4,7 @@ import { deveAdiarPausaDaAbertura } from "./funil-anuncio.ts";
 import {
   AD_5895_FUNNEL,
   mainFunnelForConversation,
+  RESTORED_5895_FUNNEL,
 } from "./funnel-identity.ts";
 
 /** A request may replace a stale sequence only when no queue or sent-opening evidence exists. */
@@ -150,6 +151,18 @@ export async function autoPauseFunil(
     .eq("funnel", funnel)
     .maybeSingle();
   if (!seq) return false;
+
+  // A cópia restaurada de 30/09 é uma apresentação contínua. Respostas comuns e
+  // pedidos de preço entram entre as fases; somente atendimento humano, fechamento,
+  // catálogo e intervenção manual podem segurar as etapas restantes.
+  if (
+    funnel === RESTORED_5895_FUNNEL &&
+    comPrazo &&
+    /^(resposta_cliente|preco|video|plantio|nutricao|uso|interesse_geral|duvida_tecnica|intent_answered)$/i
+      .test(reason)
+  ) {
+    return false;
+  }
 
   // Uma resposta processada diretamente substitui a rota que aguardava abertura,
   // inclusive quando a sequência foi pausada manualmente.
