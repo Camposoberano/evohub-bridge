@@ -9,7 +9,7 @@ type Json = Record<string, unknown>;
 /** Repara inscrições perdidas por falha transitória no webhook ou no n8n. */
 export async function reconcileNewAdFunnels(
   now = Date.now(),
-): Promise<{ scanned: number; missing: number; attempted: number }> {
+): Promise<{ scanned: number; missing: number; attempted: number; confirmed: number }> {
   const db = admin();
   const { data: channels, error: channelError } = await db.from("channels")
     .select("id,name,external_id,phone_number").limit(200);
@@ -17,7 +17,7 @@ export async function reconcileNewAdFunnels(
   const channel = ((channels ?? []) as Json[]).find((item) =>
     canalAlvoFunil(item, "5895")
   );
-  if (!channel) return { scanned: 0, missing: 0, attempted: 0 };
+  if (!channel) return { scanned: 0, missing: 0, attempted: 0, confirmed: 0 };
   const since = new Date(now - 24 * 60 * 60_000).toISOString();
   const { data: conversations, error: conversationError } = await db.from(
     "conversations",
@@ -31,7 +31,7 @@ export async function reconcileNewAdFunnels(
   const candidates = ((conversations ?? []) as Json[]).filter((item) =>
     Number(item.chatwoot_conversation_id) > 0
   );
-  if (!candidates.length) return { scanned: 0, missing: 0, attempted: 0 };
+  if (!candidates.length) return { scanned: 0, missing: 0, attempted: 0, confirmed: 0 };
   const ids = candidates.map((item) => String(item.id));
   const [sequenceResult, contactResult] = await Promise.all([
     db.from("sales_sequences").select("conversation_id")
@@ -53,6 +53,7 @@ export async function reconcileNewAdFunnels(
   );
   let missing = 0;
   let attempted = 0;
+  let confirmed = 0;
   const seenContacts = new Set<string>();
   for (const conversation of candidates) {
     const contactId = String(conversation.contact_id);
@@ -73,6 +74,25 @@ export async function reconcileNewAdFunnels(
         true,
         { sourceMessageId: `ad-watchdog:${conversation.id}` },
       );
+      const { data: repaired, error: verifyError } = await db.from(
+        "sales_sequences",
+      ).select("id").eq("conversation_id", conversation.id)
+        .eq("funnel", RESTORED_5895_FUNNEL).maybeSingle();
+      if (verifyError) throw verifyError;
+      if (repaired) {
+        confirmed++;
+        const { error: eventError } = await db.from("events").insert({
+          source: "ad-funnel",
+          event_type: "ad_watchdog_enrolled",
+          channel_id: channel.id,
+          payload: {
+            conversation_id: conversation.id,
+            chatwoot_conversation_id: conversation.chatwoot_conversation_id,
+            sequence_id: repaired.id,
+          },
+        });
+        if (eventError) console.warn("ad-watchdog: auditoria falhou", eventError.message);
+      }
     } catch (error) {
       console.error(
         "ad-funnel-watchdog: inscrição falhou",
@@ -81,5 +101,5 @@ export async function reconcileNewAdFunnels(
       );
     }
   }
-  return { scanned: candidates.length, missing, attempted };
+  return { scanned: candidates.length, missing, attempted, confirmed };
 }

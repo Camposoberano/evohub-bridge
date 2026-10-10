@@ -1312,9 +1312,9 @@ function startAdFunnelWatchdogLoop() {
       running = false;
     }
   };
-  setTimeout(tick, 45_000);
-  setInterval(tick, 60_000);
-  console.log("ad-funnel-watchdog loop ON (60s)");
+  setTimeout(tick, 10_000);
+  setInterval(tick, 20_000);
+  console.log("ad-funnel-watchdog loop ON (20s)");
 }
 
 // Cadeia automática de recuperação (1·2·4·7 dias). DESLIGADA por padrão: ligar significa

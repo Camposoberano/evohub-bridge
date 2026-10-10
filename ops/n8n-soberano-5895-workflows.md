@@ -32,3 +32,11 @@ Na #3524, a pergunta pré-preenchida do anúncio também foi confundida com pedi
 3. Tirar as credenciais embutidas nos dois nós HTTP do cron da fila e substituí-las por credenciais gerenciadas no n8n.
 
 Não interpretar `accepted` como mensagem entregue. `sent` indica confirmação do serviço de envio, e a entrega ao aparelho pode ser posterior.
+
+## Rastreamento da entrada por anúncio (10/10)
+
+O webhook UAZAPI reconhece `referral`/`externalAdReply` da Meta antes de classificar o texto. `ingestInbound` persiste `origem=anuncio` e agora grava `ad_origin_detected` na primeira detecção; perguntas de preço ou qualquer outro texto mantêm essa atribuição. O funil principal é inscrito uma vez por conversa. Um watchdog no bridge consulta as conversas de anúncio abertas do 5895 a cada 20 segundos, tenta recuperar as que não têm a sequência `mega-sorgo-5895-20260930` e registra `ad_watchdog_enrolled` quando confirma a criação. A execução manual de diagnóstico está em `ops/run-ad-funnel-watchdog-5895.ts`.
+
+Na #3527, aberta às 18:17:38 BRT com `referral` e pergunta de preço, o watchdog encontrou a sequência ausente e a criou às 18:18:27. A primeira peça saiu às 18:19:28; às 18:23:38 havia cinco enviadas e 26 pendentes. O cron da fila pode adicionar até cerca de um minuto entre `send_at` e `sent_at`; acompanhar esse intervalo em novos leads. Não habilitamos disparo indiscriminado para todas as conversas novas porque a referência da Meta está disponível e houve conversa iniciada por saída do próprio número.
+
+Na mesma #3527, antes do funil restaurado, foram enviadas cinco peças de preço fora da fila do funil, incluindo “Promoção SAFRINHA” com validade 20/09/2026 já vencida. Essas peças não carregam `funnel` nem `scheduled_message_id` no banco; a origem exata da automação legada ainda precisa ser localizada no UAZAPI/Chatwoot. Não repetir esse conteúdo nas ações novas.

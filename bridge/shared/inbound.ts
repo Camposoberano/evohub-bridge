@@ -254,6 +254,7 @@ async function ingestInboundClaimed(
   if (convQueryError) throw convQueryError;
 
   let conv = openConv as Json | null;
+  const previouslyMarkedAsAd = conv?.origem === "anuncio";
   const source = sourceSnapshot(channel, msg.from, msg.referral);
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
@@ -281,6 +282,24 @@ async function ingestInboundClaimed(
     };
     await db.from("conversations").update(sourceUpdate).eq("id", conv.id);
     conv = { ...conv, ...sourceUpdate };
+  }
+
+  // A referência da Meta é o sinal de origem, independentemente do texto enviado.
+  // O evento registra a primeira detecção sem copiar dados pessoais ou o anúncio.
+  if (!msg.outgoing && msg.referral && !previouslyMarkedAsAd) {
+    const { error: attributionEventError } = await db.from("events").insert({
+      source: "ad-funnel",
+      event_type: "ad_origin_detected",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: conv.chatwoot_conversation_id ?? null,
+        message_id: msg.metaMessageId ?? null,
+      },
+    });
+    if (attributionEventError) {
+      console.warn("ad_origin_detected: auditoria falhou", attributionEventError.message);
+    }
   }
 
   const attachments = msg.attachments ?? [];
