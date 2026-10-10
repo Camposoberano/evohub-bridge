@@ -1,4 +1,5 @@
 import { foldText } from "./ad-lead.ts";
+import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
 
 export type CanalFunil = Record<string, unknown>;
 
@@ -107,6 +108,14 @@ export function deveIgnorarInscricaoHistorica(
   if (Number.isFinite(openedAtMs) &&
     openedAtMs >= Date.parse("2026-10-06T03:00:00.000Z")) return false;
   return !hasSequence && inboundMessageCount > 1;
+}
+
+/** A saudação interrogativa do anúncio não é pedido de atendimento humano. */
+export function deveEncaminharPerguntaDeAnuncio(
+  funnel: string,
+  unsupportedQuestion: boolean,
+): boolean {
+  return unsupportedQuestion && funnel !== RESTORED_5895_FUNNEL;
 }
 
 /** Detecta apenas a falha parcial: sequência ativa criada, sem fila nem evento de sucesso. */

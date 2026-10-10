@@ -38,6 +38,7 @@ import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 import {
   canalAlvoFunil,
+  deveEncaminharPerguntaDeAnuncio,
   deveIgnorarInscricaoHistorica,
   suprimirAberturaGenerica,
   usaNovoFunilNoCanal,
@@ -1073,7 +1074,10 @@ export async function autoEnrollFunil(
   // são executados em seguida, pela fila da etapa adiada.
   // Na versão restaurada a pergunta de entrega recebe resposta curta e o
   // roteiro continua. O handoff antigo parava as 31 peças antes da saudação.
-  const automaticHandoff = unsupportedQuestion ||
+  const automaticHandoff = deveEncaminharPerguntaDeAnuncio(
+    funnelId,
+    unsupportedQuestion,
+  ) ||
     (adFunnelOrigin && funnelId !== RESTORED_5895_FUNNEL &&
       isLogisticaIntent(content));
   const openingReason = humanHandoffWillHandle || automaticHandoff

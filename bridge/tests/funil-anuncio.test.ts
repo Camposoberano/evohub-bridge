@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canalAlvoFunil,
   deveAdiarPausaDaAbertura,
+  deveEncaminharPerguntaDeAnuncio,
   deveIgnorarInscricaoHistorica,
   inscricaoPrecisaDeRecuperacao,
   motivoEntradaAnuncio,
@@ -113,6 +114,14 @@ Deno.test("não reinscreve conversa histórica sem sequência", () => {
     deveIgnorarInscricaoHistorica(false, 5, "2026-10-07T13:00:00-03:00"),
     false,
   );
+});
+
+Deno.test("pergunta da saudação do anúncio não pausa o funil restaurado", () => {
+  assertEquals(
+    deveEncaminharPerguntaDeAnuncio("mega-sorgo-5895-20260930", true),
+    false,
+  );
+  assertEquals(deveEncaminharPerguntaDeAnuncio("mega-sorgo", true), true);
 });
 
 Deno.test("recupera só sequência ativa sem fila e sem evento de sucesso", () => {
