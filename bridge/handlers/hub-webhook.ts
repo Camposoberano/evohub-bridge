@@ -1686,7 +1686,7 @@ async function handleUsoSelecionado(
     .eq("channel_id", channel.id).eq("external_contact_id", from)
     .maybeSingle();
   const { data: conv } = contact
-    ? await db.from("conversations").select("id")
+    ? await db.from("conversations").select("id,chatwoot_conversation_id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
@@ -1779,7 +1779,20 @@ async function handleUsoSelecionado(
       );
     }
   }
-  if (channel.type === "facebook" || channel.type === "instagram") {
+  if (mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+    enabledN8nActions().has("preco")) {
+    const cwConvId = Number(conv?.chatwoot_conversation_id);
+    if (!cwConvId) throw new Error("conversa sem ID Chatwoot para preço após uso");
+    const dispatched = await dispatchSoberanoAction({
+      request_id: eventMessageId ??
+        `use-price:${use}:${channel.id}:${from}:${crypto.randomUUID()}`,
+      source: "intent",
+      chatwoot_conversation_id: cwConvId,
+      action: "preco",
+      funnel_version: RESTORED_5895_FUNNEL,
+    });
+    if (!dispatched.ok) throw new Error(`n8n preço após uso: ${dispatched.error}`);
+  } else if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialPrecoSequence(db, channel, from);
   } else {
     await handlePrecoSequence(db, channel, from, acct);
@@ -2248,6 +2261,27 @@ export async function handlePrecoClick(
     ).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle()
     : { data: null };
+  const dispatchPriceSelection = async (
+    selection: string,
+    quoteRegistered?: boolean,
+  ): Promise<boolean> => {
+    if (mainFunnelForChannel(channel) !== RESTORED_5895_FUNNEL ||
+      !enabledN8nActions().has("preco")) return false;
+    const cwConvId = Number(conv?.chatwoot_conversation_id);
+    if (!cwConvId) throw new Error("conversa sem ID Chatwoot para preço no n8n");
+    const dispatched = await dispatchSoberanoAction({
+      request_id: _actionEventId ??
+        `price:${selection}:${channel.id}:${from}:${crypto.randomUUID()}`,
+      source: "intent",
+      chatwoot_conversation_id: cwConvId,
+      action: "preco",
+      funnel_version: RESTORED_5895_FUNNEL,
+      selection,
+      ...(quoteRegistered == null ? {} : { quote_registered: quoteRegistered }),
+    });
+    if (!dispatched.ok) throw new Error(`n8n preço/${selection}: ${dispatched.error}`);
+    return true;
+  };
   // registra no Chatwoot e DEVOLVE o id — o id precisa ir pro insert em messages
   // (chatwoot_message_id), senão o pull-loop sync-chatwoot-out acha a msg "órfã" no Chatwoot
   // e REENVIA como texto (causa da duplicação do card/frete vista no teste v3).
@@ -2291,6 +2325,7 @@ export async function handlePrecoClick(
   };
 
   if (id === "preco_pagamento") {
+    if (await dispatchPriceSelection(id)) return;
     await envia(
       {
         type: "interactive",
@@ -2347,7 +2382,10 @@ export async function handlePrecoClick(
       },
       { origin: "cliente", messageId: _actionEventId ?? null },
     );
-    await envia({ type: "text", text: { body: text } }, text, "text");
+    if (!tamanhoCard(selectedPackage) ||
+      !(await dispatchPriceSelection(id, pedido.registrado))) {
+      await envia({ type: "text", text: { body: text } }, text, "text");
+    }
     const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
     if (pedido.registrado && assignee > 0 && conv?.chatwoot_conversation_id) {
       await assignConversation(
@@ -2366,6 +2404,7 @@ export async function handlePrecoClick(
   }
 
   if (id === "preco_area_maior") {
+    if (await dispatchPriceSelection(id)) return;
     const text =
       "Para áreas acima de 4 hectares, diga quantos hectares pretende plantar e sua região (município/UF). O Cícero confirma o volume e a cotação exata.";
     await envia({ type: "text", text: { body: text } }, text, "text");
@@ -2373,7 +2412,7 @@ export async function handlePrecoClick(
   }
 
   if (id === "pag_pix") {
-    await envia(
+    if (!(await dispatchPriceSelection(id))) await envia(
       {
         type: "text",
         text: {
@@ -2392,7 +2431,7 @@ export async function handlePrecoClick(
   }
 
   if (id === "pag_cartao") {
-    await envia(
+    if (!(await dispatchPriceSelection(id))) await envia(
       {
         type: "text",
         text: {
@@ -2411,7 +2450,7 @@ export async function handlePrecoClick(
   }
 
   if (id === "pag_boleto") {
-    await envia(
+    if (!(await dispatchPriceSelection(id))) await envia(
       {
         type: "text",
         text: {
@@ -2432,7 +2471,9 @@ export async function handlePrecoClick(
   if (id === "preco_comprar") {
     const texto =
       "🤝 *Fechado!* O Cícero vai te chamar em instantes pra concluir o pedido.\n\n💳 PIX direto com a empresa ou pelo site com Mercado Pago — como o senhor preferir!";
-    await envia({ type: "text", text: { body: texto } }, texto, "text");
+    if (!(await dispatchPriceSelection(id))) {
+      await envia({ type: "text", text: { body: texto } }, texto, "text");
+    }
 
     // Atribui a conversa a um atendente. Sem isso o lead quente ficava só com etiqueta e
     // nota privada: em 03/08, 11 dos 14 que clicaram aqui nunca foram fechados porque a
@@ -2457,6 +2498,7 @@ export async function handlePrecoClick(
   }
 
   if (id === "preco_tamanho") {
+    if (await dispatchPriceSelection(id)) return;
     await envia(
       {
         type: "interactive",
@@ -2509,6 +2551,7 @@ export async function handlePrecoClick(
   // Clique no pacote -> descrição sem preço -> cotação humana sob solicitação.
   const card = tamanhoCard(id);
   if (card) {
+    if (await dispatchPriceSelection(id)) return;
     const imageUrl = await imagemDoPacotePreco(db, id);
     if (imageUrl) {
       await sendSocialPieces(

@@ -122,9 +122,21 @@ export function validateEnqueueBody(
   ) return { ok: false, error: "identidade ou versão inválida" };
   if (request.selection != null &&
     (typeof request.selection !== "string" ||
-      !/^(?:plantio_(?:inicio|solo|colheita|(?:[1-9]|10))|nutricao_(?:[1-9]|10))$/.test(request.selection) ||
-      !request.selection.startsWith(`${action}_`))) {
+      !/^(?:plantio_(?:inicio|solo|colheita|(?:[1-9]|10))|nutricao_(?:[1-9]|10)|preco_(?:pagamento|area_maior|comprar|tamanho|cotar_tam_(?:2kg|4kg|10kg|20kg|mais20kg))|pag_(?:pix|cartao|boleto)|tam_(?:2kg|4kg|10kg|20kg|mais20kg))$/.test(request.selection) ||
+      !(action === "preco"
+        ? /^(?:preco_|pag_|tam_)/.test(request.selection)
+        : request.selection.startsWith(`${action}_`)))) {
     return { ok: false, error: "seleção inválida para a ação" };
+  }
+  if (request.quote_registered != null &&
+    (typeof request.quote_registered !== "boolean" ||
+      action !== "preco" ||
+      !String(request.selection ?? "").startsWith("preco_cotar_"))) {
+    return { ok: false, error: "estado de cotação inválido" };
+  }
+  if (String(request.selection ?? "").startsWith("preco_cotar_") &&
+    typeof request.quote_registered !== "boolean") {
+    return { ok: false, error: "estado de cotação obrigatório" };
   }
   if (!Array.isArray(body.pieces)) return { ok: false, error: "pieces obrigatório" };
   const pieces = body.pieces as unknown[];

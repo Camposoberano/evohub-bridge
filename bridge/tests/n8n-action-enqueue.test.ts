@@ -28,6 +28,19 @@ Deno.test("aceita intenção automática no mesmo workflow editável da macro", 
   assertEquals(result.ok, true);
 });
 
+Deno.test("aceita botão do funil certo e exige resultado para cotação", () => {
+  const piece = [{ day: 0, type: "text", payload: { content: "Resposta" }, offset_seconds: 0 }];
+  const valid = (action: string, selection: string, quote_registered?: boolean) =>
+    validateEnqueueBody({ request: { ...request, action, selection, quote_registered }, pieces: piece }).ok;
+  assertEquals(valid("plantio", "plantio_10"), true);
+  assertEquals(valid("nutricao", "nutricao_2"), true);
+  assertEquals(valid("preco", "tam_4kg"), true);
+  assertEquals(valid("preco", "preco_cotar_tam_4kg", true), true);
+  assertEquals(valid("preco", "preco_cotar_tam_4kg"), false);
+  assertEquals(valid("plantio", "nutricao_2"), false);
+  assertEquals(valid("preco", "tam_999kg"), false);
+});
+
 Deno.test("mesmo evento gera as mesmas peças e mantém a ordem", async () => {
   const body = validateEnqueueBody({
     request: { ...request, action: "preco", source: "macro" },

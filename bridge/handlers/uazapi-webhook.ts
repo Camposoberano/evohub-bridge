@@ -458,7 +458,7 @@ async function handleUazapiClick(
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
   ) {
-    await handlePrecoClick(db, channel, from, id, acct);
+    await handlePrecoClick(db, channel, from, id, acct, inboundMessageId);
   } else if (id.startsWith("plantio_")) {
     await handlePlantioClick(db, channel, from, id, acct, inboundMessageId);
   } else if (id.startsWith("nutricao_")) {

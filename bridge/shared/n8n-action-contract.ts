@@ -25,8 +25,10 @@ export type ActionRequest = {
   chatwoot_conversation_id: number;
   action: SoberanoAction;
   funnel_version: string;
-  /** Botão de detalhe dentro do fluxo de plantio ou nutrição. */
+  /** Botão de detalhe dentro do fluxo de preço, plantio ou nutrição. */
   selection?: string;
+  /** Resultado do registro de cotação; usado só em preco_cotar_*. */
+  quote_registered?: boolean;
 };
 
 export function isSoberanoAction(value: string): value is SoberanoAction {
