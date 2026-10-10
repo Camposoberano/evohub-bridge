@@ -71,6 +71,10 @@ import {
   runOperationalAudit,
 } from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
+import {
+  clearMacroRequestId,
+  currentMacroRequestId,
+} from "./shared/macro-command-id.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
 import { agendarLoop } from "./shared/loop-guard.ts";
 import {
@@ -842,6 +846,12 @@ function startMacroCommandLoop() {
         console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
 
         try {
+          const macroDb = admin();
+          const requestId = await currentMacroRequestId(
+            macroDb,
+            cwConvId,
+            cmdLabel,
+          );
           const r = await fetch(
             `http://localhost:${port}/funil-control?token=${
               encodeURIComponent(secret)
@@ -852,6 +862,7 @@ function startMacroCommandLoop() {
               body: JSON.stringify({
                 action,
                 chatwoot_conversation_id: cwConvId,
+                request_id: requestId,
               }),
             },
           );
@@ -883,12 +894,11 @@ function startMacroCommandLoop() {
           // Em falha, ela permanece e o próximo tick tenta novamente.
           try {
             const freshLabels = await getConversationLabels(cwConvId, acct);
-            const cleaned = freshLabels.filter((l) =>
-              !CMD_LABEL_KEYS.includes(l)
-            );
+            const cleaned = freshLabels.filter((l) => l !== cmdLabel);
             if (cleaned.length !== freshLabels.length) {
               await setConversationLabels(cwConvId, cleaned, acct);
             }
+            await clearMacroRequestId(macroDb, cwConvId, cmdLabel);
           } catch (e) {
             console.warn("macro-poll cleanup:", String(e).slice(0, 120));
           }

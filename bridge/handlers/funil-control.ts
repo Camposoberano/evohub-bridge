@@ -20,6 +20,11 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
 import { enrollIfNew } from "./funil-enroll.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
+import { isSoberanoAction } from "../shared/n8n-action-contract.ts";
+import {
+  dispatchSoberanoAction,
+  enabledN8nActions,
+} from "../shared/n8n-action-router.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
@@ -131,6 +136,47 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "canal da conversa indisponível" }, 500);
   }
   const funnelId = mainFunnelForChannel(controlChannel);
+
+  // As flags ligam uma macro por vez ao workflow n8n correspondente. Chamadas
+  // vindas de /n8n-action-enqueue passam pela implementação local sem recursão.
+  if (
+    funnelId === RESTORED_5895_FUNNEL &&
+    body.n8n_internal !== true &&
+    isSoberanoAction(action) &&
+    enabledN8nActions().has(action)
+  ) {
+    const requestId = typeof body.request_id === "string" &&
+        body.request_id.trim()
+      ? body.request_id
+      : `direct:${crypto.randomUUID()}`;
+    const dispatched = await dispatchSoberanoAction({
+      request_id: requestId,
+      source: "macro",
+      chatwoot_conversation_id: cwConvId,
+      action,
+      funnel_version: RESTORED_5895_FUNNEL,
+    });
+    if (!dispatched.ok) {
+      return json({
+        ok: false,
+        terminal: dispatched.terminal,
+        error: dispatched.error,
+      }, dispatched.terminal ? 422 : 503);
+    }
+    if (!dispatched.duplicate && dispatched.accepted > 0) {
+      await nota(
+        cwConvId,
+        `📥 Ação "${action}" aceita no n8n: ${dispatched.accepted} peça(s) na fila. Envio ainda será confirmado pelo bridge.`,
+        acct,
+      );
+    }
+    return json({
+      ok: true,
+      action,
+      queued: dispatched.accepted,
+      duplicate: dispatched.duplicate,
+    });
+  }
 
   if (action === "pause") {
     const { count: paused } = await db.from("scheduled_messages").update({
@@ -548,14 +594,15 @@ export async function handle(req: Request): Promise<Response> {
       );
     }
     try {
-      // Uma sequencia comercial manual substitui a conversa automatica naquele
-      // momento. Pausa o funil principal antes de enviar para nao misturar
-      // preco, audios e videos de jornadas diferentes.
-      const funnelPaused = await autoPauseFunil(
-        String(conv.id),
-        `macro manual: ${action}`,
-        { funnel: funnelId },
-      );
+      // No 5895 a resposta solicitada entra entre as pausas da apresentação.
+      // A sequência fiel de 30/09 continua; não fica presa após preço/vídeo.
+      const funnelPaused = funnelId === RESTORED_5895_FUNNEL
+        ? false
+        : await autoPauseFunil(
+          String(conv.id),
+          `macro manual: ${action}`,
+          { funnel: funnelId },
+        );
       const dispatch = await handleMenuClick(
         db,
         resolved.channel,

@@ -48,6 +48,10 @@ import {
   RESTORED_5895_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
+import {
+  dispatchSoberanoAction,
+  enabledN8nActions,
+} from "../shared/n8n-action-router.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
@@ -1074,16 +1078,41 @@ export async function autoEnrollFunil(
 
   let outcome: EnrollOutcome;
   try {
-    outcome = await enrollIfNew(db, channel, from, {
-      // A resposta específica ou o handoff humano substitui a abertura genérica.
-      skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
-      openingReason,
-      originSignal,
-      conversation,
-    });
+    if (
+      funnelId === RESTORED_5895_FUNNEL &&
+      conversation?.id && enabledN8nActions().has("funil")
+    ) {
+      const dispatched = await dispatchSoberanoAction({
+        request_id: options.sourceMessageId ?? `ad-conversation:${conversation.id}`,
+        source: "ad",
+        chatwoot_conversation_id: Number(conversation.chatwoot_conversation_id),
+        action: "funil",
+        funnel_version: RESTORED_5895_FUNNEL,
+      });
+      if (!dispatched.ok) throw new Error(dispatched.error);
+      outcome = dispatched.duplicate ? "already" : "created";
+    } else {
+      outcome = await enrollIfNew(db, channel, from, {
+        // A resposta específica ou o handoff humano substitui a abertura genérica.
+        skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
+        openingReason,
+        originSignal,
+        conversation,
+      });
+    }
   } catch (error) {
     console.error("autoEnrollFunil inscrição falhou:", error);
-    outcome = "in_progress";
+    // A entrada de anúncio não pode desaparecer quando o n8n oscila. O caminho
+    // histórico permanece como retaguarda e a deduplicação consulta a sequência.
+    try {
+      outcome = await enrollIfNew(db, channel, from, {
+        originSignal,
+        conversation,
+      });
+    } catch (fallbackError) {
+      console.error("autoEnrollFunil retaguarda falhou:", fallbackError);
+      outcome = "in_progress";
+    }
   }
   let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome) &&
     !openingReason;
@@ -1159,7 +1188,10 @@ export async function autoEnrollFunil(
 
   // Resposta automática pausa com prazo; handoff humano não retoma sozinho. Vale também
   // para respostas posteriores. A primeira entrada do anúncio precisa enviar a abertura.
-  if (openingReason && conversation?.id && !deferIntent) {
+  if (
+    openingReason && conversation?.id && !deferIntent &&
+    !(funnelId === RESTORED_5895_FUNNEL && openingReason === "intent_answered")
+  ) {
     try {
       await autoPauseFunil(String(conversation.id), openingReason, {
         comPrazo: openingReason !== "human_handoff",
