@@ -44,6 +44,10 @@ export function normalizeHybridMenuClick(
   const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
     .toLowerCase();
+  // A UazAPI pode devolver apenas o título do botão. Títulos específicos
+  // precisam vencer intenções genéricas como "silagem" e "produção".
+  const exactReply = normalizeHybridButtonReply(value);
+  if (exactReply) return exactReply;
   const aliases: Array<[RegExp, string]> = [
     [/\b(preco|valor|calcular|area)\b/, "menu_preco"],
     [/\b(plantar|plantio)\b/, "menu_plantio"],
@@ -57,8 +61,7 @@ export function normalizeHybridMenuClick(
     [/\bquero o material\b/, "menu_isca_silagem"],
     [/\bagora nao\b/, "menu_isca_nao_silagem"],
   ];
-  return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ??
-    normalizeHybridButtonReply(value) ?? value;
+  return aliases.find(([pattern]) => pattern.test(normalized))?.[1] ?? value;
 }
 
 export function normalizeHybridButtonReply(
@@ -107,6 +110,19 @@ export function normalizeHybridButtonReply(
     "nunca gracas": "f4_nunca",
     "sim quero": "f5_sim",
     "vou informar": "f5_local",
+    "como comecar": "plantio_inicio",
+    "solo e adubacao": "plantio_solo",
+    "corte e silagem": "plantio_colheita",
+    "visao geral": "nutricao_1",
+    "proteina": "nutricao_2",
+    "energia ndt": "nutricao_3",
+    "fibras": "nutricao_4",
+    "minerais": "nutricao_5",
+    "gordura": "nutricao_6",
+    "digestibilidade": "nutricao_7",
+    "fermentacao": "nutricao_8",
+    "producao estimada": "nutricao_9",
+    "comparativo": "nutricao_10",
   };
   return replies[normalized];
 }

@@ -2,6 +2,8 @@
 
 Instância: `https://automacao.soberano.pro`. Projeto n8n: pessoal de Cícero de Matos (`LTI5Jh7p1cbLrrAX`). Os 14 workflows foram publicados em 10/10/2026. As dez ações imediatas estão habilitadas no bridge; as quatro recuperações continuam com a flag desligada até preservar o uso de template fora da janela Meta.
 
+Janela solicitada para os disparos automáticos dos funis: 06h–21h, horário de Fortaleza (UTC−3). O agendamento e a fila cortam às 20h55 para que envios em andamento terminem antes das 21h. Peças restantes conservam seus intervalos úteis e retomam a partir das 06h do dia seguinte. Respostas humanas no Chatwoot e campanhas independentes têm regras próprias.
+
 | Ação | Workflow ID | Peças | Situação |
 | --- | --- | ---: | --- |
 | Funil completo 30-09 | `Gi816kZhzzlSZGbG` | 31, em 5 fases | Publicado e habilitado |

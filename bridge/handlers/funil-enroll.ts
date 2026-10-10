@@ -57,8 +57,8 @@ import {
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
 const CANAL_ANUNCIO_ALVO = "5895";
-// Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
-// da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
+// Jornada estendida: os intervalos contam apenas dentro de 06h-20h55 BRT e começam no fim
+// da fase anterior. O corte às 20h55 protege o limite de 21h; às 06h continua o saldo.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
 export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
@@ -407,7 +407,7 @@ export function iniciosDosAcessos(
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
-    // Automático respeita 6h-22h desde a primeira peça. Manual/fast passa skipClamp=true
+    // Automático respeita 6h-20h55 desde a primeira peça. Manual/fast passa skipClamp=true
     // e continua imediato, inclusive fora do horário comercial.
     const ini = i === 0
       ? immediateFirst ? agora : clamp(agora)
