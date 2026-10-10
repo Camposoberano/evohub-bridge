@@ -73,4 +73,11 @@ Deno.test("initial ad intent is retained for a route after the opening", () => {
   if (deferredAdRoute("Boa tarde") !== null) {
     throw new Error("a greeting should not enqueue a secondary route");
   }
+  if (
+    deferredAdRoute(
+      "Olá! Quer saber mais sobre as sementes de alta performance do Mega Sorgo Santa Elisa?",
+    ) !== null
+  ) {
+    throw new Error("a saudação automática do anúncio não pede atendimento humano");
+  }
 });

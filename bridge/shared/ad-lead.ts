@@ -37,6 +37,12 @@ export function shouldDeferInitialAdIntent(
 
 /** Rota comercial identificada na mensagem inicial, para ser acionada após a abertura. */
 export function deferredAdRoute(content: string): string | null {
+  // A pergunta pré-preenchida do próprio anúncio oferece informações; não pede Cícero.
+  const words = normalizedWords(content);
+  if (
+    words.startsWith("ola quer saber mais sobre") ||
+    words.startsWith("quer saber mais sobre as sementes")
+  ) return null;
   if (isPrecoIntent(content)) return "menu_preco";
   if (isVideoIntent(content)) return "menu_depoimento";
   if (isPlantioIntent(content)) return "menu_plantio";
