@@ -652,6 +652,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               ? "nutrição"
               : null;
             const routeWillHandle = Boolean(commercialIntent) ||
+              isLogisticaIntent(intentText) ||
               isVideoIntent(intentText) || isPlantioIntent(intentText) ||
               isNutricaoIntent(intentText) ||
               (isAreaAcimaDosPacotes(intentText) &&
@@ -786,6 +787,32 @@ async function handleWhatsApp(db: Db, p: Json) {
                     } catch { /* nota é bônus */ }
                   }
                 }
+              }
+            } else if (
+              isLogisticaIntent(intentText) &&
+              !isVideoIntent(intentText) &&
+              !isPlantioIntent(intentText) &&
+              !isNutricaoIntent(intentText) &&
+              adEnrollment?.adOrigin === true &&
+              !adEnrollment.deferIntent
+            ) {
+              const intentKey = (m.id as string) ?? (m.message_id as string) ??
+                new Date().toISOString();
+              if (
+                await claimDelivery(
+                  db,
+                  `intent-logistica-${channel.id}-${from}-${intentKey}`,
+                  "intent",
+                )
+              ) {
+                await handleMenuClick(
+                  db,
+                  channel as Json,
+                  from,
+                  "menu_logistica",
+                  acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
               }
             } else if (
               isVideoIntent(intentText) && !adEnrollment?.deferIntent
@@ -1110,6 +1137,8 @@ function interactiveReplyId(m: Json): { id: string; title: string } | null {
 
 // Conteúdo de fallback do menu de ação; preço sempre segue para cotação por pacote.
 const MENU_CONTENT: Record<string, string> = {
+  menu_logistica:
+    "Sim, enviamos para todo o Brasil. 📦 O pedido segue com nota fiscal, rastreamento e frete grátis. Se me disser sua cidade e estado, o Cícero confirma o prazo para sua região.",
   menu_preco:
     "Escolha o pacote e o Cícero confirma o valor exato conforme a quantidade e a região.",
   menu_plantio:

@@ -484,6 +484,8 @@ async function handleUazapiIntent(
     ? { name: "plantio", menu: "menu_plantio" }
     : isNutricaoIntent(intentText)
     ? { name: "nutricao", menu: "menu_nutricao" }
+    : isLogisticaIntent(intentText)
+    ? { name: "logistica", menu: "menu_logistica" }
     : null;
   let enrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
   try {
@@ -548,6 +550,10 @@ async function handleUazapiIntent(
     return;
   }
 
+  // A resposta logística de um anúncio complementa o funil restaurado; não é
+  // uma solicitação para parar as cinco fases ou atribuir atendimento humano.
+  if (intent.name === "logistica" && enrollment?.adOrigin !== true) return;
+
   const intentKey = msg.metaMessageId ?? new Date().toISOString();
   const claimed = await claimDelivery(
     db,
@@ -562,7 +568,7 @@ async function handleUazapiIntent(
     const { data: conversation } = await db.from("conversations").select("id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-    if (conversation?.id) {
+    if (conversation?.id && intent.name !== "logistica") {
       await autoPauseFunil(conversation.id as string, intent.name, {
         adOrigin: enrollment?.adOrigin === true,
       });

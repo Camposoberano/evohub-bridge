@@ -45,6 +45,7 @@ import {
 import {
   LEGACY_MAIN_FUNNEL,
   mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
 
@@ -1060,8 +1061,11 @@ export async function autoEnrollFunil(
     parecePerguntaDeAnuncio(content);
   // Perguntas iniciais de anúncio recebem a abertura; o handoff ou a rota específica
   // são executados em seguida, pela fila da etapa adiada.
+  // Na versão restaurada a pergunta de entrega recebe resposta curta e o
+  // roteiro continua. O handoff antigo parava as 31 peças antes da saudação.
   const automaticHandoff = unsupportedQuestion ||
-    (adFunnelOrigin && isLogisticaIntent(content));
+    (adFunnelOrigin && funnelId !== RESTORED_5895_FUNNEL &&
+      isLogisticaIntent(content));
   const openingReason = humanHandoffWillHandle || automaticHandoff
     ? "human_handoff"
     : options.responseWillHandle
