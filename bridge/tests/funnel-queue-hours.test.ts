@@ -8,11 +8,11 @@ Deno.test("moves an early block to 6h while preserving offsets", () => {
   ]), 39);
 });
 
-Deno.test("moves a block crossing 22h to next 6h", () => {
+Deno.test("moves a block crossing 21h to next 6h", () => {
   assertEquals(businessShiftMinutes([
-    "2026-07-13T00:58:00Z",
-    "2026-07-13T01:05:00Z",
-  ]), 482);
+    "2026-07-12T23:50:00Z",
+    "2026-07-13T00:00:00Z",
+  ]), 550);
 });
 
 Deno.test("keeps a valid business-hours block unchanged", () => {

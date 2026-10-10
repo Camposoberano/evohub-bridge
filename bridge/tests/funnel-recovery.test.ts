@@ -27,7 +27,7 @@ Deno.test("follow-up final conta dez horas úteis e pausa durante a noite", () =
   const now = lastSentAt;
   assertEquals(
     silentFollowupAt(lastSentAt, now),
-    Date.parse("2026-07-12T18:00:00.000Z"), // 15h BRT do dia seguinte
+    Date.parse("2026-07-12T19:00:00.000Z"), // 16h BRT do dia seguinte
   );
 });
 

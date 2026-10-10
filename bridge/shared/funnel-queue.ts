@@ -8,6 +8,8 @@ import { canSendSilentFollowup } from "./funnel-recovery.ts";
 import { bloqueiosPorConversa, motivoDoBloqueio } from "./gate-comercial.ts";
 import {
   brtMinuteOfDay,
+  FUNNEL_CUTOFF_MINUTE,
+  FUNNEL_OPEN_MINUTE,
   isWithinFunnelSendHours,
   nextFunnelSendAt,
 } from "./business-hours.ts";
@@ -77,8 +79,8 @@ export function businessShiftMinutes(values: string[]): number {
   if (!minutes.length) return 0;
   const min = Math.min(...minutes);
   const max = Math.max(...minutes);
-  if (min < 6 * 60) return 6 * 60 - min;
-  if (max >= 22 * 60) return 24 * 60 - min + 6 * 60;
+  if (min < FUNNEL_OPEN_MINUTE) return FUNNEL_OPEN_MINUTE - min;
+  if (max >= FUNNEL_CUTOFF_MINUTE) return 24 * 60 - min + FUNNEL_OPEN_MINUTE;
   return 0;
 }
 

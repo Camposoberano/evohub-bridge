@@ -53,7 +53,7 @@ export function isAbandonedFunnel(
 }
 
 const BRT_OFFSET_MS = 3 * 60 * 60_000;
-/** O funil roda 6h-22h, mas recuperação é mensagem fria depois de dias de silêncio —
+/** O funil roda 6h-21h, mas recuperação é mensagem fria depois de dias de silêncio —
  *  6h da manhã incomoda. 8h-20h. */
 const ABRE_H = 8;
 const FECHA_H = 20;
