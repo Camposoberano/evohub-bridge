@@ -29,11 +29,14 @@ Na #3524, a pergunta pré-preenchida do anúncio também foi confundida com pedi
 
 ## Pendências
 
-1. Revisar a janela de 24 horas e o template das recuperações antes de habilitar as quatro flags. O caminho antigo envia template quando a janela está fechada; o novo lote de peças ainda precisa preservar essa decisão.
+1. Migrar a recuperação com confirmação de envio por peça antes de habilitar as quatro flags. A cadeia automática usa `recovery_sent` para avançar de variação e envia template quando a janela Meta está fechada. O endpoint n8n atual só confirma que enfileirou; ativá-lo diretamente registraria uma recuperação antes de confirmar entrega e poderia repetir mensagens. Até essa ligação ficar pronta, a recuperação automática e manual continua no bridge.
 2. Migrar os leads antigos que receberam a versão curta só após checar janela Meta e atendimento humano ativo. A correção automática já permite reinscrição quando um lead de anúncio aberto desde 06/10 volta a escrever.
 3. Tirar as credenciais embutidas nos dois nós HTTP do cron da fila e substituí-las por credenciais gerenciadas no n8n.
+4. A prova por finalidade após escolha de uso ainda é enviada pelo bridge quando há mídia aprovada; migrar essa resposta opcional para o workflow de vídeo sem perder a checagem de aprovação do arquivo.
 
 Não interpretar `accepted` como mensagem entregue. `sent` indica confirmação do serviço de envio, e a entrega ao aparelho pode ser posterior.
+
+Em 10/10, os cliques de plantio/nutrição foram publicados no bridge em `f259d9c`; os de preço em `8be8520`. Ambos os deploys terminaram e o `/health` respondeu 200. As versões ativas dos três workflows coincidem com o conteúdo editado; a avaliação local do nó de conteúdo retornou as peças iniciais e as respostas por seleção esperadas. Onze verificações direcionadas do contrato/roteamento passaram. A consulta após 23:09 UTC não encontrou conversa nova no canal 5895; portanto ainda não há evidência de envio real dessas seleções em cliente após o deploy. O cron de fila continuava executando com sucesso a cada minuto.
 
 ## Rastreamento da entrada por anúncio (10/10)
 
