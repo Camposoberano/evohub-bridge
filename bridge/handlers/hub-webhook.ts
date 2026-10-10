@@ -3747,6 +3747,7 @@ export async function dispatchDeferredFunnelIntent(
     : {};
   const action = String(payload.__deferred_action ?? "");
   const allowed = new Set([
+    "menu_logistica",
     "menu_preco",
     "menu_depoimento",
     "menu_plantio",

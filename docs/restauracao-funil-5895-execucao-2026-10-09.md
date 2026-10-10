@@ -31,6 +31,13 @@ Auditoria final da segunda fase às 21:38 UTC: as cinco peças das 34 conversas 
 
 Scripts reexecutáveis: `ops/audit-5895-provider-first-phase.ts` cruza a fila com o histórico da Uazapi sem mudar dados; `ops/reconcile-3402-video.ts` guarda a reconciliação idempotente da etapa #3402 com prova do provedor. Os dois passaram em `deno check`.
 
+## Continuação em 10/10, após meia-noite de Fortaleza
+
+- Dois novos leads de anúncio chegaram após o deploy. #3512 entrou automaticamente na versão restaurada; as fases 1 e 2 (12 peças) ficaram `sent`, e a Uazapi registra um vídeo `Read` na fase 1 e um `Delivered` na fase 2, sem duplicação. As 19 peças restantes seguem agendadas.
+- #3511 perguntou somente "Vocês oferecem entrega em todo o Brasil?". A regra antiga tratou logística como atendimento humano e pausou as 31 peças antes da saudação. Nenhuma peça havia sido enviada. A correção `09dfc46` foi publicada com build `2026-10-10-funil-5895-logistica-sem-pausa`: perguntas de logística de anúncio recebem resposta automática sem pausar a versão restaurada. A fila da #3511 foi reprogramada, sem WhatsApp resend, para iniciar às 06h de Fortaleza em 10/10: sequência `running`, 31 peças `pending`.
+- A resposta de logística do #3511 será uma rota adiada, separada das 31 peças, às 06h07min20s de Fortaleza, após a primeira fase. O texto confirma entrega nacional, nota fiscal, rastreio e frete grátis; pede município/UF para confirmação do prazo. Ela depende do deploy que inclui `menu_logistica` entre as rotas adiadas.
+- Além da #3455, a #3475 pausou as 19 peças futuras após um áudio recebido; o sistema registrou `tipo_pedido: atendimento` e atribuiu a conversa. O usuário autorizou transcrever os áudios de #3455 e #3475, mas o ambiente local não tem chaves OpenAI/Gemini, então a tentativa retornou `null` para ambos. Essas pausas permanecem conforme os eventos, sem revisão independente do conteúdo dos áudios.
+
 ## Critério operacional
 
 Não reenviar uma etapa marcada como `sent` apenas porque o cliente não a vê no Chatwoot. Conferir `messages`, `funnel_delivery_attempt`, o provedor e o recibo antes de repetir o envio. A sequência completa leva aproximadamente dois dias úteis; acompanhar as etapas restantes e qualquer `failed` ou `uncertain`.
