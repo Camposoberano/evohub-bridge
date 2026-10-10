@@ -3835,9 +3835,11 @@ export async function dispatchDeferredFunnelIntent(
 
   // A abertura já terminou. Agora o pedido original pode pausar a régua
   // informativa e seguir pelo fluxo específico, como numa resposta posterior.
-  await autoPauseFunil(conversationId, action, {
-    comPrazo: action !== "menu_humano",
-  });
+  if (action !== "menu_logistica") {
+    await autoPauseFunil(conversationId, action, {
+      comPrazo: action !== "menu_humano",
+    });
+  }
   const dispatch = await handleMenuClick(
     db,
     channel as Json,
