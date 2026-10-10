@@ -92,6 +92,7 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
+import { reconcileNewAdFunnels } from "./shared/ad-funnel-watchdog.ts";
 import {
   limparPausa,
   pausasVencidas,
@@ -1295,6 +1296,27 @@ function startFunnelQueueLoop() {
   console.log("funnel-queue-pump loop ON (30s)");
 }
 
+function startAdFunnelWatchdogLoop() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await reconcileNewAdFunnels();
+      if (result.missing > 0) {
+        console.log("ad-funnel-watchdog:", JSON.stringify(result));
+      }
+    } catch (error) {
+      console.error("ad-funnel-watchdog erro:", error);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, 45_000);
+  setInterval(tick, 60_000);
+  console.log("ad-funnel-watchdog loop ON (60s)");
+}
+
 // Cadeia automática de recuperação (1·2·4·7 dias). DESLIGADA por padrão: ligar significa
 // mandar mensagem sozinha pra centenas de leads parados, e essa decisão é do dono da conta,
 // não default de deploy. Liga com RECOVERY_CHAIN_ENABLED=true.
@@ -1748,6 +1770,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDeclineGuardLoop();
   startBotMuteLoop();
   startFunnelQueueLoop();
+  startAdFunnelWatchdogLoop();
   startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();

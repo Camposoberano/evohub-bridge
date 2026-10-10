@@ -1,6 +1,9 @@
 import { admin } from "./supabase.ts";
 import { chaveDaPausa, limparPausa, marcarPausa } from "./funil-pausa.ts";
-import { deveAdiarPausaDaAbertura } from "./funil-anuncio.ts";
+import {
+  deveAdiarPausaDaAbertura,
+  devePausarFunilRestaurado,
+} from "./funil-anuncio.ts";
 import {
   AD_5895_FUNNEL,
   mainFunnelForConversation,
@@ -152,15 +155,10 @@ export async function autoPauseFunil(
     .maybeSingle();
   if (!seq) return false;
 
-  // A cópia restaurada de 30/09 é uma apresentação contínua. Respostas comuns e
-  // pedidos de preço entram entre as fases; somente atendimento humano, fechamento,
-  // catálogo e intervenção manual podem segurar as etapas restantes.
-  if (
-    funnel === RESTORED_5895_FUNNEL &&
-    comPrazo &&
-    /^(resposta_cliente|preco|video|plantio|nutricao|uso|interesse_geral|duvida_tecnica|intent_answered)$/i
-      .test(reason)
-  ) {
+  // A cópia de 30/09 continua durante preço, dúvida e respostas. Classificações
+  // genéricas de handoff não equivalem a um pedido explícito do cliente.
+  if (funnel === RESTORED_5895_FUNNEL &&
+    !devePausarFunilRestaurado(reason)) {
     return false;
   }
 

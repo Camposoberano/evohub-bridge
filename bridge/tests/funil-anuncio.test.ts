@@ -4,6 +4,7 @@ import {
   deveAdiarPausaDaAbertura,
   deveEncaminharPerguntaDeAnuncio,
   deveIgnorarInscricaoHistorica,
+  devePausarFunilRestaurado,
   inscricaoPrecisaDeRecuperacao,
   motivoEntradaAnuncio,
   suprimirAberturaGenerica,
@@ -122,6 +123,16 @@ Deno.test("pergunta da saudação do anúncio não pausa o funil restaurado", ()
     false,
   );
   assertEquals(deveEncaminharPerguntaDeAnuncio("mega-sorgo", true), true);
+});
+
+Deno.test("preço e dúvida seguem entre as fases; pedido humano explícito pausa", () => {
+  for (const reason of [
+    "preço", "vídeo", "duvida-tecnica", "cotacao", "human_handoff",
+    "resposta_cliente", "menu_preco",
+  ]) assertEquals(devePausarFunilRestaurado(reason), false);
+  for (const reason of ["pediu-humano", "menu_humano", "fechamento", "catalog"]) {
+    assertEquals(devePausarFunilRestaurado(reason), true);
+  }
 });
 
 Deno.test("recupera só sequência ativa sem fila e sem evento de sucesso", () => {

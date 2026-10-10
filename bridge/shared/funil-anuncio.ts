@@ -118,6 +118,15 @@ export function deveEncaminharPerguntaDeAnuncio(
   return unsupportedQuestion && funnel !== RESTORED_5895_FUNNEL;
 }
 
+/** Só uma interrupção explícita suspende a apresentação restaurada. */
+export function devePausarFunilRestaurado(reason: string): boolean {
+  const normalized = foldText(reason).toLowerCase().replace(/[\s-]+/g, "_");
+  return new Set([
+    "atendimento", "pediu_humano", "pedido_contato", "menu_humano",
+    "fechamento", "catalog", "catalogo", "catalog_humano",
+  ]).has(normalized);
+}
+
 /** Detecta apenas a falha parcial: sequência ativa criada, sem fila nem evento de sucesso. */
 export function inscricaoPrecisaDeRecuperacao(
   sequenceStatus: string,
