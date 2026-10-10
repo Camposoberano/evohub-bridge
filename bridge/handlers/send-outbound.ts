@@ -833,7 +833,7 @@ export async function handle(req: Request): Promise<Response> {
       }
       metaBody = { type: "text", text: { body: content } };
       registroTexto = content;
-    } else if (type === "image" || type === "video") {
+    } else if (type === "image" || type === "video" || type === "document") {
       const link = payload.media_url as string;
       const caption = payload.caption as string | undefined;
       if (!link) {
@@ -848,7 +848,11 @@ export async function handle(req: Request): Promise<Response> {
           error: "media_url obrigatório",
         }, 400);
       }
-      metaBody = { type, [type]: caption ? { link, caption } : { link } };
+      const mediaObject: Json = caption ? { link, caption } : { link };
+      if (type === "document" && payload.file_name) {
+        mediaObject.filename = String(payload.file_name);
+      }
+      metaBody = { type, [type]: mediaObject };
       registroTexto = caption ?? `[${type}]`;
     } else if (type === "audio") {
       const src = payload.media_url as string;
@@ -999,10 +1003,13 @@ export async function handle(req: Request): Promise<Response> {
         res = (await hybridSendMedia(hybrid, to, oggUrl ?? src, "audio", {
           isVoice: true,
         })) ?? undefined;
-      } else if (type === "image" || type === "video") {
+      } else if (type === "image" || type === "video" || type === "document") {
         const link = payload.media_url as string;
         res = (await hybridSendMedia(hybrid, to, link, type, {
           caption: payload.caption as string | undefined,
+          ...(type === "document"
+            ? { fileName: payload.file_name as string | undefined }
+            : {}),
         })) ?? undefined;
       } else if (type === "interactive") {
         const buttons = (payload.buttons as { id: string; title: string }[]) ??

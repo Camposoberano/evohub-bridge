@@ -9,23 +9,6 @@ export type ActionDispatchResult =
   | { ok: true; accepted: number; duplicate: boolean }
   | { ok: false; terminal: boolean; error: string };
 
-const WEBHOOK_PATHS: Record<SoberanoAction, string> = {
-  funil: "funil-completo",
-  preco: "preco",
-  video: "video",
-  plantio: "plantio",
-  nutricao: "nutricao",
-  "recuperacao-1": "recuperacao-1",
-  "recuperacao-2": "recuperacao-2",
-  "recuperacao-3": "recuperacao-3",
-  "recuperacao-4": "recuperacao-4",
-  catalogo: "abrir-catalogo",
-  "catalogo-sair": "voltar-mega-sorgo",
-  pause: "pausar",
-  resume: "retomar",
-  stop: "parar",
-};
-
 export function enabledN8nActions(
   value = optionalEnv("SOBERANO_N8N_ACTIONS_ENABLED") ?? "",
 ): Set<SoberanoAction> {
@@ -40,7 +23,7 @@ export function actionWebhookUrl(
 ): string {
   const parsed = new URL(base);
   if (parsed.protocol !== "https:") throw new Error("n8n exige HTTPS");
-  return new URL(`/webhook/soberano-5895-${WEBHOOK_PATHS[action]}`, parsed)
+  return new URL(`/webhook/soberano-5895-${action}`, parsed)
     .toString();
 }
 

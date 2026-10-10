@@ -12,7 +12,7 @@ Deno.test("uma flag por ação preserva a migração gradual", () => {
 Deno.test("cada ação tem webhook estável na instância Soberano", () => {
   assertEquals(
     actionWebhookUrl("funil", "https://automacao.soberano.pro/home/workflows"),
-    "https://automacao.soberano.pro/webhook/soberano-5895-funil-completo",
+    "https://automacao.soberano.pro/webhook/soberano-5895-funil",
   );
   assertEquals(
     actionWebhookUrl("preco", "https://automacao.soberano.pro"),

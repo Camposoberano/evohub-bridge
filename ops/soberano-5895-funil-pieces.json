@@ -1,0 +1,584 @@
+[
+  {
+    "day": 1,
+    "offset_seconds": 0,
+    "type": "text",
+    "payload": {
+      "content": "E aí, bom dia, vida boa! como vai? 😊👋\n\nAqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾"
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 70,
+    "type": "image",
+    "payload": {
+      "media_ref": {
+        "day": 1,
+        "slot": "logo"
+      },
+      "caption": "Somos da *Campo Soberano* 🌾\n\nEspecialistas nas sementes do *Mega Sorgo Santa Elisa* 🚜"
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 140,
+    "type": "interactive",
+    "payload": {
+      "text": "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
+      "buttons": [
+        {
+          "id": "f1_sim",
+          "title": "Quero saber mais ✅"
+        },
+        {
+          "id": "f1_olhando",
+          "title": "Só olhando 👀"
+        }
+      ],
+      "header_media_ref": {
+        "day": 1,
+        "slot": "image"
+      }
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 210,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 1,
+        "slot": "audio1"
+      }
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 280,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 1,
+        "slot": "audio2"
+      }
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 350,
+    "type": "video",
+    "payload": {
+      "media_ref": {
+        "day": 1,
+        "slot": "video"
+      }
+    }
+  },
+  {
+    "day": 1,
+    "offset_seconds": 420,
+    "type": "list",
+    "payload": {
+      "text": "O senhor sabe *quanto ele produz por hectare*? 🤔📊",
+      "button_label": "Ver opções",
+      "sections": [
+        {
+          "title": "Continuar",
+          "rows": [
+            {
+              "id": "f1_continuar",
+              "title": "📈 Quanto produz?"
+            }
+          ]
+        },
+        {
+          "title": "Tire sua dúvida",
+          "rows": [
+            {
+              "id": "menu_preco",
+              "title": "💰 Preço"
+            },
+            {
+              "id": "menu_plantio",
+              "title": "🌱 Como plantar"
+            },
+            {
+              "id": "menu_nutricao",
+              "title": "🧪 Info nutricional"
+            },
+            {
+              "id": "menu_depoimento",
+              "title": "🎬 Assistir vídeos"
+            },
+            {
+              "id": "menu_humano",
+              "title": "🧑‍🌾 Falar com Cícero"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "day": 2,
+    "offset_seconds": 0,
+    "type": "interactive",
+    "payload": {
+      "text": "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
+      "buttons": [
+        {
+          "id": "f2_leite",
+          "title": "Leite 🥛"
+        },
+        {
+          "id": "f2_corte",
+          "title": "Corte 🥩"
+        },
+        {
+          "id": "f2_ambos",
+          "title": "Os dois 🐄"
+        }
+      ],
+      "header_media_ref": {
+        "day": 2,
+        "slot": "image"
+      }
+    }
+  },
+  {
+    "day": 2,
+    "offset_seconds": 70,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 2,
+        "slot": "audio1"
+      }
+    }
+  },
+  {
+    "day": 2,
+    "offset_seconds": 140,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 2,
+        "slot": "audio2"
+      }
+    }
+  },
+  {
+    "day": 2,
+    "offset_seconds": 210,
+    "type": "video",
+    "payload": {
+      "media_ref": {
+        "day": 2,
+        "slot": "video"
+      }
+    }
+  },
+  {
+    "day": 2,
+    "offset_seconds": 280,
+    "type": "list",
+    "payload": {
+      "text": "Quer saber por que ele é *melhor que o milho*? 🤫🌽",
+      "button_label": "Ver opções",
+      "sections": [
+        {
+          "title": "Continuar",
+          "rows": [
+            {
+              "id": "f2_continuar",
+              "title": "🌽 Quero o segredo"
+            }
+          ]
+        },
+        {
+          "title": "Tire sua dúvida",
+          "rows": [
+            {
+              "id": "menu_preco",
+              "title": "💰 Preço"
+            },
+            {
+              "id": "menu_plantio",
+              "title": "🌱 Como plantar"
+            },
+            {
+              "id": "menu_nutricao",
+              "title": "🧪 Info nutricional"
+            },
+            {
+              "id": "menu_depoimento",
+              "title": "🎬 Assistir vídeos"
+            },
+            {
+              "id": "menu_humano",
+              "title": "🧑‍🌾 Falar com Cícero"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "day": 3,
+    "offset_seconds": 0,
+    "type": "interactive",
+    "payload": {
+      "text": "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
+      "buttons": [
+        {
+          "id": "f3_milho",
+          "title": "Milho 🌽"
+        },
+        {
+          "id": "f3_capim",
+          "title": "Capim 🌿"
+        },
+        {
+          "id": "f3_nao",
+          "title": "Não planto 🤷"
+        }
+      ],
+      "header_media_ref": {
+        "day": 3,
+        "slot": "image"
+      }
+    }
+  },
+  {
+    "day": 3,
+    "offset_seconds": 70,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 3,
+        "slot": "audio1"
+      }
+    }
+  },
+  {
+    "day": 3,
+    "offset_seconds": 140,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 3,
+        "slot": "audio2"
+      }
+    }
+  },
+  {
+    "day": 3,
+    "offset_seconds": 210,
+    "type": "video",
+    "payload": {
+      "media_ref": {
+        "day": 3,
+        "slot": "video"
+      }
+    }
+  },
+  {
+    "day": 3,
+    "offset_seconds": 280,
+    "type": "list",
+    "payload": {
+      "text": "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪",
+      "button_label": "Ver opções",
+      "sections": [
+        {
+          "title": "Continuar",
+          "rows": [
+            {
+              "id": "f3_continuar",
+              "title": "💪 Quero ver"
+            }
+          ]
+        },
+        {
+          "title": "Tire sua dúvida",
+          "rows": [
+            {
+              "id": "menu_preco",
+              "title": "💰 Preço"
+            },
+            {
+              "id": "menu_plantio",
+              "title": "🌱 Como plantar"
+            },
+            {
+              "id": "menu_nutricao",
+              "title": "🧪 Info nutricional"
+            },
+            {
+              "id": "menu_depoimento",
+              "title": "🎬 Assistir vídeos"
+            },
+            {
+              "id": "menu_humano",
+              "title": "🧑‍🌾 Falar com Cícero"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 0,
+    "type": "interactive",
+    "payload": {
+      "text": "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
+      "buttons": [
+        {
+          "id": "f4_ja",
+          "title": "Já sim 😔"
+        },
+        {
+          "id": "f4_nunca",
+          "title": "Nunca, graças 🙏"
+        }
+      ],
+      "header_media_ref": {
+        "day": 4,
+        "slot": "image"
+      }
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 70,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 4,
+        "slot": "audio1"
+      }
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 140,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 4,
+        "slot": "audio2"
+      }
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 210,
+    "type": "image",
+    "payload": {
+      "media_ref": {
+        "day": 4,
+        "slot": "image"
+      },
+      "caption": "🌾 *Lavoura forte* mesmo no ano mais difícil!"
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 280,
+    "type": "video",
+    "payload": {
+      "media_ref": {
+        "day": 4,
+        "slot": "video"
+      }
+    }
+  },
+  {
+    "day": 4,
+    "offset_seconds": 350,
+    "type": "list",
+    "payload": {
+      "text": "Quer *garantir o seu* pra safra 2027? 🚜",
+      "button_label": "Ver opções",
+      "sections": [
+        {
+          "title": "Continuar",
+          "rows": [
+            {
+              "id": "f4_continuar",
+              "title": "🚜 Quero garantir"
+            }
+          ]
+        },
+        {
+          "title": "Tire sua dúvida",
+          "rows": [
+            {
+              "id": "menu_preco",
+              "title": "💰 Preço"
+            },
+            {
+              "id": "menu_plantio",
+              "title": "🌱 Como plantar"
+            },
+            {
+              "id": "menu_nutricao",
+              "title": "🧪 Info nutricional"
+            },
+            {
+              "id": "menu_depoimento",
+              "title": "🎬 Assistir vídeos"
+            },
+            {
+              "id": "menu_humano",
+              "title": "🧑‍🌾 Falar com Cícero"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 0,
+    "type": "interactive",
+    "payload": {
+      "text": "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
+      "buttons": [
+        {
+          "id": "f5_sim",
+          "title": "Sim, quero 💰"
+        }
+      ],
+      "header_media_ref": {
+        "day": 5,
+        "slot": "image"
+      }
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 70,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 5,
+        "slot": "audio1"
+      }
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 140,
+    "type": "audio",
+    "payload": {
+      "media_ref": {
+        "day": 5,
+        "slot": "audio2"
+      }
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 210,
+    "type": "text_sequence",
+    "payload": {
+      "texts": [
+        "🏢 *Nossos depósitos:*\n\n1️⃣ Campinas – SP\n2️⃣ Lucas do Rio Verde – MT\n3️⃣ Toledo – PR\n4️⃣ Fortaleza – CE\n5️⃣ Juazeiro do Norte – CE",
+        "🌱 *Disponibilidade por localidade:*\n\n🔹 *Mega Sorgo Santa Elisa*® — exclusivo no depósito de *Campinas – SP*\n🔹 *BRS 661* e *BRS Ponta Negra* (Embrapa) — *Fortaleza – CE* e *Toledo – PR*",
+        "📦 Todo pedido sai com *nota fiscal*, *rastreamento* e *frete grátis* pra qualquer região do Brasil 🇧🇷"
+      ]
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 280,
+    "type": "image",
+    "payload": {
+      "media_ref": {
+        "day": 0,
+        "slot": "logistica_img"
+      }
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 420,
+    "type": "image",
+    "payload": {
+      "media_ref": {
+        "day": 0,
+        "slot": "preco_2kg"
+      },
+      "caption": "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança."
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 490,
+    "type": "interactive",
+    "payload": {
+      "text": "🌾 O senhor tem interesse em receber, *de graça*, um material da *Embrapa* com o passo a passo pra fazer uma *silagem de qualidade*? 📚",
+      "buttons": [
+        {
+          "id": "menu_isca_silagem",
+          "title": "Quero o material 📩"
+        },
+        {
+          "id": "menu_isca_nao_silagem",
+          "title": "Agora não"
+        }
+      ],
+      "header_media_ref": {
+        "day": 0,
+        "slot": "isca_silagem_capa"
+      }
+    }
+  },
+  {
+    "day": 5,
+    "offset_seconds": 560,
+    "type": "list",
+    "payload": {
+      "text": "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
+      "button_label": "Ver opções",
+      "sections": [
+        {
+          "title": "Continuar",
+          "rows": [
+            {
+              "id": "f5_local",
+              "title": "📍 Vou informar"
+            }
+          ]
+        },
+        {
+          "title": "Tire sua dúvida",
+          "rows": [
+            {
+              "id": "menu_preco",
+              "title": "💰 Preço"
+            },
+            {
+              "id": "menu_plantio",
+              "title": "🌱 Como plantar"
+            },
+            {
+              "id": "menu_nutricao",
+              "title": "🧪 Info nutricional"
+            },
+            {
+              "id": "menu_depoimento",
+              "title": "🎬 Assistir vídeos"
+            },
+            {
+              "id": "menu_humano",
+              "title": "🧑‍🌾 Falar com Cícero"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

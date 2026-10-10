@@ -1,6 +1,8 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildActionRows,
+  nextActionWindow,
+  resolveActionMedia,
   validateEnqueueBody,
 } from "../handlers/n8n-action-enqueue.ts";
 
@@ -36,4 +38,36 @@ Deno.test("mesmo evento gera as mesmas peças e mantém a ordem", async () => {
   assertEquals(a[1].step, 1);
   assertEquals(Date.parse(a[1].send_at) - Date.parse(a[0].send_at), 70_000);
   await assertRejects(() => buildActionRows(body.value, "", 1_760_000_000_000));
+});
+
+Deno.test("preço cabe na pausa entre fases, sem ocupar os envios próximos", () => {
+  const start = Date.parse("2026-10-10T12:00:00Z"); // 09h BRT
+  const occupied = [70, 140, 210, 280, 350, 420, 2_220]
+    .map((seconds) => new Date(start + seconds * 1000).toISOString());
+  assertEquals(nextActionWindow(start, 210, occupied), start + 490_000);
+});
+
+Deno.test("mídia é resolvida da biblioteca antes de aceitar o lote", async () => {
+  const db = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({
+            data: [{ day: 0, slot: "preco_4kg", type: "image", url: "https://example.org/arte.jpg" }],
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  };
+  const resolved = await resolveActionMedia(db as never, [{
+    day: 0, type: "image", payload: { media_ref: { day: 0, slot: "preco_4kg" } },
+    offset_seconds: 0,
+  }]);
+  assertEquals(resolved[0].payload.media_url, "https://example.org/arte.jpg");
+  assertEquals("media_ref" in resolved[0].payload, false);
+  await assertRejects(() => resolveActionMedia(db as never, [{
+    day: 0, type: "image", payload: { media_ref: { day: 0, slot: "ausente" } },
+    offset_seconds: 0,
+  }]));
 });

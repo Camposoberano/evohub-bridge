@@ -7,6 +7,7 @@ import {
 import { RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
 import { FIM_ACESSO, GAPS, iniciosDosAcessos } from "./funil-enroll.ts";
 import { isWithinFunnelSendHours, nextFunnelSendAt } from "../shared/business-hours.ts";
+import { addBusinessSeconds, clampBusinessTime } from "../shared/business-time.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { optionalEnv, env } from "../shared/env.ts";
 import { confereSegredo } from "../shared/segredo-bridge.ts";
@@ -21,11 +22,64 @@ type Json = Record<string, unknown>;
 
 export type QueuePiece = {
   day: number;
-  type: "text" | "text_sequence" | "image" | "audio" | "video" |
+  type: "text" | "text_sequence" | "image" | "audio" | "video" | "document" |
     "interactive" | "list";
   payload: Json;
   offset_seconds: number;
 };
+
+type MediaRef = { day: number; slot: string };
+
+function mediaRef(value: unknown): MediaRef | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const ref = value as Json;
+  if (!Number.isInteger(ref.day) || Number(ref.day) < 0 || Number(ref.day) > 5 ||
+    typeof ref.slot !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(ref.slot)) return null;
+  return { day: Number(ref.day), slot: ref.slot };
+}
+
+/** Resolve as referências estáveis da biblioteca histórica antes de aceitar o lote. */
+export async function resolveActionMedia(
+  db: ReturnType<typeof admin>, pieces: QueuePiece[],
+): Promise<QueuePiece[]> {
+  if (!pieces.some((piece) => piece.payload.media_ref != null || piece.payload.header_media_ref != null)) {
+    return pieces;
+  }
+  const { data, error } = await db.from("funnel_media")
+    .select("day,slot,url,caption,type")
+    .eq("funnel", "mega-sorgo").eq("active", true);
+  if (error) throw new Error("falha ao consultar biblioteca de mídia");
+  const library = new Map<string, Json>();
+  for (const item of (data ?? []) as Json[]) {
+    const key = `${item.day}:${item.slot}`;
+    if (!library.has(key) && typeof item.url === "string" && item.url) library.set(key, item);
+  }
+  return pieces.map((piece) => {
+    const payload = { ...piece.payload };
+    for (const [field, target] of [["media_ref", "media_url"], ["header_media_ref", "header_image"]] as const) {
+      if (payload[field] == null) continue;
+      const ref = mediaRef(payload[field]);
+      if (!ref) throw new Error(`referência de mídia inválida: ${field}`);
+      const item = library.get(`${ref.day}:${ref.slot}`);
+      if (!item) throw new Error(`mídia obrigatória ausente: dia ${ref.day}, slot ${ref.slot}`);
+      if (field === "media_ref" && item.type !== piece.type) {
+        throw new Error(`tipo de mídia divergente: dia ${ref.day}, slot ${ref.slot}`);
+      }
+      if (field === "header_media_ref" && item.type !== "image") {
+        throw new Error(`cabeçalho exige imagem: dia ${ref.day}, slot ${ref.slot}`);
+      }
+      payload[target] = item.url;
+      if (field === "media_ref" && piece.type !== "audio" && !payload.caption && item.caption) {
+        payload.caption = item.caption;
+      }
+      delete payload[field];
+    }
+    if (["audio", "video", "image", "document"].includes(piece.type) && !payload.media_url) {
+      throw new Error(`peça ${piece.type} sem mídia`);
+    }
+    return { ...piece, payload };
+  });
+}
 
 export type EnqueueBody = { request: ActionRequest; pieces: QueuePiece[] };
 
@@ -43,9 +97,9 @@ export type ActionQueueRow = {
 };
 
 const TYPES = new Set<QueuePiece["type"]>([
-  "text", "text_sequence", "image", "audio", "video", "interactive", "list",
+  "text", "text_sequence", "image", "audio", "video", "document", "interactive", "list",
 ]);
-const CONTROL_ACTIONS = new Set(["pause", "resume", "stop", "catalogo-sair"]);
+const CONTROL_ACTIONS = new Set(["pause", "resume", "stop", "catalogo", "catalogo-sair"]);
 
 export function validateEnqueueBody(
   input: unknown,
@@ -105,6 +159,7 @@ export async function buildActionRows(
   body: EnqueueBody,
   conversationId: string,
   now = Date.now(),
+  actionStart?: number,
 ): Promise<ActionQueueRow[]> {
   if (!conversationId) throw new Error("conversation_id obrigatório");
   const key = actionKey(body.request);
@@ -116,7 +171,7 @@ export async function buildActionRows(
       body.request.source === "macro",
       FIM_ACESSO,
     )
-    : [isWithinFunnelSendHours(now) ? now : nextFunnelSendAt(now)];
+    : [actionStart ?? (isWithinFunnelSendHours(now) ? now : nextFunnelSendAt(now))];
   const funnel = body.request.action === "funil"
     ? RESTORED_5895_FUNNEL
     : `${RESTORED_5895_FUNNEL}:${body.request.action}`;
@@ -132,10 +187,25 @@ export async function buildActionRows(
       ...piece.payload,
       __funnel_sequence_id: key,
     },
-    send_at: new Date(starts[piece.day > 0 ? piece.day - 1 : 0] +
-      piece.offset_seconds * 1000).toISOString(),
+    send_at: new Date(body.request.action === "funil"
+      ? starts[piece.day - 1] + piece.offset_seconds * 1000
+      : addBusinessSeconds(starts[0], piece.offset_seconds)).toISOString(),
     status: "paused" as const,
   })));
+}
+
+/** Encontra uma pausa grande o bastante entre peças já agendadas da conversa. */
+export function nextActionWindow(
+  now: number, durationSeconds: number, occupied: string[],
+): number {
+  let candidate = clampBusinessTime(now, durationSeconds + 70);
+  for (const at of occupied) {
+    const busy = Date.parse(at);
+    if (!Number.isFinite(busy) || busy < candidate - 70_000) continue;
+    if (busy >= candidate + (durationSeconds + 70) * 1000) break;
+    candidate = clampBusinessTime(busy + 70_000, durationSeconds + 70);
+  }
+  return candidate;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -194,7 +264,26 @@ export async function handle(req: Request): Promise<Response> {
     isContactExcludedFromAutomation(conversation.contacts)
   ) return json({ ok: false, error: "contato bloqueado", terminal: true }, 422);
 
-  const rows = await buildActionRows(body, String(conversation.id));
+  try {
+    body.pieces = await resolveActionMedia(db, body.pieces);
+  } catch (error) {
+    return json({ ok: false, error: String(error) }, 422);
+  }
+  let actionStart: number | undefined;
+  if (body.request.action !== "funil") {
+    const { data: pending, error: pendingError } = await db.from("scheduled_messages")
+      .select("send_at").eq("conversation_id", conversation.id)
+      .eq("status", "pending")
+      .gte("send_at", new Date(Date.now() - 70_000).toISOString())
+      .order("send_at", { ascending: true }).limit(500);
+    if (pendingError) return json({ ok: false, error: "falha ao consultar agenda" }, 503);
+    actionStart = nextActionWindow(
+      Date.now(),
+      Math.max(...body.pieces.map((piece) => piece.offset_seconds)),
+      (pending ?? []).map((row: { send_at: string }) => String(row.send_at)),
+    );
+  }
+  const rows = await buildActionRows(body, String(conversation.id), Date.now(), actionStart);
   const ids = rows.map((row) => row.id);
   const key = actionKey(body.request);
   const acceptedClaim = `n8n-action-accepted:${key}`;
