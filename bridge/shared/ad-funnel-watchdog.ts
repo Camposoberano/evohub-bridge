@@ -1,4 +1,5 @@
 import { autoEnrollFunil } from "../handlers/funil-enroll.ts";
+import { sendFirstAdFunnelPieceNow } from "./ad-opening.ts";
 import { canalAlvoFunil } from "./funil-anuncio.ts";
 import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "./lead-block.ts";
@@ -81,6 +82,7 @@ export async function reconcileNewAdFunnels(
       if (verifyError) throw verifyError;
       if (repaired) {
         confirmed++;
+        await sendFirstAdFunnelPieceNow(db, String(conversation.id));
         const { error: eventError } = await db.from("events").insert({
           source: "ad-funnel",
           event_type: "ad_watchdog_enrolled",

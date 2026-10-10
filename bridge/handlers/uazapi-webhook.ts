@@ -22,6 +22,7 @@ import {
   transcribeAudio,
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
+import { sendFirstAdFunnelPieceNow } from "../shared/ad-opening.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import { isRestoredFunnelButton } from "../shared/restored-funnel-buttons.ts";
 import {
@@ -286,6 +287,30 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
           sufixoContato(msg.from),
         );
         continue;
+      }
+
+      // A origem Meta vem antes das rotas de preço, catálogo e fluxo conversacional.
+      // Algumas delas consomem a primeira entrada e impediam a inscrição do funil.
+      if (msg.fromAd && msg.from) {
+        try {
+          await autoEnrollFunil(db, channel as Json, msg.from, "", true, {
+            sourceMessageId: msg.metaMessageId ?? null,
+          });
+          const { data: contact } = await db.from("contacts").select("id")
+            .eq("channel_id", channel.id)
+            .eq("external_contact_id", msg.from).maybeSingle();
+          if (contact) {
+            const { data: conversation } = await db.from("conversations")
+              .select("id").eq("contact_id", contact.id)
+              .neq("status", "resolved")
+              .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+            if (conversation?.id) {
+              await sendFirstAdFunnelPieceNow(db, String(conversation.id));
+            }
+          }
+        } catch (error) {
+          console.error("uazapi: abertura imediata do anúncio falhou", error);
+        }
       }
 
       // Lead no meio de um fluxo conversacional responde à pergunta do fluxo, não ao bot
