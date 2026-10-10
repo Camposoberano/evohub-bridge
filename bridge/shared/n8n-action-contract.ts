@@ -21,7 +21,7 @@ export type SoberanoAction = typeof SOBERANO_ACTIONS[number];
 export type ActionRequest = {
   /** Identifica o evento, permanece igual em todas as tentativas de entrega. */
   request_id: string;
-  source: "macro" | "ad";
+  source: "macro" | "ad" | "intent";
   chatwoot_conversation_id: number;
   action: SoberanoAction;
   funnel_version: string;

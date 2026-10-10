@@ -21,6 +21,8 @@ import {
   setConversationLabels,
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
+import { mainFunnelForChannel, RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import { dispatchSoberanoAction, enabledN8nActions } from "../shared/n8n-action-router.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
   isRestoredFunnelButton,
@@ -828,7 +830,10 @@ async function handleWhatsApp(db: Db, p: Json) {
                   "intent",
                 )
               ) {
-                await handleVideoSequence(db, channel as Json, from, acct);
+                await handleMenuClick(
+                  db, channel as Json, from, "menu_depoimento", acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
                 if (transcricao) {
                   const { data: ct2 } = await db.from("contacts").select("id")
                     .eq("channel_id", channel.id).eq(
@@ -873,7 +878,10 @@ async function handleWhatsApp(db: Db, p: Json) {
                   "intent",
                 )
               ) {
-                await handlePlantioSequence(db, channel as Json, from, acct);
+                await handleMenuClick(
+                  db, channel as Json, from, "menu_plantio", acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
               }
             } else if (
               isNutricaoIntent(intentText) && !adEnrollment?.deferIntent
@@ -887,7 +895,10 @@ async function handleWhatsApp(db: Db, p: Json) {
                   "intent",
                 )
               ) {
-                await handleNutricaoSequence(db, channel as Json, from, acct);
+                await handleMenuClick(
+                  db, channel as Json, from, "menu_nutricao", acct,
+                  String(m.id ?? m.message_id ?? "") || undefined,
+                );
               }
             } else if (
               commercialIntent === "duvida_tecnica" &&
@@ -3642,6 +3653,26 @@ export async function handleMenuClick(
     const daily = await claimDailyIntent(db, String(channel.id), from, intent);
     if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
     try {
+      // No 5895, texto e botão usam o mesmo conteúdo editável da macro no n8n.
+      // O bridge continua responsável pela fila, deduplicação e entrega final.
+      if (
+        mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+        enabledN8nActions().has(intent)
+      ) {
+        const conv = await resolveSocialConversation(db, channel, from);
+        const cwConvId = Number(conv?.chatwoot_conversation_id);
+        if (!cwConvId) throw new Error("conversa sem ID Chatwoot para n8n");
+        const dispatched = await dispatchSoberanoAction({
+          request_id: inboundMessageId ??
+            `intent:${menuId}:${channel.id}:${from}:${new Date().toISOString().slice(0, 10)}`,
+          source: "intent",
+          chatwoot_conversation_id: cwConvId,
+          action: intent,
+          funnel_version: RESTORED_5895_FUNNEL,
+        });
+        if (!dispatched.ok) throw new Error(`n8n ${intent}: ${dispatched.error}`);
+        return { sent: true };
+      }
       if (menuId === "menu_preco") {
         await handlePrecoSequence(db, channel, from, acct);
       } else if (menuId === "menu_depoimento") {

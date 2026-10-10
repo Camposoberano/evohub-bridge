@@ -204,6 +204,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
             msg.menuClickId,
             acct,
+            msg.metaMessageId ?? undefined,
           );
         }
       } catch (e) {
@@ -431,6 +432,7 @@ async function handleUazapiClick(
   from: string,
   id: string,
   acct: Awaited<ReturnType<typeof accountForChannel>>,
+  inboundMessageId?: string,
 ): Promise<void> {
   const domain = clickDomain(id);
   if (
@@ -452,7 +454,7 @@ async function handleUazapiClick(
   }
 
   if (id.startsWith("menu_") || isRestoredFunnelButton(id)) {
-    await handleMenuClick(db, channel, from, id, acct);
+    await handleMenuClick(db, channel, from, id, acct, inboundMessageId);
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
   ) {
@@ -600,7 +602,9 @@ async function handleUazapiIntent(
     }
   }
 
-  await handleMenuClick(db, channel, from, intent.menu, acct);
+  await handleMenuClick(
+    db, channel, from, intent.menu, acct, msg.metaMessageId ?? undefined,
+  );
   console.log(
     "uazapi-webhook: intent disparado",
     intent.name,

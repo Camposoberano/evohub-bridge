@@ -20,6 +20,14 @@ Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
   assertEquals(validateEnqueueBody({ request, pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
 });
 
+Deno.test("aceita intenção automática no mesmo workflow editável da macro", () => {
+  const result = validateEnqueueBody({
+    request: { ...request, action: "preco", source: "intent" },
+    pieces: [{ day: 0, type: "text", payload: { content: "Cotação" }, offset_seconds: 0 }],
+  });
+  assertEquals(result.ok, true);
+});
+
 Deno.test("mesmo evento gera as mesmas peças e mantém a ordem", async () => {
   const body = validateEnqueueBody({
     request: { ...request, action: "preco", source: "macro" },

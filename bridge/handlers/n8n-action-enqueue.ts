@@ -117,7 +117,7 @@ export function validateEnqueueBody(
     String(request.request_id).length > 180 ||
     !Number.isSafeInteger(request.chatwoot_conversation_id) ||
     Number(request.chatwoot_conversation_id) <= 0 ||
-    !["macro", "ad"].includes(String(request.source ?? "")) ||
+    !["macro", "ad", "intent"].includes(String(request.source ?? "")) ||
     request.funnel_version !== RESTORED_5895_FUNNEL
   ) return { ok: false, error: "identidade ou versão inválida" };
   if (!Array.isArray(body.pieces)) return { ok: false, error: "pieces obrigatório" };
