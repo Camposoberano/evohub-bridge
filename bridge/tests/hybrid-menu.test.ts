@@ -53,6 +53,15 @@ Deno.test("normaliza respostas exatas dos botões de preço", () => {
   assertEquals(normalizeHybridButtonReply("Tenho 1 hectare"), undefined);
 });
 
+Deno.test("títulos de plantio e nutrição da UazAPI mantêm o botão específico", () => {
+  assertEquals(normalizeHybridMenuClick("Solo e adubação"), "plantio_solo");
+  assertEquals(normalizeHybridMenuClick("Corte e silagem"), "plantio_colheita");
+  assertEquals(normalizeHybridMenuClick("Como começar"), "plantio_inicio");
+  assertEquals(normalizeHybridMenuClick("Produção estimada"), "nutricao_9");
+  assertEquals(normalizeHybridMenuClick("Proteína"), "nutricao_2");
+  assertEquals(normalizeHybridMenuClick("Silagem"), "uso_silagem");
+});
+
 Deno.test("menu híbrido tem fallback textual acionável", () => {
   const text = buildHybridMenuFallback("Como posso ajudar?", [
     { id: "menu_preco", title: "Ver preço" },
