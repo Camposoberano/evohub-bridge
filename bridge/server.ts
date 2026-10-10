@@ -28,6 +28,7 @@ import {
   recuperarEntradaUazapi,
 } from "./shared/catchup-uazapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
+import { handle as n8nActionEnqueue } from "./handlers/n8n-action-enqueue.ts";
 import {
   handle as funilEnroll,
   recoverEligibleFunnels,
@@ -141,6 +142,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
   "/send-outbound": sendOutbound,
+  "/n8n-action-enqueue": n8nActionEnqueue,
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
   "/meta-templates": metaTemplates,

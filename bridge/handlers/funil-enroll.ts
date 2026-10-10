@@ -55,7 +55,7 @@ const CANAL_ANUNCIO_ALVO = "5895";
 // Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
 // da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
-const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
+export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
 // Produção usa a jornada comercial de até 48h.
 const GAPS_FAST = [0, 70, 70, 70, 70];
