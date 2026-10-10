@@ -875,7 +875,7 @@ async function activeConversationForContact(
   const { data: conversation, error: conversationError } = await db.from(
     "conversations",
   )
-    .select("id, chatwoot_conversation_id, origem")
+    .select("id, chatwoot_conversation_id, origem, opened_at")
     .eq("contact_id", contact.id).neq("status", "resolved")
     .order("opened_at", { ascending: false }).limit(1).maybeSingle();
   if (conversationError) throw conversationError;
@@ -1050,7 +1050,13 @@ export async function autoEnrollFunil(
         .select("id", { count: "exact", head: true })
         .eq("conversation_id", conversation.id).eq("direction", "in");
       if (inboundCountError) throw inboundCountError;
-      if (deveIgnorarInscricaoHistorica(false, count ?? 0)) {
+      if (deveIgnorarInscricaoHistorica(
+        false,
+        count ?? 0,
+        typeof conversation.opened_at === "string"
+          ? conversation.opened_at
+          : null,
+      )) {
         console.log(
           "autoEnrollFunil: inscrição histórica ignorada",
           String(conversation.id),

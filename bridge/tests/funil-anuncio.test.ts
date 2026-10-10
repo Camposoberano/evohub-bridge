@@ -105,6 +105,14 @@ Deno.test("não reinscreve conversa histórica sem sequência", () => {
   assertEquals(deveIgnorarInscricaoHistorica(false, 2), true);
   assertEquals(deveIgnorarInscricaoHistorica(false, 1), false);
   assertEquals(deveIgnorarInscricaoHistorica(true, 5), false);
+  assertEquals(
+    deveIgnorarInscricaoHistorica(false, 5, "2026-10-05T23:59:00-03:00"),
+    true,
+  );
+  assertEquals(
+    deveIgnorarInscricaoHistorica(false, 5, "2026-10-07T13:00:00-03:00"),
+    false,
+  );
 });
 
 Deno.test("recupera só sequência ativa sem fila e sem evento de sucesso", () => {

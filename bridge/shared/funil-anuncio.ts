@@ -99,7 +99,13 @@ export function deveAdiarPausaDaAbertura(
 export function deveIgnorarInscricaoHistorica(
   hasSequence: boolean,
   inboundMessageCount: number,
+  openedAt?: string | null,
 ): boolean {
+  // Uma resposta pode recuperar leads criados durante a falha iniciada em 06/10.
+  // Conversas anteriores preservam a proteção contra reinscrição antiga.
+  const openedAtMs = Date.parse(openedAt ?? "");
+  if (Number.isFinite(openedAtMs) &&
+    openedAtMs >= Date.parse("2026-10-06T03:00:00.000Z")) return false;
   return !hasSequence && inboundMessageCount > 1;
 }
 

@@ -168,7 +168,7 @@ export async function buildActionRows(
       now,
       GAPS,
       false,
-      body.request.source === "macro",
+      false,
       FIM_ACESSO,
     )
     : [actionStart ?? (isWithinFunnelSendHours(now) ? now : nextFunnelSendAt(now))];
