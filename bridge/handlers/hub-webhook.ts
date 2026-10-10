@@ -535,6 +535,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               from,
               menuClick.id,
               acct,
+              String(m.id ?? "") || undefined,
             );
           } catch (e) {
             console.error("handlePlantioClick erro:", e);
@@ -556,6 +557,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               from,
               menuClick.id,
               acct,
+              String(m.id ?? "") || undefined,
             );
           } catch (e) {
             console.error("handleNutricaoClick erro:", e);
@@ -2772,15 +2774,43 @@ async function handlePlantioSequence(
   );
 }
 
+async function dispatchN8nTopic(
+  db: Db,
+  channel: Json,
+  from: string,
+  action: "plantio" | "nutricao",
+  selection: string,
+  inboundMessageId?: string,
+): Promise<boolean> {
+  if (mainFunnelForChannel(channel) !== RESTORED_5895_FUNNEL ||
+    !enabledN8nActions().has(action)) return false;
+  const conversation = await resolveSocialConversation(db, channel, from);
+  const cwConvId = Number(conversation?.chatwoot_conversation_id);
+  if (!cwConvId) throw new Error("conversa sem ID Chatwoot para tópico no n8n");
+  const dispatched = await dispatchSoberanoAction({
+    request_id: inboundMessageId ??
+      `topic:${selection}:${channel.id}:${from}:${crypto.randomUUID()}`,
+    source: "intent",
+    chatwoot_conversation_id: cwConvId,
+    action,
+    funnel_version: RESTORED_5895_FUNNEL,
+    selection,
+  });
+  if (!dispatched.ok) throw new Error(`n8n ${action}/${selection}: ${dispatched.error}`);
+  return true;
+}
+
 export async function handlePlantioClick(
   db: Db,
   channel: Json,
   from: string,
   id: string,
   acct?: CwAcct,
+  inboundMessageId?: string,
 ): Promise<void> {
   const resumoBase = PLANTIO_RESUMOS[id];
   if (!resumoBase) return;
+  if (await dispatchN8nTopic(db, channel, from, "plantio", id, inboundMessageId)) return;
   const resumo = `${PLANTIO_DISCLAIMER}\n\n${resumoBase}`;
   if (channel.type === "facebook" || channel.type === "instagram") {
     await sendSocialPieces(db, channel, from, [
@@ -3255,9 +3285,11 @@ export async function handleNutricaoClick(
   from: string,
   id: string,
   acct?: CwAcct,
+  inboundMessageId?: string,
 ): Promise<void> {
   const resumoBase = NUTRICAO_RESUMOS[id];
   if (!resumoBase) return;
+  if (await dispatchN8nTopic(db, channel, from, "nutricao", id, inboundMessageId)) return;
   const resumo = `${NUTRICAO_DISCLAIMER}\n\n${resumoBase}`;
   if (channel.type === "facebook" || channel.type === "instagram") {
     await sendSocialPieces(db, channel, from, [

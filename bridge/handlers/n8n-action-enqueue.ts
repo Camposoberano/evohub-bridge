@@ -120,6 +120,12 @@ export function validateEnqueueBody(
     !["macro", "ad", "intent"].includes(String(request.source ?? "")) ||
     request.funnel_version !== RESTORED_5895_FUNNEL
   ) return { ok: false, error: "identidade ou versão inválida" };
+  if (request.selection != null &&
+    (typeof request.selection !== "string" ||
+      !/^(?:plantio_(?:inicio|solo|colheita|(?:[1-9]|10))|nutricao_(?:[1-9]|10))$/.test(request.selection) ||
+      !request.selection.startsWith(`${action}_`))) {
+    return { ok: false, error: "seleção inválida para a ação" };
+  }
   if (!Array.isArray(body.pieces)) return { ok: false, error: "pieces obrigatório" };
   const pieces = body.pieces as unknown[];
   const mustBeEmpty = CONTROL_ACTIONS.has(action);

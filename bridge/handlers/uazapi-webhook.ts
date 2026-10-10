@@ -460,9 +460,9 @@ async function handleUazapiClick(
   ) {
     await handlePrecoClick(db, channel, from, id, acct);
   } else if (id.startsWith("plantio_")) {
-    await handlePlantioClick(db, channel, from, id, acct);
+    await handlePlantioClick(db, channel, from, id, acct, inboundMessageId);
   } else if (id.startsWith("nutricao_")) {
-    await handleNutricaoClick(db, channel, from, id, acct);
+    await handleNutricaoClick(db, channel, from, id, acct, inboundMessageId);
   } else if (
     id.startsWith("grp_") || id.startsWith("cat_") ||
     id.startsWith("prod_") || id.startsWith("acao_") || id.startsWith("pg_") ||

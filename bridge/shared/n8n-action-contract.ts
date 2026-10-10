@@ -25,6 +25,8 @@ export type ActionRequest = {
   chatwoot_conversation_id: number;
   action: SoberanoAction;
   funnel_version: string;
+  /** Botão de detalhe dentro do fluxo de plantio ou nutrição. */
+  selection?: string;
 };
 
 export function isSoberanoAction(value: string): value is SoberanoAction {
