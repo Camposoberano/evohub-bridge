@@ -54,10 +54,12 @@ import {
   transcribeAudio,
 } from "../shared/intent.ts";
 import {
+  getDirectUazapiRoute,
   getHybridRoute,
   hybridSendMedia,
   hybridSendText,
 } from "../shared/hybrid.ts";
+import { directInstanceCandidates } from "../shared/journey-router.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import {
   claimDailyIntent,
@@ -3660,6 +3662,57 @@ export async function handleMenuClick(
     ? iscaMatch.isca.recusaMsg
     : MENU_CONTENT[menuId];
   if (!content) return { sent: false };
+
+  if (menuId === "menu_logistica" && !channel.phone_number_id) {
+    for (
+      const instanceName of directInstanceCandidates(
+        channel.name,
+        channel.external_id,
+      )
+    ) {
+      const route = await getDirectUazapiRoute(
+        String(channel.id),
+        instanceName,
+      );
+      if (!route) continue;
+      const result = await hybridSendText(route, from, content);
+      if (!result?.ok) return { sent: false };
+      const { data: contact } = await db.from("contacts").select("id")
+        .eq("channel_id", channel.id).eq("external_contact_id", from)
+        .maybeSingle();
+      const { data: conv } = contact
+        ? await db.from("conversations").select("id,chatwoot_conversation_id")
+          .eq("contact_id", contact.id).neq("status", "resolved")
+          .order("opened_at", { ascending: false }).limit(1).maybeSingle()
+        : { data: null };
+      let cwMsgId: number | null = null;
+      if (conv?.chatwoot_conversation_id) {
+        try {
+          const cw = await createConversationMessage(
+            conv.chatwoot_conversation_id as number,
+            { content, messageType: "outgoing" },
+            acct,
+          );
+          cwMsgId = (cw?.id as number) ?? null;
+        } catch (error) {
+          console.warn("menu_logistica Chatwoot:", String(error).slice(0, 150));
+        }
+      }
+      await db.from("messages").insert({
+        conversation_id: conv?.id ?? null,
+        channel_id: channel.id,
+        direction: "out",
+        msg_type: "text",
+        content,
+        meta_message_id: null,
+        chatwoot_message_id: cwMsgId,
+        status: "sent",
+        sent_at: new Date().toISOString(),
+      });
+      return { sent: true };
+    }
+    return { sent: false };
+  }
 
   const { data: secret } = await db.from("channel_secrets").select(
     "channel_token",
