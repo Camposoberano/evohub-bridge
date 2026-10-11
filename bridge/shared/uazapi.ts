@@ -10,12 +10,25 @@ const REQUEST_TIMEOUT_MS = 45_000;
 
 type Json = Record<string, unknown>;
 
+export class UazapiResponseError extends Error {
+  constructor(
+    readonly stage: "await_response" | "read_body" | "invalid_body",
+    readonly elapsedMs: number,
+    cause: unknown,
+  ) {
+    super(`uazapi ${stage} após ${elapsedMs}ms`, { cause });
+    this.name = "UazapiResponseError";
+  }
+}
+
 export function uazapiConfigured(): boolean {
   return Boolean(BASE() && ADMIN());
 }
 
 async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown }) {
   const controller = new AbortController();
+  const startedAt = Date.now();
+  let stage: "await_response" | "read_body" = "await_response";
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -28,22 +41,20 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: controller.signal,
     });
+    stage = "read_body";
     let data: Json = {};
     try {
       data = await res.json();
     } catch (e) {
-      if (timedOut) {
-        throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms ao ler a resposta`, { cause: e });
-      }
+      if (timedOut) throw new UazapiResponseError("read_body", Date.now() - startedAt, e);
       if (res.ok && opts.method === "POST" && path.startsWith("/send/")) {
-        throw new Error("UAZAPI aceitou a requisição mas devolveu resposta ilegível", { cause: e });
+        throw new UazapiResponseError("invalid_body", Date.now() - startedAt, e);
       }
     }
     return { ok: res.ok, status: res.status, data };
   } catch (e) {
-    if (timedOut) {
-      throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms`, { cause: e });
-    }
+    if (e instanceof UazapiResponseError) throw e;
+    if (timedOut) throw new UazapiResponseError(stage, Date.now() - startedAt, e);
     throw e;
   } finally {
     clearTimeout(timer);

@@ -129,6 +129,7 @@ export async function handle(req: Request): Promise<Response> {
     recentSequenceResult,
     messageResult,
     commercialResult,
+    failedMessageResult,
   ] = await Promise.all([
     db.from("sales_sequences").select(
       "id,conversation_id,chatwoot_conversation_id,funnel,status",
@@ -151,15 +152,20 @@ export async function handle(req: Request): Promise<Response> {
       "id,conversation_id,content,msg_type,status,sent_at",
     ).eq("direction", "out").gte("sent_at", commercialSince)
       .order("sent_at", { ascending: false }).limit(2000),
+    db.from("scheduled_messages").select(
+      "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status,payload",
+      { count: "exact" },
+    ).eq("status", "failed").order("send_at", { ascending: false })
+      .limit(300),
   ]);
   if (
     activeSequenceResult.error || recentSequenceResult.error ||
-    messageResult.error || commercialResult.error
+    messageResult.error || commercialResult.error || failedMessageResult.error
   ) {
     return json({
       error: activeSequenceResult.error?.message ??
         recentSequenceResult.error?.message ?? messageResult.error?.message ??
-        commercialResult.error?.message,
+        commercialResult.error?.message ?? failedMessageResult.error?.message,
     }, 500);
   }
   const sequenceMap = new Map<string, Json>();
@@ -172,10 +178,38 @@ export async function handle(req: Request): Promise<Response> {
     sequenceMap.set(String(item.id), item);
   }
   const sequences = [...sequenceMap.values()];
-  const messages = (messageResult.data ?? []).map((item: Json) => ({
-    ...item,
-    funnel_label: funnelLabel(item.funnel),
-  }));
+  const scheduledMap = new Map<string, Json>();
+  for (const item of (messageResult.data ?? []) as Json[]) {
+    scheduledMap.set(String(item.id), {
+      ...item,
+      funnel_label: funnelLabel(item.funnel),
+    });
+  }
+  for (const item of (failedMessageResult.data ?? []) as Json[]) {
+    const payload = item.payload && typeof item.payload === "object"
+      ? item.payload as Json
+      : {};
+    const delivery = payload.__funnel_delivery &&
+        typeof payload.__funnel_delivery === "object"
+      ? payload.__funnel_delivery as Json
+      : {};
+    const { payload: _payload, ...safeItem } = item;
+    scheduledMap.set(String(item.id), {
+      ...safeItem,
+      funnel_label: funnelLabel(item.funnel),
+      delivery: {
+        last_outcome: delivery.last_outcome ?? null,
+        provider_status: delivery.provider_status ?? null,
+        provider_code: delivery.provider_code ?? null,
+        transport_stage: delivery.transport_stage ?? null,
+        transport_elapsed_ms: delivery.transport_elapsed_ms ?? null,
+        attempts: delivery.attempts ?? null,
+        retryable: delivery.last_outcome === "rejected" &&
+          Number(delivery.provider_status) === 429,
+      },
+    });
+  }
+  const messages = [...scheduledMap.values()];
   const commercialRows = (commercialResult.data ?? []).map((item: Json) => ({
     ...item,
     intent: commercialIntent(String(item.content ?? "")),
@@ -305,6 +339,8 @@ export async function handle(req: Request): Promise<Response> {
         http_status: payload.http_status ?? null,
         provider_code: payload.provider_code ?? null,
         failure_stage: payload.failure_stage ?? null,
+        transport_stage: payload.transport_stage ?? null,
+        transport_elapsed_ms: payload.transport_elapsed_ms ?? null,
       });
     }
   }
@@ -326,7 +362,8 @@ export async function handle(req: Request): Promise<Response> {
       paused: sequences.filter((item: Json) => item.status === "paused").length,
       pending:
         messages.filter((item: Json) => item.status === "pending").length,
-      failed: messages.filter((item: Json) => item.status === "failed").length,
+      failed: failedMessageResult.count ??
+        messages.filter((item: Json) => item.status === "failed").length,
       sent: messages.filter((item: Json) => item.status === "sent").length,
       won: won.length,
       lost: lost.length,

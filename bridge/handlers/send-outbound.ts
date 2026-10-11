@@ -44,6 +44,7 @@ import {
   isHybridRecipient,
 } from "../shared/hybrid.ts";
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
+import { UazapiResponseError } from "../shared/uazapi.ts";
 import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
@@ -340,6 +341,12 @@ export async function handle(req: Request): Promise<Response> {
       typeof details.provider_code === "number" ||
       typeof details.provider_code === "string"
     ) nextState.provider_code = details.provider_code;
+    if (typeof details.transport_stage === "string") {
+      nextState.transport_stage = details.transport_stage;
+    }
+    if (typeof details.transport_elapsed_ms === "number") {
+      nextState.transport_elapsed_ms = details.transport_elapsed_ms;
+    }
     let persisted = true;
     try {
       await persistFunnelDeliveryState(
@@ -1313,6 +1320,12 @@ export async function handle(req: Request): Promise<Response> {
       status: res.status,
     });
   } catch (error) {
+    let cause: unknown = error;
+    for (let depth = 0; depth < 4 && cause instanceof Error; depth++) {
+      if (cause instanceof UazapiResponseError) break;
+      cause = cause.cause;
+    }
+    const uazapiError = cause instanceof UazapiResponseError ? cause : null;
     const uncertainByTransport = error instanceof Error &&
       error.name === "UncertainDeliveryError";
     if (!dispatchStarted && !uncertainByTransport) {
@@ -1342,6 +1355,8 @@ export async function handle(req: Request): Promise<Response> {
       );
       await writeDeliveryOutcome(outcome, "failed", {
         failure_stage: "provider_transport",
+        transport_stage: uazapiError?.stage ?? null,
+        transport_elapsed_ms: uazapiError?.elapsedMs ?? null,
         retryable: false,
         partial: acceptedProviderMessages > 0,
       });
@@ -1355,6 +1370,8 @@ export async function handle(req: Request): Promise<Response> {
           day: funnelLink.funnel_day,
           type,
           outcome,
+          transport_stage: uazapiError?.stage ?? null,
+          transport_elapsed_ms: uazapiError?.elapsedMs ?? null,
         },
       }).then(() => {}, () => {});
       return json({

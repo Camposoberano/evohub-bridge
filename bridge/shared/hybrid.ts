@@ -253,7 +253,7 @@ export async function hybridSendMedia(
     console.log(
       "hybrid-media-req:",
       endpoint,
-      JSON.stringify(body).slice(0, 400),
+      mediaType,
     );
     const r = await uazInstPost(endpoint, route.token, body);
     if (!r.ok) {
