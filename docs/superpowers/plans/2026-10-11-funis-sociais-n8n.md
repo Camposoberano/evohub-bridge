@@ -68,12 +68,13 @@ Deno.test("social allowlist requires exact configured id and social type", () =>
 ```
 
 - [ ] **Step 3: Rodar o teste dirigido e confirmar falha por símbolo ausente.** `deno test --allow-env bridge/tests/social-channel-allowlist.test.ts`
-- [ ] **Step 4: Implementar leitura de `SOBERANO_SOCIAL_CHANNEL_IDS` como quatro IDs distintos separados por vírgula; falhar fechado quando ausente ou malformado.**
+- [ ] **Step 4: Fixar os quatro IDs aprovados e ler `SOBERANO_SOCIAL_CHANNEL_IDS` como subconjunto distinto de um a quatro IDs para ativação gradual; falhar fechado quando ausente, repetido ou desconhecido.**
 
 ```ts
 export function configuredSocialChannelIds(raw = Deno.env.get("SOBERANO_SOCIAL_CHANNEL_IDS") ?? ""): ReadonlySet<string> {
   const ids = raw.split(",").map((id) => id.trim()).filter(Boolean);
-  return ids.length === 4 && new Set(ids).size === 4 ? new Set(ids) : new Set();
+  return ids.length > 0 && ids.length <= 4 && new Set(ids).size === ids.length &&
+      ids.every((id) => APPROVED_SOCIAL_CHANNEL_IDS.has(id)) ? new Set(ids) : new Set();
 }
 export function isApprovedSocialChannel(channel: Record<string, unknown>, ids = configuredSocialChannelIds()): boolean {
   return ["facebook", "instagram"].includes(String(channel.type ?? "")) && ids.has(String(channel.id ?? ""));
