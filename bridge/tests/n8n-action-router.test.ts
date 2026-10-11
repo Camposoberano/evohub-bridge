@@ -4,7 +4,8 @@ import {
   enabledN8nActions,
 } from "../shared/n8n-action-router.ts";
 
-Deno.test("uma flag por ação preserva a migração gradual", () => {
+Deno.test("produção usa todas as ações do n8n sem fallback de conteúdo local", () => {
+  assertEquals(enabledN8nActions().size, 14);
   assertEquals([...enabledN8nActions("funil,preco,invalida")], ["funil", "preco"]);
   assertEquals([...enabledN8nActions("")], []);
 });

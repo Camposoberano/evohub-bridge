@@ -29,6 +29,7 @@ import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
+import { confirmN8nRecovery } from "../shared/n8n-recovery.ts";
 import { toSocialAudio, toVoiceOgg } from "../shared/audio.ts";
 import {
   decidirSemMidia,
@@ -417,6 +418,16 @@ export async function handle(req: Request): Promise<Response> {
       });
     }
   };
+  const confirmRecoveryIfComplete = async (): Promise<void> => {
+    if (!scheduledRow) return;
+    try {
+      await confirmN8nRecovery(db, scheduledRow, String(channel.id));
+    } catch (error) {
+      // A confirmação do provedor já foi persistida; uma falha de evento não
+      // pode transformar esse envio em erro e provocar uma segunda mensagem.
+      console.error("send-outbound: confirmação da recuperação falhou", error);
+    }
+  };
 
   if (scheduledRow && deliveryState?.last_outcome === "started") {
     const lastAttemptAt = Date.parse(deliveryState.last_attempt_at ?? "");
@@ -713,6 +724,7 @@ export async function handle(req: Request): Promise<Response> {
       if (sequenceSent) {
         await writeDeliveryOutcome("sent", "sent");
         await advanceFunnelSequence(new Date().toISOString());
+        await confirmRecoveryIfComplete();
         return json({ ok: true, sent: true, results });
       }
       const failedResponse = lastResponse;
@@ -1151,6 +1163,7 @@ export async function handle(req: Request): Promise<Response> {
       const sentAt = new Date().toISOString();
       await writeDeliveryOutcome("sent", "sent");
       await advanceFunnelSequence(sentAt);
+      await confirmRecoveryIfComplete();
     }
 
     // O eco da Uazapi pode chegar ao Chatwoot antes de terminarmos o registro local.

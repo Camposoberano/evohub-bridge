@@ -1699,6 +1699,25 @@ async function handleUsoSelecionado(
     { origin: "cliente", messageId: eventMessageId ?? null },
   );
 
+  // No 5895, o contexto da finalidade e as artes de preço pertencem ao mesmo
+  // workflow editável. Não produzir uma primeira mensagem pelo bridge.
+  if (mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+    enabledN8nActions().has("preco")) {
+    const cwConvId = Number(conv?.chatwoot_conversation_id);
+    if (!cwConvId) throw new Error("conversa sem ID Chatwoot para finalidade no n8n");
+    const dispatched = await dispatchSoberanoAction({
+      request_id: eventMessageId ?? actionScope ??
+        `use-price:${use}:${channel.id}:${from}:${new Date().toISOString().slice(0, 10)}`,
+      source: "intent",
+      chatwoot_conversation_id: cwConvId,
+      action: "preco",
+      funnel_version: RESTORED_5895_FUNNEL,
+      selection: `uso_${use}`,
+    });
+    if (!dispatched.ok) throw new Error(`n8n finalidade/preço: ${dispatched.error}`);
+    return;
+  }
+
   // Só slots dedicados, revisados por finalidade, podem ser prova. O catálogo não tem um
   // campo de aprovação; nomes explícitos + ativo + URL segura + legenda impedem cair na
   // seleção genérica de vídeo que já provocou rajadas repetidas.

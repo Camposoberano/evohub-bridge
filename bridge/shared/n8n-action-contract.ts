@@ -25,6 +25,8 @@ export type ActionRequest = {
   chatwoot_conversation_id: number;
   action: SoberanoAction;
   funnel_version: string;
+  /** Repair a reserved main sequence only when no delivery evidence exists. */
+  repair_missing_opening?: boolean;
   /** Botão de detalhe dentro do fluxo de preço, plantio ou nutrição. */
   selection?: string;
   /** Resultado do registro de cotação; usado só em preco_cotar_*. */

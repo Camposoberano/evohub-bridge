@@ -49,10 +49,7 @@ import {
   RESTORED_5895_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
-import {
-  dispatchSoberanoAction,
-  enabledN8nActions,
-} from "../shared/n8n-action-router.ts";
+import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
@@ -1088,41 +1085,19 @@ export async function autoEnrollFunil(
 
   let outcome: EnrollOutcome;
   try {
-    if (
-      funnelId === RESTORED_5895_FUNNEL &&
-      conversation?.id && enabledN8nActions().has("funil")
-    ) {
-      const dispatched = await dispatchSoberanoAction({
-        request_id: options.sourceMessageId ?? `ad-conversation:${conversation.id}`,
-        source: "ad",
-        chatwoot_conversation_id: Number(conversation.chatwoot_conversation_id),
-        action: "funil",
-        funnel_version: RESTORED_5895_FUNNEL,
-      });
-      if (!dispatched.ok) throw new Error(dispatched.error);
-      outcome = dispatched.duplicate ? "already" : "created";
-    } else {
-      outcome = await enrollIfNew(db, channel, from, {
-        // A resposta específica ou o handoff humano substitui a abertura genérica.
-        skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
-        openingReason,
-        originSignal,
-        conversation,
-      });
-    }
+    outcome = await enrollIfNew(db, channel, from, {
+      // A resposta específica ou o handoff humano substitui a abertura genérica
+      // nos outros canais. O 5895 usa sempre a versão fiel do n8n.
+      skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
+      openingReason,
+      originSignal,
+      conversation,
+    });
   } catch (error) {
     console.error("autoEnrollFunil inscrição falhou:", error);
-    // A entrada de anúncio não pode desaparecer quando o n8n oscila. O caminho
-    // histórico permanece como retaguarda e a deduplicação consulta a sequência.
-    try {
-      outcome = await enrollIfNew(db, channel, from, {
-        originSignal,
-        conversation,
-      });
-    } catch (fallbackError) {
-      console.error("autoEnrollFunil retaguarda falhou:", fallbackError);
-      outcome = "in_progress";
-    }
+    // O watchdog retenta a mesma ação estável quando o n8n volta. Não inserir
+    // um conteúdo local diferente na conversa durante a falha.
+    outcome = "in_progress";
   }
   let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome) &&
     !openingReason;
@@ -1250,6 +1225,22 @@ export async function enrollIfNew(
   if (!conv.chatwoot_conversation_id) return "no_conversation";
   const funnelId = mainFunnelForChannel(channel);
 
+  // Toda porta de inscrição do 5895 (anúncio, macro, saudação e watchdog)
+  // converge no conteúdo do n8n. Uma falha do webhook fica para retentativa;
+  // o roteiro local nunca entra como emissor alternativo.
+  if (funnelId === RESTORED_5895_FUNNEL) {
+    const dispatched = await dispatchSoberanoAction({
+      request_id: `funnel-conversation:${conv.id}`,
+      source: options.manual ? "macro" : "ad",
+      chatwoot_conversation_id: Number(conv.chatwoot_conversation_id),
+      action: "funil",
+      funnel_version: RESTORED_5895_FUNNEL,
+      repair_missing_opening: options.repairMissingOpening === true,
+    });
+    if (!dispatched.ok) throw new Error(`n8n funil: ${dispatched.error}`);
+    return dispatched.duplicate ? "already" : "created";
+  }
+
   const claimKey = `funil-enroll-${String(conv.id)}`;
   if (!await claimDeliveryWithTtl(db, claimKey, "funil-enroll", 2 * 60_000)) {
     return "in_progress";
@@ -1329,10 +1320,10 @@ export async function recoverEligibleFunnels(
     consultaEmLotes<Json>(
       conversationIds,
       (lote) =>
-        db.from("sales_sequences").select("conversation_id").in(
-          "conversation_id",
-          lote,
-        ),
+        db.from("scheduled_messages").select("conversation_id")
+          .eq("funnel", RESTORED_5895_FUNNEL)
+          .eq("step", 0)
+          .in("conversation_id", lote),
     ),
     consultaEmLotes<Json>(
       conversationIds,
@@ -1382,7 +1373,8 @@ export async function recoverEligibleFunnels(
       | Json
       | undefined;
     if (!channel || !canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) continue;
-    if ((inboundCounts.get(String(conversation.id)) ?? 0) > 1) continue;
+    if ((inboundCounts.get(String(conversation.id)) ?? 0) > 1 &&
+      conversation.origem !== "anuncio") continue;
     const content = latestInbound.get(String(conversation.id)) ?? "";
     if (conversation.origem !== "anuncio" && !isDefaultAdMessage(content)) {
       continue;
@@ -1399,7 +1391,7 @@ export async function recoverEligibleFunnels(
       db,
       channel,
       String(contact.external_contact_id),
-      { originSignal, conversation },
+      { originSignal, conversation, repairMissingOpening: true },
     );
     if (outcome === "created") enrolled++;
   }

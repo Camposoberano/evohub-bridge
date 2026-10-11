@@ -26,6 +26,7 @@ import {
   enabledN8nActions,
 } from "../shared/n8n-action-router.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
+import { confirmN8nRecovery } from "../shared/n8n-recovery.ts";
 import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
@@ -136,14 +137,23 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "canal da conversa indisponível" }, 500);
   }
   const funnelId = mainFunnelForChannel(controlChannel);
+  const n8nAlias: Record<string, string> = {
+    iniciar: "funil",
+    "start-funil": "funil",
+    price: "preco",
+    videos: "video",
+    depoimento: "video",
+  };
+  const routedAction = n8nAlias[action] ?? action;
 
-  // As flags ligam uma macro por vez ao workflow n8n correspondente. Chamadas
+  // O 5895 usa o workflow n8n correspondente, inclusive para aliases. Chamadas
   // vindas de /n8n-action-enqueue passam pela implementação local sem recursão.
   if (
     funnelId === RESTORED_5895_FUNNEL &&
     body.n8n_internal !== true &&
-    isSoberanoAction(action) &&
-    enabledN8nActions().has(action)
+    isSoberanoAction(routedAction) &&
+    !routedAction.startsWith("recuperacao-") &&
+    enabledN8nActions().has(routedAction)
   ) {
     const requestId = typeof body.request_id === "string" &&
         body.request_id.trim()
@@ -153,7 +163,7 @@ export async function handle(req: Request): Promise<Response> {
       request_id: requestId,
       source: "macro",
       chatwoot_conversation_id: cwConvId,
-      action,
+      action: routedAction,
       funnel_version: RESTORED_5895_FUNNEL,
     });
     if (!dispatched.ok) {
@@ -166,13 +176,13 @@ export async function handle(req: Request): Promise<Response> {
     if (!dispatched.duplicate && dispatched.accepted > 0) {
       await nota(
         cwConvId,
-        `📥 Ação "${action}" aceita no n8n: ${dispatched.accepted} peça(s) na fila. Envio ainda será confirmado pelo bridge.`,
+        `📥 Ação "${routedAction}" aceita no n8n: ${dispatched.accepted} peça(s) na fila. Envio ainda será confirmado pelo bridge.`,
         acct,
       );
     }
     return json({
       ok: true,
-      action,
+      action: routedAction,
       queued: dispatched.accepted,
       duplicate: dispatched.duplicate,
     });
@@ -706,6 +716,72 @@ export async function dispatchRecovery(
   }
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
+  const n8nAction = `recuperacao-${variation}`;
+  if (
+    mainFunnelForChannel(resolved.channel) === RESTORED_5895_FUNNEL &&
+    isSoberanoAction(n8nAction) && enabledN8nActions().has(n8nAction)
+  ) {
+    const { data: priorClaim, error: claimError } = await db.from("deliveries")
+      .select("delivery_id").eq("delivery_id", claimKey).maybeSingle();
+    if (claimError) {
+      if (automatic) return { state: "failed" };
+      return json({ ok: false, error: "falha ao consultar recuperação" }, 503);
+    }
+    // Uma recuperação antiga já enviada continua protegida pela trava original.
+    if (!priorClaim) {
+      const recoveryFunnel = `${RESTORED_5895_FUNNEL}:${n8nAction}`;
+      const { data: queued, error: queueError } = await db.from("scheduled_messages")
+        .select("status").eq("conversation_id", conv.id)
+        .eq("funnel", recoveryFunnel);
+      if (queueError) {
+        if (automatic) return { state: "failed" };
+        return json({ ok: false, error: "falha ao consultar fila" }, 503);
+      }
+      if (queued?.length) {
+        if (queued.every((piece: { status: string }) => piece.status === "sent")) {
+          try {
+            await confirmN8nRecovery(db, {
+              conversation_id: conv.id,
+              chatwoot_conversation_id: cwConvId,
+              funnel: recoveryFunnel,
+            }, String(resolved.channel.id));
+          } catch (error) {
+            console.error("recovery: reconciliação n8n falhou", error);
+            if (automatic) return { state: "failed" };
+            return json({ ok: false, error: "falha ao confirmar recuperação" }, 503);
+          }
+          if (automatic) return { state: "reconciled" };
+          return json({ ok: true, action: n8nAction, skipped: "already-sent" });
+        }
+        if (queued.some((piece: { status: string }) => piece.status === "failed")) {
+          if (automatic) return { state: "failed" };
+          return json({ ok: false, error: "recuperação na fila exige conciliação" }, 409);
+        }
+        if (automatic) return { state: "queued" };
+        return json({ ok: true, action: n8nAction, queued: queued.length, duplicate: true });
+      }
+      const dispatched = await dispatchSoberanoAction({
+        request_id: `recovery:${conv.id}:${variation}`,
+        source: automatic ? "intent" : "macro",
+        chatwoot_conversation_id: cwConvId,
+        action: n8nAction,
+        funnel_version: RESTORED_5895_FUNNEL,
+      });
+      if (!dispatched.ok) {
+        if (automatic) return { state: "failed" };
+        return json({ ok: false, terminal: dispatched.terminal, error: dispatched.error },
+          dispatched.terminal ? 422 : 503);
+      }
+      if (!automatic) {
+        await nota(cwConvId,
+          `📥 Recuperação ${variation} aceita no n8n: ${dispatched.accepted} peça(s) na fila. O envio será confirmado depois.`,
+          acct);
+        return json({ ok: true, action: n8nAction, queued: dispatched.accepted,
+          duplicate: dispatched.duplicate });
+      }
+      return { state: "queued" };
+    }
+  }
   if (!await claimDelivery(db, claimKey, "recovery")) {
     // A cadeia conhece as recuperações pela tabela de eventos, mas a trava de entrega é
     // durável. Quando o evento já expirou, reconstituí-lo evita que cada rodada tente a

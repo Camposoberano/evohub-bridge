@@ -178,6 +178,7 @@ export type RecoveryChainResult = {
   /** entregas históricas reencontradas e registradas sem novo envio */
   reconciled: number;
   sent: number;
+  queued: number;
   failed: number;
   /** conversas encerradas como `lost` por silêncio nesta rodada */
   encerradas: number;
@@ -189,7 +190,7 @@ export type RecoveryChainResult = {
  * mas o estado histórico foi reconstituído para que a cadeia não tente a mesma variação
  * de novo. */
 export type RecoveryDispatchResult = {
-  state: "sent" | "reconciled" | "failed";
+  state: "sent" | "queued" | "reconciled" | "failed";
 };
 
 /** Envia de fato. Injetado pra manter este módulo livre de import circular com
@@ -220,6 +221,7 @@ export async function pumpRecoveryChain(
     due: 0,
     reconciled: 0,
     sent: 0,
+    queued: 0,
     failed: 0,
     encerradas: 0,
   };
@@ -471,7 +473,7 @@ export async function pumpRecoveryChain(
   }
 
   for (const sequence of sequences as Json[]) {
-    if (result.sent >= maxPorRodada) break;
+    if (result.sent + result.queued >= maxPorRodada) break;
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
     if (v2Conversations.has(conversationId)) continue;
@@ -520,6 +522,7 @@ export async function pumpRecoveryChain(
       if (!conv) continue;
       const outcome = await dispatch(conv as Json, cwConvId, variation);
       if (outcome.state === "sent") result.sent++;
+      else if (outcome.state === "queued") result.queued++;
       else if (outcome.state === "reconciled") result.reconciled++;
       else result.failed++;
     } catch (e) {

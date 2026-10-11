@@ -12,6 +12,7 @@ import { admin, claimDelivery } from "../shared/supabase.ts";
 import { optionalEnv, env } from "../shared/env.ts";
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { canalAlvoFunil } from "../shared/funil-anuncio.ts";
+import { hasFunnelDeliveryEvidence } from "../shared/funnel-state.ts";
 import {
   isContactBlocked,
   isContactExcludedFromAutomation,
@@ -122,9 +123,9 @@ export function validateEnqueueBody(
   ) return { ok: false, error: "identidade ou versão inválida" };
   if (request.selection != null &&
     (typeof request.selection !== "string" ||
-      !/^(?:plantio_(?:inicio|solo|colheita|(?:[1-9]|10))|nutricao_(?:[1-9]|10)|preco_(?:pagamento|area_maior|comprar|tamanho|cotar_tam_(?:2kg|4kg|10kg|20kg|mais20kg))|pag_(?:pix|cartao|boleto)|tam_(?:2kg|4kg|10kg|20kg|mais20kg))$/.test(request.selection) ||
+      !/^(?:plantio_(?:inicio|solo|colheita|(?:[1-9]|10))|nutricao_(?:[1-9]|10)|preco_(?:pagamento|area_maior|comprar|tamanho|cotar_tam_(?:2kg|4kg|10kg|20kg|mais20kg))|pag_(?:pix|cartao|boleto)|tam_(?:2kg|4kg|10kg|20kg|mais20kg)|uso_(?:silagem|pastejo|outro))$/.test(request.selection) ||
       !(action === "preco"
-        ? /^(?:preco_|pag_|tam_)/.test(request.selection)
+        ? /^(?:preco_|pag_|tam_|uso_)/.test(request.selection)
         : request.selection.startsWith(`${action}_`)))) {
     return { ok: false, error: "seleção inválida para a ação" };
   }
@@ -133,6 +134,10 @@ export function validateEnqueueBody(
       action !== "preco" ||
       !String(request.selection ?? "").startsWith("preco_cotar_"))) {
     return { ok: false, error: "estado de cotação inválido" };
+  }
+  if (request.repair_missing_opening != null &&
+    (typeof request.repair_missing_opening !== "boolean" || action !== "funil")) {
+    return { ok: false, error: "reparo inválido para a ação" };
   }
   if (String(request.selection ?? "").startsWith("preco_cotar_") &&
     typeof request.quote_registered !== "boolean") {
@@ -309,7 +314,7 @@ export async function handle(req: Request): Promise<Response> {
     .select("delivery_id").eq("delivery_id", acceptedClaim).maybeSingle();
   if (acceptedError) return json({ ok: false, error: "falha ao consultar confirmação" }, 503);
   if (accepted) return json({ ok: true, accepted: rows.length, duplicate: true });
-  const sequenceId = body.request.action === "funil"
+  let sequenceId = body.request.action === "funil"
     ? await actionUuid(`${key}:sequence`)
     : null;
   if (sequenceId) {
@@ -319,7 +324,14 @@ export async function handle(req: Request): Promise<Response> {
       .eq("funnel", RESTORED_5895_FUNNEL).maybeSingle();
     if (existingError) return json({ ok: false, error: "falha ao consultar sequência" }, 503);
     if (existing && existing.id !== sequenceId) {
-      return json({ ok: true, accepted: 0, duplicate: true, sequence_status: existing.status });
+      if (!body.request.repair_missing_opening ||
+        !["running", "paused"].includes(String(existing.status)) ||
+        await hasFunnelDeliveryEvidence(db, String(conversation.id), RESTORED_5895_FUNNEL)) {
+        return json({ ok: true, accepted: 0, duplicate: true, sequence_status: existing.status });
+      }
+      // Reserva antiga sem nenhuma peça: aproveita a sequência e deixa o n8n
+      // preencher o roteiro de 30/09, sem criar uma segunda identidade.
+      sequenceId = String(existing.id);
     }
     if (!existing) {
       const { error: createError } = await db.from("sales_sequences").insert({
