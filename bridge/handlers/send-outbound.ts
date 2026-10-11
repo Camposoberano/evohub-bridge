@@ -39,11 +39,13 @@ import {
 import {
   getHybridRoute,
   hybridSendMedia,
+  hybridSendList,
   hybridSendMenu,
   hybridSendText,
   isHybridRecipient,
 } from "../shared/hybrid.ts";
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
+import { buildHybridListFallback, type HybridListSection } from "../shared/hybrid-list.ts";
 import { UazapiResponseError } from "../shared/uazapi.ts";
 import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
@@ -1045,6 +1047,23 @@ export async function handle(req: Request): Promise<Response> {
             hybrid,
             to,
             buildHybridMenuFallback(payload.text as string, buttons),
+          )) ?? undefined;
+        }
+      } else if (type === "list") {
+        const sections = (payload.sections as HybridListSection[]) ?? [];
+        res = (await hybridSendList(
+          hybrid,
+          to,
+          String(payload.text ?? ""),
+          sections,
+          String(payload.button_label ?? "Escolher assunto"),
+          payload.footer_text as string | undefined,
+        )) ?? undefined;
+        if (!res) {
+          res = (await hybridSendText(
+            hybrid,
+            to,
+            buildHybridListFallback(String(payload.text ?? ""), sections),
           )) ?? undefined;
         }
       }
