@@ -20,6 +20,23 @@ Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
   assertEquals(validateEnqueueBody({ request, pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
 });
 
+Deno.test("versão social aceita 31 peças e mantém identidade própria na fila", async () => {
+  const pieces = Array.from({ length: 31 }, (_, index) => ({
+    day: Math.min(5, Math.floor(index / 7) + 1),
+    type: "text",
+    payload: { content: "Peça" },
+    offset_seconds: index,
+  }));
+  const parsed = validateEnqueueBody({
+    request: { ...request, funnel_version: "mega-sorgo-social-20260930" }, pieces,
+  });
+  assertEquals(parsed.ok, true);
+  if (!parsed.ok) return;
+  const rows = await buildActionRows(parsed.value, "conversation-social", 1_760_000_000_000);
+  assertEquals(rows.length, 31);
+  assertEquals(rows.every((row) => row.funnel === "mega-sorgo-social-20260930"), true);
+});
+
 Deno.test("reparo de abertura exige sinal explícito e só vale no funil principal", () => {
   const pieces = Array.from({ length: 31 }, (_, index) => ({
     day: Math.min(5, Math.floor(index / 7) + 1),

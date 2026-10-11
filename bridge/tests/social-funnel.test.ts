@@ -3,6 +3,7 @@ import {
   inferSocialPriceReplyFromPrompts,
   renderSocialFunnelMessages,
   socialPriceActionClaimKey,
+  socialPartReceiptPayload,
 } from "../shared/social-funnel.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
 
@@ -23,6 +24,14 @@ Deno.test("funil social envia imagem real e legenda", () => {
   );
 });
 
+Deno.test("cada parte da peça social tem recibo separado sem conteúdo ou contato", () => {
+  const receipt = socialPartReceiptPayload("scheduled-1", 1, 2, "meta-mid-2");
+  assert(receipt.scheduled_message_id === "scheduled-1", "deve ligar ao item da fila");
+  assert(receipt.part_index === 1 && receipt.part_count === 2, "deve identificar a parte");
+  assert(receipt.provider_message_id === "meta-mid-2", "deve preservar o ID do provedor");
+  assert(!("text" in receipt) && !("phone" in receipt), "não deve copiar conteúdo ou contato");
+});
+
 Deno.test("funil social converte botões em respostas rápidas", () => {
   const messages = renderSocialFunnelMessages("interactive", {
     text: "Qual área?",
@@ -40,6 +49,18 @@ Deno.test("funil social converte botões em respostas rápidas", () => {
     replies[0].payload === "tam_2kg",
     "payload deve manter a ação comercial",
   );
+});
+
+Deno.test("Instagram divide mais de treze botões sem cortar a última opção", () => {
+  const messages = renderSocialFunnelMessages("interactive", {
+    text: "Escolha o tema",
+    buttons: Array.from({ length: 14 }, (_, index) => ({
+      id: `tema_${index + 1}`, title: `Tema ${index + 1}`,
+    })),
+  }, "instagram");
+  assert(messages.length === 2, "quatorze botões exigem dois blocos");
+  const lastReplies = messages[1].message.quick_replies as Record<string, unknown>[];
+  assert(lastReplies[0].payload === "tema_14", "o último botão não pode sumir");
 });
 
 Deno.test("Facebook usa botões persistentes com postback", () => {
@@ -92,7 +113,7 @@ Deno.test("cartão comercial usa imagem e botão externo no Facebook e Instagram
   }
 });
 
-Deno.test("funil social converte lista em até treze respostas rápidas", () => {
+Deno.test("funil social divide lista sem perder respostas rápidas", () => {
   const rows = Array.from({ length: 15 }, (_, index) => ({
     id: `tema_${index}`,
     title: `Tema ${index}`,
@@ -106,6 +127,22 @@ Deno.test("funil social converte lista em até treze respostas rápidas", () => 
     replies.length === 13,
     "Meta aceita no máximo treze respostas rápidas",
   );
+  assert(messages.length === 2, "quinze opções exigem dois blocos");
+  const remaining = messages[1].message.quick_replies as Record<string, unknown>[];
+  assert(remaining.length === 2, "as duas opções restantes continuam disponíveis");
+  assert(remaining[1].payload === "tema_14", "a última opção não pode sumir");
+});
+
+Deno.test("Facebook divide quatro botões de preço sem cortar o último", () => {
+  const messages = renderSocialFunnelMessages("interactive", {
+    text: "Escolha o pacote",
+    buttons: [2, 4, 10, 20].map((kg) => ({ id: `tam_${kg}kg`, title: `${kg} kg` })),
+  }, "facebook");
+  assert(messages.length === 2, "quatro opções exigem dois cartões");
+  const lastAttachment = messages[1].message.attachment as Record<string, unknown>;
+  const lastPayload = lastAttachment.payload as Record<string, unknown>;
+  const lastButtons = lastPayload.buttons as Record<string, unknown>[];
+  assert(lastButtons[0].payload === "tam_20kg", "a opção de 20 kg não pode sumir");
 });
 
 Deno.test("Facebook divide listas longas em botões persistentes", () => {

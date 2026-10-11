@@ -47,7 +47,10 @@ import {
   LEGACY_MAIN_FUNNEL,
   mainFunnelForChannel,
   RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+  funnelVersionForChannel,
 } from "../shared/funnel-identity.ts";
+import { socialLeadEntry, type SocialLeadEntry } from "../shared/social-lead-entry.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
 import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 
@@ -781,8 +784,6 @@ function json(obj: unknown, status = 200): Response {
 // Para anúncios, o canal 5895 é fixo; referral/origem/mensagem padrão são os sinais principais.
 //   FUNIL_KEYWORD = fallback opcional por palavra-chave quando não há sinal de anúncio.
 // Chamado pelo hub-webhook a cada entrada. Dedup: 1 funil por conversa (sales_sequences).
-const CANAIS_SOCIAIS = new Set(["facebook", "instagram"]);
-
 /** Frases extras de anúncio, para acrescentar um icebreaker novo sem deploy. */
 export function icebreakersConfigurados(): string[] {
   return (optionalEnv("FUNIL_ICEBREAKERS") ?? "")
@@ -802,37 +803,24 @@ export async function ehAberturaDeAnuncioSocial(
   channel: Json,
   from: string,
   content: string,
-  activeConversationId?: string,
-): Promise<boolean> {
-  if (!CANAIS_SOCIAIS.has(String(channel.type ?? ""))) return false;
-  if (!pareceAberturaComercial(content, icebreakersConfigurados())) {
-    return false;
-  }
-
-  let conversationId = activeConversationId;
-  if (!conversationId) {
-    const { data: contact, error: contactError } = await db.from("contacts")
-      .select("id")
-      .eq("channel_id", channel.id).eq("external_contact_id", from)
-      .maybeSingle();
-    if (contactError) throw contactError;
-    if (!contact) return false;
-    const { data: conv, error: conversationError } = await db.from(
-      "conversations",
-    ).select("id")
-      .eq("contact_id", contact.id).neq("status", "resolved")
-      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-    if (conversationError) throw conversationError;
-    conversationId = conv?.id as string | undefined;
-  }
-  if (!conversationId) return false;
-
-  // 1 = a que acabou de ser gravada. Acima disso a conversa já estava em andamento.
+  fromAd = false,
+  activeConversation?: Json | null,
+): Promise<SocialLeadEntry> {
+  if (funnelVersionForChannel(channel) !== SOCIAL_N8N_FUNNEL) return null;
+  const conversation = activeConversation ?? await activeConversationForContact(db, channel, from);
+  if (!conversation?.id) return null;
   const { count, error: messageCountError } = await db.from("messages")
     .select("id", { count: "exact", head: true })
-    .eq("conversation_id", conversationId).eq("direction", "in");
+    .eq("conversation_id", conversation.id).eq("direction", "in");
   if (messageCountError) throw messageCountError;
-  return (count ?? 0) <= 1;
+  return socialLeadEntry({
+    hasReferral: fromAd,
+    persistedAdOrigin: conversation.origem === "anuncio",
+    inboundCount: count ?? 0,
+    openedAt: typeof conversation.opened_at === "string" ? conversation.opened_at : null,
+    text: content,
+    icebreakers: icebreakersConfigurados(),
+  });
 }
 
 export type AutoEnrollResult = {
@@ -986,12 +974,14 @@ export async function autoEnrollFunil(
     sourceMessageId?: string | null;
   } = {},
 ): Promise<AutoEnrollResult> {
-  if (!canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) {
+  const funnelId = funnelVersionForChannel(channel);
+  if (!funnelId) {
     return { adOrigin: false, humanHandoff: false, deferIntent: false };
   }
-  const funnelId = mainFunnelForChannel(channel);
   const conversation = await activeConversationForContact(db, channel, from);
-  let originSignal: string | null = fromAd
+  let originSignal: string | null = funnelId === SOCIAL_N8N_FUNNEL
+    ? null
+    : fromAd
     ? "meta_referral"
     : conversation?.origem === "anuncio"
     ? "persisted_ad_origin"
@@ -1008,21 +998,28 @@ export async function autoEnrollFunil(
   // Só na abertura, e só nesses canais. No WhatsApp a inscrição já funciona por outro caminho
   // (63 de 67 aberturas comerciais entraram no funil nos mesmos 5 dias), e alargar a regra lá
   // pegaria quem chega por indicação, não por anúncio.
-  if (
-    !originSignal && await ehAberturaDeAnuncioSocial(
+  if (funnelId === SOCIAL_N8N_FUNNEL) {
+    const socialEntry = await ehAberturaDeAnuncioSocial(
       db,
       channel,
       from,
       content,
-      String(conversation?.id ?? "") || undefined,
-    )
-  ) {
-    originSignal = "social_opening";
+      fromAd,
+      conversation,
+    );
+    originSignal = socialEntry === "ad_referral"
+      ? "meta_referral"
+      : socialEntry === "commercial_fallback"
+      ? "social_opening"
+      : null;
   }
 
   // Sinais de anúncio têm precedência: preço, dúvida técnica e demais intenções não podem
   // impedir a inscrição quando a Meta ou a conversa já confirmou a origem.
   if (!originSignal) {
+    if (funnelId === SOCIAL_N8N_FUNNEL) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
     // Um pedido orgânico já claro deve ir para sua resposta imediata, sem régua paralela.
     if (classificarIntencaoComercial(content)) {
       return { adOrigin: false, humanHandoff: false, deferIntent: false };
@@ -1037,6 +1034,16 @@ export async function autoEnrollFunil(
   }
 
   const adFunnelOrigin = isAdFunnelOriginSignal(originSignal);
+  if (funnelId === SOCIAL_N8N_FUNNEL && conversation?.id) {
+    const { data: oldSequences, error: oldSequenceError } = await db
+      .from("sales_sequences").select("id")
+      .eq("conversation_id", conversation.id)
+      .eq("funnel", LEGACY_MAIN_FUNNEL).limit(1);
+    if (oldSequenceError) throw oldSequenceError;
+    if (oldSequences?.length) {
+      return { adOrigin: true, humanHandoff: false, deferIntent: false };
+    }
+  }
   if (adFunnelOrigin && conversation?.id) {
     const { data: existingSequence, error: sequenceLookupError } = await db
       .from("sales_sequences").select("id")
@@ -1076,6 +1083,7 @@ export async function autoEnrollFunil(
     unsupportedQuestion,
   ) ||
     (adFunnelOrigin && funnelId !== RESTORED_5895_FUNNEL &&
+      funnelId !== SOCIAL_N8N_FUNNEL &&
       isLogisticaIntent(content));
   const openingReason = humanHandoffWillHandle || automaticHandoff
     ? "human_handoff"
@@ -1088,7 +1096,9 @@ export async function autoEnrollFunil(
     outcome = await enrollIfNew(db, channel, from, {
       // A resposta específica ou o handoff humano substitui a abertura genérica
       // nos outros canais. O 5895 usa sempre a versão fiel do n8n.
-      skipOpening: suprimirAberturaGenerica(Boolean(openingReason)),
+      skipOpening: funnelId === SOCIAL_N8N_FUNNEL
+        ? false
+        : suprimirAberturaGenerica(Boolean(openingReason)),
       openingReason,
       originSignal,
       conversation,
@@ -1098,6 +1108,19 @@ export async function autoEnrollFunil(
     // O watchdog retenta a mesma ação estável quando o n8n volta. Não inserir
     // um conteúdo local diferente na conversa durante a falha.
     outcome = "in_progress";
+  }
+  if (funnelId === SOCIAL_N8N_FUNNEL && outcome === "created" && conversation?.id) {
+    const { error: originEventError } = await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "social_n8n_enrolled",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conversation.id,
+        funnel_version: funnelId,
+        origin: originSignal === "social_opening" ? "commercial_fallback" : "ad_referral",
+      },
+    });
+    if (originEventError) console.warn("social_n8n_enrolled: falha ao registrar origem");
   }
   let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome) &&
     !openingReason;
@@ -1175,7 +1198,8 @@ export async function autoEnrollFunil(
   // para respostas posteriores. A primeira entrada do anúncio precisa enviar a abertura.
   if (
     openingReason && conversation?.id && !deferIntent &&
-    !(funnelId === RESTORED_5895_FUNNEL && openingReason === "intent_answered")
+    !([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId) &&
+      openingReason === "intent_answered")
   ) {
     try {
       await autoPauseFunil(String(conversation.id), openingReason, {
@@ -1228,13 +1252,13 @@ export async function enrollIfNew(
   // Toda porta de inscrição do 5895 (anúncio, macro, saudação e watchdog)
   // converge no conteúdo do n8n. Uma falha do webhook fica para retentativa;
   // o roteiro local nunca entra como emissor alternativo.
-  if (funnelId === RESTORED_5895_FUNNEL) {
+  if ([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)) {
     const dispatched = await dispatchSoberanoAction({
       request_id: `funnel-conversation:${conv.id}`,
       source: options.manual ? "macro" : "ad",
       chatwoot_conversation_id: Number(conv.chatwoot_conversation_id),
       action: "funil",
-      funnel_version: RESTORED_5895_FUNNEL,
+      funnel_version: funnelId,
       repair_missing_opening: options.repairMissingOpening === true,
     });
     if (!dispatched.ok) throw new Error(`n8n funil: ${dispatched.error}`);

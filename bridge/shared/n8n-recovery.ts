@@ -1,6 +1,6 @@
 import { getConversationLabels, setConversationLabels } from "./chatwoot.ts";
 import { accountForChannel } from "./accounts.ts";
-import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
+import { RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
 import { admin, claimDelivery, releaseDelivery } from "./supabase.ts";
 
 type Db = ReturnType<typeof admin>;
@@ -8,7 +8,7 @@ type Json = Record<string, unknown>;
 
 export function recoveryVariation(funnel: unknown): number | null {
   const match = String(funnel ?? "").match(
-    new RegExp(`^${RESTORED_5895_FUNNEL}:recuperacao-([1-4])$`),
+    new RegExp(`^(?:${RESTORED_5895_FUNNEL}|${SOCIAL_N8N_FUNNEL}):recuperacao-([1-4])$`),
   );
   return match ? Number(match[1]) : null;
 }

@@ -23,7 +23,7 @@ import {
   resolveInboxIdentifier,
   setConversationLabels,
 } from "./chatwoot.ts";
-import { resumeWindowHeldMessages } from "./funnel-queue.ts";
+import { resumeWindowHeldMessages } from "./social-window-hold.ts";
 import { autoPauseFunil } from "./funnel-state.ts";
 
 type Json = Record<string, unknown>;

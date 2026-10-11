@@ -21,7 +21,7 @@ import {
   setConversationLabels,
 } from "../shared/chatwoot.ts";
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
-import { mainFunnelForChannel, RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import { mainFunnelForChannel, RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
 import { dispatchSoberanoAction, enabledN8nActions } from "../shared/n8n-action-router.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
@@ -1701,7 +1701,8 @@ async function handleUsoSelecionado(
 
   // No 5895, o contexto da finalidade e as artes de preço pertencem ao mesmo
   // workflow editável. Não produzir uma primeira mensagem pelo bridge.
-  if (mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+  const usePriceVersion = mainFunnelForChannel(channel);
+  if ([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(usePriceVersion) &&
     enabledN8nActions().has("preco")) {
     const cwConvId = Number(conv?.chatwoot_conversation_id);
     if (!cwConvId) throw new Error("conversa sem ID Chatwoot para finalidade no n8n");
@@ -1711,7 +1712,7 @@ async function handleUsoSelecionado(
       source: "intent",
       chatwoot_conversation_id: cwConvId,
       action: "preco",
-      funnel_version: RESTORED_5895_FUNNEL,
+      funnel_version: usePriceVersion,
       selection: `uso_${use}`,
     });
     if (!dispatched.ok) throw new Error(`n8n finalidade/preço: ${dispatched.error}`);
@@ -1798,7 +1799,8 @@ async function handleUsoSelecionado(
       );
     }
   }
-  if (mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+  const afterUseVersion = mainFunnelForChannel(channel);
+  if ([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(afterUseVersion) &&
     enabledN8nActions().has("preco")) {
     const cwConvId = Number(conv?.chatwoot_conversation_id);
     if (!cwConvId) throw new Error("conversa sem ID Chatwoot para preço após uso");
@@ -1808,7 +1810,7 @@ async function handleUsoSelecionado(
       source: "intent",
       chatwoot_conversation_id: cwConvId,
       action: "preco",
-      funnel_version: RESTORED_5895_FUNNEL,
+      funnel_version: afterUseVersion,
     });
     if (!dispatched.ok) throw new Error(`n8n preço após uso: ${dispatched.error}`);
   } else if (channel.type === "facebook" || channel.type === "instagram") {
@@ -2284,7 +2286,8 @@ export async function handlePrecoClick(
     selection: string,
     quoteRegistered?: boolean,
   ): Promise<boolean> => {
-    if (mainFunnelForChannel(channel) !== RESTORED_5895_FUNNEL ||
+    const priceVersion = mainFunnelForChannel(channel);
+    if (![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(priceVersion) ||
       !enabledN8nActions().has("preco")) return false;
     const cwConvId = Number(conv?.chatwoot_conversation_id);
     if (!cwConvId) throw new Error("conversa sem ID Chatwoot para preço no n8n");
@@ -2294,7 +2297,7 @@ export async function handlePrecoClick(
       source: "intent",
       chatwoot_conversation_id: cwConvId,
       action: "preco",
-      funnel_version: RESTORED_5895_FUNNEL,
+      funnel_version: priceVersion,
       selection,
       ...(quoteRegistered == null ? {} : { quote_registered: quoteRegistered }),
     });
@@ -2844,7 +2847,8 @@ async function dispatchN8nTopic(
   selection: string,
   inboundMessageId?: string,
 ): Promise<boolean> {
-  if (mainFunnelForChannel(channel) !== RESTORED_5895_FUNNEL ||
+  const topicVersion = mainFunnelForChannel(channel);
+  if (![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(topicVersion) ||
     !enabledN8nActions().has(action)) return false;
   const conversation = await resolveSocialConversation(db, channel, from);
   const cwConvId = Number(conversation?.chatwoot_conversation_id);
@@ -2855,7 +2859,7 @@ async function dispatchN8nTopic(
     source: "intent",
     chatwoot_conversation_id: cwConvId,
     action,
-    funnel_version: RESTORED_5895_FUNNEL,
+    funnel_version: topicVersion,
     selection,
   });
   if (!dispatched.ok) throw new Error(`n8n ${action}/${selection}: ${dispatched.error}`);
@@ -3749,8 +3753,9 @@ export async function handleMenuClick(
     try {
       // No 5895, texto e botão usam o mesmo conteúdo editável da macro no n8n.
       // O bridge continua responsável pela fila, deduplicação e entrega final.
+      const intentVersion = mainFunnelForChannel(channel);
       if (
-        mainFunnelForChannel(channel) === RESTORED_5895_FUNNEL &&
+        [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(intentVersion) &&
         enabledN8nActions().has(intent)
       ) {
         const conv = await resolveSocialConversation(db, channel, from);
@@ -3762,7 +3767,7 @@ export async function handleMenuClick(
           source: "intent",
           chatwoot_conversation_id: cwConvId,
           action: intent,
-          funnel_version: RESTORED_5895_FUNNEL,
+          funnel_version: intentVersion,
         });
         if (!dispatched.ok) throw new Error(`n8n ${intent}: ${dispatched.error}`);
         return { sent: true };

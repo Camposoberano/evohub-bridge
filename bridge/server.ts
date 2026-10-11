@@ -30,6 +30,7 @@ import {
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
 import { handle as n8nActionEnqueue } from "./handlers/n8n-action-enqueue.ts";
 import { handle as n8nActionSendNow } from "./handlers/n8n-action-send-now.ts";
+import { handle as n8nQueue } from "./handlers/n8n-queue.ts";
 import {
   handle as funilEnroll,
   recoverEligibleFunnels,
@@ -150,6 +151,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/send-outbound": sendOutbound,
   "/n8n-action-enqueue": n8nActionEnqueue,
   "/n8n-action-send-now": n8nActionSendNow,
+  "/n8n-queue": n8nQueue,
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
   "/meta-templates": metaTemplates,

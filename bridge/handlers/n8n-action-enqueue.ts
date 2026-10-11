@@ -4,14 +4,17 @@ import {
   isSoberanoAction,
   type ActionRequest,
 } from "../shared/n8n-action-contract.ts";
-import { RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import {
+  RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+  funnelVersionForChannel,
+} from "../shared/funnel-identity.ts";
 import { FIM_ACESSO, GAPS, iniciosDosAcessos } from "./funil-enroll.ts";
 import { isWithinFunnelSendHours, nextFunnelSendAt } from "../shared/business-hours.ts";
 import { addBusinessSeconds, clampBusinessTime } from "../shared/business-time.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
 import { optionalEnv, env } from "../shared/env.ts";
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { canalAlvoFunil } from "../shared/funil-anuncio.ts";
 import { hasFunnelDeliveryEvidence } from "../shared/funnel-state.ts";
 import {
   isContactBlocked,
@@ -119,7 +122,7 @@ export function validateEnqueueBody(
     !Number.isSafeInteger(request.chatwoot_conversation_id) ||
     Number(request.chatwoot_conversation_id) <= 0 ||
     !["macro", "ad", "intent"].includes(String(request.source ?? "")) ||
-    request.funnel_version !== RESTORED_5895_FUNNEL
+    ![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(String(request.funnel_version ?? ""))
   ) return { ok: false, error: "identidade ou versão inválida" };
   if (request.selection != null &&
     (typeof request.selection !== "string" ||
@@ -196,8 +199,8 @@ export async function buildActionRows(
     )
     : [actionStart ?? (isWithinFunnelSendHours(now) ? now : nextFunnelSendAt(now))];
   const funnel = body.request.action === "funil"
-    ? RESTORED_5895_FUNNEL
-    : `${RESTORED_5895_FUNNEL}:${body.request.action}`;
+    ? body.request.funnel_version
+    : `${body.request.funnel_version}:${body.request.action}`;
   return await Promise.all(body.pieces.map(async (piece, step) => ({
     id: await actionUuid(`${key}:${step}`),
     conversation_id: conversationId,
@@ -261,11 +264,11 @@ export async function handle(req: Request): Promise<Response> {
   if (conversationError) return json({ ok: false, error: "falha ao consultar conversa" }, 503);
   if (!conversation) return json({ ok: false, error: "conversa não encontrada", terminal: true }, 404);
   const { data: channel, error: channelError } = await db.from("channels")
-    .select("id,name,external_id,phone_number")
+    .select("id,type,name,external_id,phone_number")
     .eq("id", conversation.channel_id).maybeSingle();
   if (channelError) return json({ ok: false, error: "falha ao consultar canal" }, 503);
-  if (!channel || !canalAlvoFunil(channel, "5895")) {
-    return json({ ok: false, error: "canal não é o WhatsApp 5895", terminal: true }, 422);
+  if (!channel || funnelVersionForChannel(channel) !== body.request.funnel_version) {
+    return json({ ok: false, error: "canal ou versão não autorizada", terminal: true }, 422);
   }
   if (CONTROL_ACTIONS.has(body.request.action)) {
     const controlResult = await funilControl(new Request(
@@ -321,12 +324,12 @@ export async function handle(req: Request): Promise<Response> {
     const { data: existing, error: existingError } = await db.from("sales_sequences")
       .select("id,status")
       .eq("conversation_id", conversation.id)
-      .eq("funnel", RESTORED_5895_FUNNEL).maybeSingle();
+      .eq("funnel", body.request.funnel_version).maybeSingle();
     if (existingError) return json({ ok: false, error: "falha ao consultar sequência" }, 503);
     if (existing && existing.id !== sequenceId) {
       if (!body.request.repair_missing_opening ||
         !["running", "paused"].includes(String(existing.status)) ||
-        await hasFunnelDeliveryEvidence(db, String(conversation.id), RESTORED_5895_FUNNEL)) {
+        await hasFunnelDeliveryEvidence(db, String(conversation.id), body.request.funnel_version)) {
         return json({ ok: true, accepted: 0, duplicate: true, sequence_status: existing.status, first_due_message_id: null, first_send_at: null });
       }
       // Reserva antiga sem nenhuma peça: aproveita a sequência e deixa o n8n
@@ -338,7 +341,7 @@ export async function handle(req: Request): Promise<Response> {
         id: sequenceId,
         conversation_id: conversation.id,
         chatwoot_conversation_id: body.request.chatwoot_conversation_id,
-        funnel: RESTORED_5895_FUNNEL,
+        funnel: body.request.funnel_version,
         current_day: 0,
         status: "paused",
       });

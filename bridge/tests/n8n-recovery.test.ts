@@ -4,6 +4,8 @@ import { allRecoveryPiecesSent, recoveryVariation } from "../shared/n8n-recovery
 Deno.test("reconhece apenas as quatro recuperações do funil restaurado", () => {
   assertEquals(recoveryVariation("mega-sorgo-5895-20260930:recuperacao-1"), 1);
   assertEquals(recoveryVariation("mega-sorgo-5895-20260930:recuperacao-4"), 4);
+  assertEquals(recoveryVariation("mega-sorgo-social-20260930:recuperacao-1"), 1);
+  assertEquals(recoveryVariation("mega-sorgo-social-20260930:recuperacao-4"), 4);
   assertEquals(recoveryVariation("mega-sorgo-5895-20260930:preco"), null);
   assertEquals(recoveryVariation("mega-sorgo-5895-v2:recuperacao-1"), null);
 });

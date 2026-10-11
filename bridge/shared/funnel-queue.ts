@@ -18,7 +18,9 @@ import {
   isMainFunnel,
   mainFunnelForChannel,
   RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
 } from "./funnel-identity.ts";
+import { WINDOW_HOLD_FLAG } from "./social-window-hold.ts";
 
 type Json = Record<string, unknown>;
 
@@ -32,44 +34,6 @@ async function releaseQueueClaim(
 }
 
 let running = false;
-const WINDOW_HOLD_FLAG = "__awaiting_meta_window";
-
-/** Reabre somente peças retidas pela janela Meta após nova entrada do cliente. */
-export async function resumeWindowHeldMessages(
-  db: ReturnType<typeof admin>,
-  conversationId: string,
-  now = Date.now(),
-): Promise<number> {
-  const { data, error } = await db.from("scheduled_messages")
-    .select("id,payload")
-    .eq("conversation_id", conversationId)
-    .eq("status", "paused")
-    .limit(500);
-  if (error) throw error;
-  let resumed = 0;
-  for (const row of (data ?? []) as Json[]) {
-    const payload = row.payload && typeof row.payload === "object"
-      ? row.payload as Json
-      : {};
-    if (payload[WINDOW_HOLD_FLAG] !== true) continue;
-    const nextPayload = { ...payload };
-    delete nextPayload[WINDOW_HOLD_FLAG];
-    await db.from("scheduled_messages").update({
-      status: "pending",
-      send_at: new Date(now + 60_000).toISOString(),
-      payload: nextPayload,
-    }).eq("id", row.id);
-    resumed++;
-  }
-  if (resumed) {
-    await db.from("events").insert({
-      source: "funil",
-      event_type: "window_held_resumed",
-      payload: { conversation_id: conversationId, resumed_messages: resumed },
-    });
-  }
-  return resumed;
-}
 
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
@@ -190,7 +154,8 @@ export async function pumpFunnelQueue(
         .eq("status", "pending")
         // A régua restaurada já é consumida pelo cron do n8n. Dois consumidores
         // enviaram o mesmo vídeo do #3402; o bridge cuida apenas da rota adiada.
-        .neq("funnel", RESTORED_5895_FUNNEL)
+        .not("funnel", "like", `${RESTORED_5895_FUNNEL}%`)
+        .not("funnel", "like", `${SOCIAL_N8N_FUNNEL}%`)
         .lte("send_at", now)
         .order("send_at", { ascending: true })
         .limit(limit),
@@ -515,7 +480,8 @@ export async function pumpFunnelQueue(
       ) {
         await db.from("scheduled_messages").update({
           status: "paused",
-          payload: { ...payload, [WINDOW_HOLD_FLAG]: true },
+          payload: { ...payload, [WINDOW_HOLD_FLAG]: true,
+            __pause_reason: "window_closed" },
         }).eq("id", id);
         await releaseQueueClaim(db, claimKey);
         await db.from("events").insert({

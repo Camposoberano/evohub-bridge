@@ -44,6 +44,7 @@ import {
   LEGACY_MAIN_FUNNEL,
   mainFunnelForChannel,
   RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 
@@ -131,7 +132,7 @@ export async function handle(req: Request): Promise<Response> {
 
   const acct = await accountForChannel(conv.channel_id as string);
   const { data: controlChannel, error: controlChannelError } = await db
-    .from("channels").select("name,external_id,phone_number")
+    .from("channels").select("id,type,name,external_id,phone_number")
     .eq("id", conv.channel_id).maybeSingle();
   if (controlChannelError) {
     return json({ error: "canal da conversa indisponível" }, 500);
@@ -149,7 +150,7 @@ export async function handle(req: Request): Promise<Response> {
   // O 5895 usa o workflow n8n correspondente, inclusive para aliases. Chamadas
   // vindas de /n8n-action-enqueue passam pela implementação local sem recursão.
   if (
-    funnelId === RESTORED_5895_FUNNEL &&
+    [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId) &&
     body.n8n_internal !== true &&
     isSoberanoAction(routedAction) &&
     !routedAction.startsWith("recuperacao-") &&
@@ -164,7 +165,7 @@ export async function handle(req: Request): Promise<Response> {
       source: "macro",
       chatwoot_conversation_id: cwConvId,
       action: routedAction,
-      funnel_version: RESTORED_5895_FUNNEL,
+      funnel_version: funnelId,
     });
     if (!dispatched.ok) {
       return json({
@@ -405,7 +406,7 @@ export async function handle(req: Request): Promise<Response> {
       .select("day, step, type, send_at, status").eq("conversation_id", conv.id)
       .eq("funnel", funnelId)
       .order("send_at", { ascending: true }).limit(40);
-    const mediaFunnel = funnelId === RESTORED_5895_FUNNEL
+    const mediaFunnel = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)
       ? LEGACY_MAIN_FUNNEL
       : funnelId;
     const { data: mediaRows, error: mediaError } = await db.from("funnel_media")
@@ -606,7 +607,7 @@ export async function handle(req: Request): Promise<Response> {
     try {
       // No 5895 a resposta solicitada entra entre as pausas da apresentação.
       // A sequência fiel de 30/09 continua; não fica presa após preço/vídeo.
-      const funnelPaused = funnelId === RESTORED_5895_FUNNEL
+      const funnelPaused = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)
         ? false
         : await autoPauseFunil(
           String(conv.id),
@@ -717,8 +718,9 @@ export async function dispatchRecovery(
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
   const n8nAction = `recuperacao-${variation}`;
+  const recoveryVersion = mainFunnelForChannel(resolved.channel);
   if (
-    mainFunnelForChannel(resolved.channel) === RESTORED_5895_FUNNEL &&
+    [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(recoveryVersion) &&
     isSoberanoAction(n8nAction) && enabledN8nActions().has(n8nAction)
   ) {
     const { data: priorClaim, error: claimError } = await db.from("deliveries")
@@ -729,7 +731,7 @@ export async function dispatchRecovery(
     }
     // Uma recuperação antiga já enviada continua protegida pela trava original.
     if (!priorClaim) {
-      const recoveryFunnel = `${RESTORED_5895_FUNNEL}:${n8nAction}`;
+      const recoveryFunnel = `${recoveryVersion}:${n8nAction}`;
       const { data: queued, error: queueError } = await db.from("scheduled_messages")
         .select("status").eq("conversation_id", conv.id)
         .eq("funnel", recoveryFunnel);
@@ -765,7 +767,7 @@ export async function dispatchRecovery(
         source: automatic ? "intent" : "macro",
         chatwoot_conversation_id: cwConvId,
         action: n8nAction,
-        funnel_version: RESTORED_5895_FUNNEL,
+        funnel_version: recoveryVersion,
       });
       if (!dispatched.ok) {
         if (automatic) return { state: "failed" };

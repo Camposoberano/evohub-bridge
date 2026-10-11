@@ -1,4 +1,5 @@
-/** Contrato estável das macros comerciais do WhatsApp Oficial 5895. */
+/** Contrato estável das macros comerciais do Hub Soberano. */
+import { SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
 export const SOBERANO_ACTIONS = [
   "funil",
   "preco",
@@ -40,6 +41,7 @@ export function isSoberanoAction(value: string): value is SoberanoAction {
 export function actionKey(request: ActionRequest): string {
   return [
     "soberano-action",
+    ...(request.funnel_version === SOCIAL_N8N_FUNNEL ? [SOCIAL_N8N_FUNNEL] : []),
     request.chatwoot_conversation_id,
     request.action,
     encodeURIComponent(request.request_id),

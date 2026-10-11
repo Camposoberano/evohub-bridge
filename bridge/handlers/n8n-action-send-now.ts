@@ -1,11 +1,14 @@
 /** Sends only the first due piece of an n8n-authored 5895 action. The cron is fallback. */
 import { actionKey, isSoberanoAction, type ActionRequest } from "../shared/n8n-action-contract.ts";
-import { RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import {
+  RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+  funnelVersionForChannel,
+} from "../shared/funnel-identity.ts";
 import { isWithinFunnelSendHours } from "../shared/business-hours.ts";
 import { admin, claimDeliveryWithTtl } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { canalAlvoFunil } from "../shared/funil-anuncio.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "../shared/lead-block.ts";
 import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
@@ -34,7 +37,7 @@ export function validImmediateRequest(value: unknown):
     typeof request.request_id !== "string" || !request.request_id ||
     !Number.isInteger(request.chatwoot_conversation_id) ||
     !isSoberanoAction(String(request.action ?? "")) ||
-    request.funnel_version !== RESTORED_5895_FUNNEL
+    ![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(String(request.funnel_version ?? ""))
   ) return { ok: false, error: "solicitação inválida" };
   return {
     ok: true,
@@ -76,8 +79,8 @@ export async function handle(req: Request): Promise<Response> {
   if (rowError) return json({ ok: false, error: "falha ao consultar peça" }, 503);
   if (!row) return json({ ok: false, error: "peça não encontrada" }, 404);
   const expectedFunnel = request.action === "funil"
-    ? RESTORED_5895_FUNNEL
-    : `${RESTORED_5895_FUNNEL}:${request.action}`;
+    ? request.funnel_version
+    : `${request.funnel_version}:${request.action}`;
   const payload = row.payload && typeof row.payload === "object"
     ? row.payload as Json
     : {};
@@ -99,9 +102,10 @@ export async function handle(req: Request): Promise<Response> {
     return json({ ok: false, error: "falha ao consultar conversa" }, 503);
   }
   const { data: channel, error: channelError } = await db.from("channels")
-    .select("id,name,external_id,phone_number")
+    .select("id,type,name,external_id,phone_number")
     .eq("id", conversation.channel_id).maybeSingle();
-  if (channelError || !channel || !canalAlvoFunil(channel, "5895")) {
+  if (channelError || !channel ||
+    funnelVersionForChannel(channel) !== request.funnel_version) {
     return json({ ok: false, error: "canal inválido" }, 422);
   }
   if (isContactBlocked(conversation.contacts) ||
