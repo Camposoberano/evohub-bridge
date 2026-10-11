@@ -15,6 +15,7 @@ Deno.test("envio imediato exige ID da peça e solicitação do funil certo", () 
     request,
   };
   assertEquals(validImmediateRequest(body).ok, true);
+  assertEquals(validImmediateRequest({ ...body, request: { ...request, funnel_version: "mega-sorgo-social-20260930" } }).ok, true);
   assertEquals(validImmediateRequest({ ...body, scheduled_message_id: "wrong" }).ok, false);
   assertEquals(validImmediateRequest({ ...body, request: { ...request, funnel_version: "old" } }).ok, false);
   assertEquals(validImmediateRequest({ ...body, request: { ...request, chatwoot_conversation_id: "3509" } }).ok, false);

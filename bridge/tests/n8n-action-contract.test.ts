@@ -33,5 +33,7 @@ Deno.test("nova tentativa mantém a chave da ação", () => {
     funnel_version: "mega-sorgo-5895-20260930",
   };
   assertEquals(actionKey(request), actionKey({ ...request }));
+  assertEquals(actionKey(request), "soberano-action:3509:funil:cw-label-event-3509-123");
+  assertEquals(actionKey(request) === actionKey({ ...request, funnel_version: "mega-sorgo-social-20260930" }), false);
   assertEquals(actionKey(request) === actionKey({ ...request, request_id: "outro-evento" }), false);
 });

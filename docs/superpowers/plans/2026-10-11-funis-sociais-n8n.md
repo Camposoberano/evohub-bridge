@@ -125,7 +125,7 @@ assertEquals(socialLeadEntry({ inboundIndex: 2, ageMs: 301_000, text: "qual o pr
 
 **Interfaces:**
 - Consumes: `funnelVersionForChannel` da Task 1.
-- Produces: o mesmo `ActionRequest` com `funnel_version` igual à versão do canal e `actionKey` incluindo a versão; webhook `/webhook/soberano-5895-<action>` continua válido e passa o mesmo contrato aos 14 workflows.
+- Produces: o mesmo `ActionRequest` com `funnel_version` igual à versão do canal; `actionKey` preserva o formato já publicado no 5895 e inclui a versão social nas novas solicitações, evitando colisão sem alterar IDs históricos. O webhook `/webhook/soberano-5895-<action>` continua válido e passa o mesmo contrato aos 14 workflows.
 
 - [ ] **Step 1: Escrever teste para `actionKey` distinto entre versões, lote social com 31 peças, rejeição de versão 5895 em conversa social, rejeição de versão social em `david inst`, e `send-now` limitado à primeira peça da solicitação.**
 
@@ -136,7 +136,7 @@ assertNotEquals(actionKey(a), actionKey({ ...a, funnel_version: SOCIAL_N8N_FUNNE
 
 - [ ] **Step 2: Rodar testes e confirmar as falhas esperadas.** `deno test --allow-env bridge/tests/n8n-action-contract.test.ts bridge/tests/n8n-action-enqueue.test.ts bridge/tests/n8n-action-send-now.test.ts`
 - [ ] **Step 3: Validar o par canal/versão depois de carregar `conversations.channel_id` e `channels.id,type`.** `validateEnqueueBody` aceita apenas as duas versões conhecidas; `handle` exige correspondência do canal real; controles passam ao `funil-control` somente após essa validação.
-- [ ] **Step 4: Substituir os usos fixos de `RESTORED_5895_FUNNEL` na reserva, na consulta de existência e em `buildActionRows` por `request.funnel_version`.** A chave de deduplicação passa a incluir a versão para não colidir entre rotas.
+- [ ] **Step 4: Substituir os usos fixos de `RESTORED_5895_FUNNEL` na reserva, na consulta de existência e em `buildActionRows` por `request.funnel_version`.** A chave do 5895 mantém seus bytes atuais; a versão social entra na chave nova para não colidir entre rotas.
 - [ ] **Step 5: Aplicar a mesma validação ao envio imediato, incluindo `row.funnel`, `row.chatwoot_conversation_id`, `payload.__funnel_sequence_id` e a posse do canal.** Nenhuma peça social pode sair por solicitação 5895.
 - [ ] **Step 6: Rodar os três testes e commitar.** `deno test --allow-env bridge/tests/n8n-action-contract.test.ts bridge/tests/n8n-action-enqueue.test.ts bridge/tests/n8n-action-send-now.test.ts`; `git commit -m "feat: validate n8n actions by channel and funnel version"`.
 
