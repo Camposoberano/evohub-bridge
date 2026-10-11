@@ -20,7 +20,7 @@ O mesmo Jev pode apoiar análises semânticas feitas neste chat quando houver um
 
 ## Fluxo proposto
 
-1. Os caminhos de entrada do 5895 (Chatwoot, Uazapi e sincronização de anúncios do Facebook) convergem para uma chave idempotente com origem, canal e ID estável da mensagem. Quando a origem não fornece ID, o adaptador deve produzir uma chave estável antes da triagem, em vez de usar uma chave nova por tentativa.
+1. Os caminhos de entrada do 5895 (Chatwoot, Uazapi e sincronização de anúncios do Facebook) convergem para uma chave idempotente com canal e ID estável da mensagem. Quando dois caminhos trazem o mesmo ID do provedor, compartilham a chave; caso contrário, a chave inclui a origem. Quando a origem não fornece ID, o adaptador deve produzir uma chave estável antes da triagem, em vez de usar uma chave nova por tentativa.
 2. Se a mensagem veio de anúncio, a inscrição no funil principal é enfileirada imediatamente, antes da chamada ao Jev. O primeiro envio mantém o caminho rápido do n8n e a janela diária de 06h a 21h.
 3. Regras exatas tratam seleção de botão, comando manual, pedido de humano, comprovante, opt-out e outras condições que exigem decisão determinística. Elas podem impedir ações comerciais inadequadas, sem impedir a inscrição legítima do anúncio.
 4. Para texto livre restante, o bridge chama Jev uma vez com um contexto mínimo: mensagem normalizada, origem do anúncio, ação/fase atual, sinal de janela aberta e opções permitidas. Evitar enviar histórico integral ou dados pessoais não necessários.
