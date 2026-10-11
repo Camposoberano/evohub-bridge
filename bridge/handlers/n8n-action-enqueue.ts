@@ -313,7 +313,7 @@ export async function handle(req: Request): Promise<Response> {
   const { data: accepted, error: acceptedError } = await db.from("deliveries")
     .select("delivery_id").eq("delivery_id", acceptedClaim).maybeSingle();
   if (acceptedError) return json({ ok: false, error: "falha ao consultar confirmação" }, 503);
-  if (accepted) return json({ ok: true, accepted: rows.length, duplicate: true });
+  if (accepted) return json({ ok: true, accepted: rows.length, duplicate: true, first_due_message_id: null, first_send_at: null });
   let sequenceId = body.request.action === "funil"
     ? await actionUuid(`${key}:sequence`)
     : null;
@@ -327,7 +327,7 @@ export async function handle(req: Request): Promise<Response> {
       if (!body.request.repair_missing_opening ||
         !["running", "paused"].includes(String(existing.status)) ||
         await hasFunnelDeliveryEvidence(db, String(conversation.id), RESTORED_5895_FUNNEL)) {
-        return json({ ok: true, accepted: 0, duplicate: true, sequence_status: existing.status });
+        return json({ ok: true, accepted: 0, duplicate: true, sequence_status: existing.status, first_due_message_id: null, first_send_at: null });
       }
       // Reserva antiga sem nenhuma peça: aproveita a sequência e deixa o n8n
       // preencher o roteiro de 30/09, sem criar uma segunda identidade.
@@ -376,5 +376,14 @@ export async function handle(req: Request): Promise<Response> {
   } catch {
     return json({ ok: false, error: "falha ao registrar confirmação" }, 503);
   }
-  return json({ ok: true, accepted: rows.length, duplicate: existed });
+  const first = rows[0];
+  const firstDue = !existed && first && isWithinFunnelSendHours() &&
+    Date.parse(first.send_at) <= Date.now();
+  return json({
+    ok: true,
+    accepted: rows.length,
+    duplicate: existed,
+    first_due_message_id: firstDue ? first.id : null,
+    first_send_at: first?.send_at ?? null,
+  });
 }

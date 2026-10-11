@@ -48,6 +48,7 @@ Deno.test("aceita botão do funil certo e exige resultado para cotação", () =>
   assertEquals(valid("plantio", "plantio_10"), true);
   assertEquals(valid("nutricao", "nutricao_2"), true);
   assertEquals(valid("preco", "tam_4kg"), true);
+  assertEquals(valid("preco", "tam_2kg"), true);
   assertEquals(valid("preco", "uso_silagem"), true);
   assertEquals(valid("preco", "uso_pastejo"), true);
   assertEquals(valid("preco", "uso_outro"), true);
