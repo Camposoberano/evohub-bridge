@@ -23,6 +23,8 @@ export type FunnelDeliveryMetadata = {
   retry_at?: string;
   provider_status?: number;
   provider_code?: string | number;
+  transport_stage?: string;
+  transport_elapsed_ms?: number;
 };
 
 export type FunnelDeliveryEvent = {
@@ -43,6 +45,8 @@ export type FunnelDeliveryEvent = {
   retryable?: boolean;
   retry_at?: string | null;
   failure_stage?: string | null;
+  transport_stage?: string | null;
+  transport_elapsed_ms?: number | null;
   media_key?: string | null;
   partial?: boolean;
 };
@@ -71,6 +75,12 @@ export function deliveryMetadata(payload: unknown): FunnelDeliveryMetadata {
     provider_code: typeof meta.provider_code === "string" ||
         typeof meta.provider_code === "number"
       ? meta.provider_code
+      : undefined,
+    transport_stage: typeof meta.transport_stage === "string"
+      ? meta.transport_stage
+      : undefined,
+    transport_elapsed_ms: Number.isFinite(Number(meta.transport_elapsed_ms))
+      ? Number(meta.transport_elapsed_ms)
       : undefined,
   };
 }

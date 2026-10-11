@@ -40,6 +40,7 @@ export default function FunilPage() {
   const [lastSync, setLastSync] = useState(null);
   const [serverSummary, setServerSummary] = useState({});
   const [failureEvents, setFailureEvents] = useState([]);
+  const [deliveryFailures, setDeliveryFailures] = useState([]);
   const [acting, setActing] = useState("");
   const [message, setMessage] = useState("");
 
@@ -55,6 +56,7 @@ export default function FunilPage() {
       setQueue(data.messages || []);
       setServerSummary(data.summary || {});
       setFailureEvents(data.failures || []);
+      setDeliveryFailures(data.delivery_audit?.recent_failures || []);
       setError("");
       setLastSync(new Date());
     } catch (err) {
@@ -128,7 +130,16 @@ export default function FunilPage() {
     }
     return [...groups.values()].sort((a, b) => new Date(a.send_at) - new Date(b.send_at)).slice(0, 100);
   }, [queue]);
-  const failed = queue.filter((item) => item.status === "failed").slice(0, 80);
+  const failed = queue.filter((item) => item.status === "failed")
+    .sort((a, b) => new Date(b.send_at) - new Date(a.send_at)).slice(0, 80);
+  const failureByMessage = useMemo(() => {
+    const map = new Map();
+    for (const event of deliveryFailures) {
+      const id = String(event.scheduled_message_id || "");
+      if (id && !map.has(id)) map.set(id, event);
+    }
+    return map;
+  }, [deliveryFailures]);
   const failureByConversation = useMemo(() => {
     const map = new Map();
     for (const event of failureEvents) {
@@ -193,9 +204,9 @@ export default function FunilPage() {
         </div>
 
         <div className="card" style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Falhas para reprocessar</div>
-          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>O reprocessamento devolve uma mensagem falha para o início da fila, mantendo a proteção contra duplicidade.</div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Conversa</th><th>Etapa</th><th>Tipo</th><th>Motivo mais recente</th><th>Ação</th></tr></thead><tbody>{failed.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma falha pendente.</td></tr> : failed.map((item) => { const failure = failureByConversation.get(Number(item.chatwoot_conversation_id)); const detail = failure?.payload?.error; const reason = typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Status ${failure?.payload?.status || "desconhecido"}`; return <tr key={item.id}><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td style={{ maxWidth: 320, color: "var(--red)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>{reason}</td><td><button className="btn-ghost mini" disabled={acting === `retry:${item.id}`} onClick={() => operate("retry", item)}>{acting === `retry:${item.id}` ? "Reprocessando..." : "Reprocessar"}</button></td></tr>; })}</tbody></table></div>
+          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Falhas para revisar</div>
+          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>Envio incerto exige conferência do recibo do provedor. Reprocessar só aparece para rejeição 429 confirmada.</div>
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Conversa</th><th>Etapa</th><th>Tipo</th><th>Motivo mais recente</th><th>Ação</th></tr></thead><tbody>{failed.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma falha pendente.</td></tr> : failed.map((item) => { const audit = failureByMessage.get(String(item.id)); const legacy = failureByConversation.get(Number(item.chatwoot_conversation_id)); const delivery = item.delivery || {}; const outcome = delivery.last_outcome || audit?.outcome; const stage = delivery.transport_stage || audit?.transport_stage; const elapsed = delivery.transport_elapsed_ms || audit?.transport_elapsed_ms; const reason = outcome === "uncertain" ? `Envio incerto na uazapi${stage ? ` · ${stage}` : ""}${elapsed ? ` · ${Math.round(elapsed / 1000)}s` : ""}. Conferir recibo antes de reenviar.` : outcome === "rejected" ? `Provedor rejeitou o envio${delivery.provider_status ? ` · HTTP ${delivery.provider_status}` : ""}.` : audit?.failure_stage ? `Falha em ${audit.failure_stage}.` : legacy?.payload?.error || "Falha sem diagnóstico completo; conferir histórico."; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); return <tr key={item.id}><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td style={{ maxWidth: 420, color: "var(--red)" }} title={reason}>{reason}<div style={{ color: "var(--text-faint)", fontSize: 11 }}>{when(audit?.received_at || item.send_at)}</div></td><td>{delivery.retryable === true ? <button className="btn-ghost mini" disabled={acting === `retry:${item.id}`} onClick={() => operate("retry", item)}>{acting === `retry:${item.id}` ? "Reprocessando..." : "Reprocessar"}</button> : chatUrl ? <Link href={chatUrl} target="_blank" className="btn-ghost mini">Conferir conversa</Link> : <span>Revisão manual</span>}</td></tr>; })}</tbody></table></div>
         </div>
       </main>
     </>

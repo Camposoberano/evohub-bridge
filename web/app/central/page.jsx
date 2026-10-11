@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { supabase, BRIDGE_URL, CHATWOOT_URL, CHATWOOT_ACCOUNT_ID } from "@/lib/supabase";
@@ -137,11 +138,14 @@ export default function Central() {
   }, []);
 
   useEffect(() => {
+    let healthTimer;
     supabase.auth.getSession().then(({ data }) => {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true);
       carregar();
+      healthTimer = setInterval(() => carregarSaude().catch(() => {}), 30000);
     });
+    return () => clearInterval(healthTimer);
   }, [router, carregar]);
 
   async function novoOficial(type, accountId) {
@@ -182,14 +186,14 @@ export default function Central() {
               <div>
                 <div style={{ fontWeight: 700 }}>Saúde operacional</div>
                 <div style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 3 }}>
-                  {health.totals?.active_channels || 0}/{health.totals?.channels || 0} canais ativos · {health.totals?.recent_contacts_24h || 0} leads nas últimas 24h
+                  {health.totals?.active_channels || 0}/{health.totals?.channels || 0} canais ativos · {health.totals?.recent_contacts_24h || 0} leads nas últimas 24h · conferido {health.checked_at ? new Date(health.checked_at).toLocaleTimeString("pt-BR") : "—"}
                 </div>
               </div>
               <span className={`badge ${health.ok ? "badge-green" : "badge-red"}`}>{health.ok ? "Operação estável" : "Atenção necessária"}</span>
             </div>
             {health.issues?.length > 0 && (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
-                {health.issues.map((issue) => <span key={issue.key} className={`badge ${issue.severity === "critical" ? "badge-red" : "badge-amber"}`}>{issue.key}: {issue.count}</span>)}
+                {health.issues.map((issue) => { const label = `${issue.key}: ${issue.count}${issue.detail ? ` · ${issue.detail}` : ""}`; const cls = `badge ${issue.severity === "critical" ? "badge-red" : "badge-amber"}`; return issue.key.includes("funnel") || issue.key.startsWith("ad_first_step") ? <Link key={issue.key} href="/funil" className={cls} title="Abrir operação do funil">{label}</Link> : <span key={issue.key} className={cls}>{label}</span>; })}
               </div>
             )}
           </section>
