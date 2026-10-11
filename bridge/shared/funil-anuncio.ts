@@ -1,5 +1,5 @@
 import { foldText } from "./ad-lead.ts";
-import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
+import { RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
 
 export type CanalFunil = Record<string, unknown>;
 
@@ -115,7 +115,8 @@ export function deveEncaminharPerguntaDeAnuncio(
   funnel: string,
   unsupportedQuestion: boolean,
 ): boolean {
-  return unsupportedQuestion && funnel !== RESTORED_5895_FUNNEL;
+  return unsupportedQuestion &&
+    ![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnel);
 }
 
 /** Só uma interrupção explícita suspende a apresentação restaurada. */

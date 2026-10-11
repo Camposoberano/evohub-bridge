@@ -361,7 +361,8 @@ async function syncInbound(
       const messageAt = Date.parse(message.created_time as string ?? "");
       const isRecentDuplicate = ingest.reason === "duplicate" &&
         Number.isFinite(messageAt) && Date.now() - messageAt < 5 * 60_000;
-      if ((ingest.inserted || isRecentDuplicate) && !isFromPage && content) {
+      if ((ingest.inserted || isRecentDuplicate) && !isFromPage &&
+        (content || message.referral)) {
         const menuAction = inferSocialMenuAction(content);
         const detailAction = inferSocialDetailAction(content);
         const inferredReply = await inferStoredSocialPriceReply(
