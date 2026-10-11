@@ -122,7 +122,7 @@ async function send(req: Request): Promise<Response> {
         payload: row.payload,
         funnel: row.funnel,
         funnel_day: row.day,
-        funnel_step: row.type,
+        funnel_step: row.step,
         scheduled_message_id: id,
       }),
     },

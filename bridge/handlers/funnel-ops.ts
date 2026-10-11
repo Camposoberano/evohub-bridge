@@ -314,11 +314,36 @@ export async function handle(req: Request): Promise<Response> {
     .gte("received_at", deliverySince)
     .order("received_at", { ascending: false }).limit(2000);
   if (deliveryError) return json({ error: deliveryError.message }, 500);
+  const { data: socialEnrollmentEvents, error: socialEnrollmentError } = await db.from("events")
+    .select("received_at,payload").eq("event_type", "social_n8n_enrolled")
+    .gte("received_at", deliverySince)
+    .order("received_at", { ascending: false }).limit(1000);
+  if (socialEnrollmentError) return json({ error: socialEnrollmentError.message }, 500);
+  const enrollmentByConversation = new Map<string, Json>();
+  for (const event of (socialEnrollmentEvents ?? []) as Json[]) {
+    const payload = (event.payload ?? {}) as Json;
+    const conversationId = String(payload.conversation_id ?? "");
+    if (conversationId && !enrollmentByConversation.has(conversationId)) {
+      enrollmentByConversation.set(conversationId, {
+        origin: payload.origin ?? null,
+        received_at: event.received_at,
+      });
+    }
+  }
   const deliveryByChannel: Record<string, Record<string, number>> = {};
   const recentDeliveryFailures: Json[] = [];
+  const firstAcceptedByConversation = new Map<string, string>();
   for (const event of (deliveryEvents ?? []) as Json[]) {
     const payload = (event.payload ?? {}) as Json;
     const outcome = String(payload.outcome ?? "unknown");
+    if (outcome === "sent" && String(payload.funnel ?? "") === "mega-sorgo-social-20260930") {
+      const conversationId = String(payload.conversation_id ?? "");
+      const acceptedAt = String(event.received_at ?? "");
+      const previous = firstAcceptedByConversation.get(conversationId);
+      if (conversationId && (!previous || acceptedAt < previous)) {
+        firstAcceptedByConversation.set(conversationId, acceptedAt);
+      }
+    }
     if (outcome === "started") continue;
     const channelType = String(payload.channel_type ?? "unknown");
     const outcomes = deliveryByChannel[channelType] ??= {};
@@ -343,6 +368,19 @@ export async function handle(req: Request): Promise<Response> {
         transport_elapsed_ms: payload.transport_elapsed_ms ?? null,
       });
     }
+  }
+
+  for (const sequence of enrichedSequences) {
+    const conversationId = String((sequence as Json).conversation_id ?? "");
+    const enrollment = enrollmentByConversation.get(conversationId);
+    const firstAcceptedAt = firstAcceptedByConversation.get(conversationId);
+    (sequence as Json).origin = enrollment?.origin ?? null;
+    (sequence as Json).first_provider_accepted_at = firstAcceptedAt ?? null;
+    const enrolledAt = enrollment?.received_at ? Date.parse(String(enrollment.received_at)) : NaN;
+    const acceptedAt = firstAcceptedAt ? Date.parse(firstAcceptedAt) : NaN;
+    (sequence as Json).first_acceptance_seconds = Number.isFinite(enrolledAt) && Number.isFinite(acceptedAt)
+      ? Math.max(0, Math.round((acceptedAt - enrolledAt) / 1000))
+      : null;
   }
 
   return json({

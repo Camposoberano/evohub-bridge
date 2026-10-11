@@ -13,9 +13,16 @@ const STATUS = {
   replied: ["badge-gray", "Respondido"],
   completed: ["badge-green", "Concluído"],
   pending: ["badge-amber", "Pendente"],
-  sent: ["badge-green", "Enviado"],
+  sent: ["badge-green", "Aceito pelo emissor"],
   failed: ["badge-red", "Falhou"],
   paused_message: ["badge-amber", "Pausada"],
+};
+
+const CHANNELS = {
+  "2e49dea3-9d93-4f5f-ad54-02882956d1ed": "Facebook · campo soberano",
+  "319d3aa4-26df-42bf-acbf-df440ef5981d": "Facebook · Mega Sorgo Santa Elisa",
+  "93a082b0-e169-4cf8-9b1f-6e93758bf908": "Instagram · Atendimento IG",
+  "1f056c55-fd58-4d55-943f-7d18c0dbc43b": "Instagram · sorgo brasileiro",
 };
 
 function badge(status) {
@@ -37,6 +44,7 @@ export default function FunilPage() {
   const [commercial, setCommercial] = useState([]);
   const [queue, setQueue] = useState([]);
   const [filter, setFilter] = useState("todos");
+  const [channelFilter, setChannelFilter] = useState("todos");
   const [lastSync, setLastSync] = useState(null);
   const [serverSummary, setServerSummary] = useState({});
   const [failureEvents, setFailureEvents] = useState([]);
@@ -119,7 +127,11 @@ export default function FunilPage() {
     };
   }, [sequences, queue, serverSummary]);
 
-  const visibleSequences = sequences.filter((item) => filter === "todos" || item.status === filter);
+  const visibleSequences = sequences.filter((item) =>
+    (filter === "todos" || item.status === filter) &&
+    (channelFilter === "todos" ||
+      (channelFilter === "5895" ? !CHANNELS[item.conversation?.channel_id] : item.conversation?.channel_id === channelFilter))
+  );
   const upcomingByConversation = useMemo(() => {
     const groups = new Map();
     for (const item of queue.filter((row) => ["pending", "paused"].includes(row.status))) {
@@ -181,9 +193,14 @@ export default function FunilPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
             <div><div style={{ fontSize: 17, fontWeight: 700 }}>Sequências por conversa</div><div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 3 }}>Cada conversa deve ter no máximo um funil ativo.</div></div>
             <select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="todos">Todos os status</option><option value="running">Rodando</option><option value="paused">Pausados</option><option value="completed">Concluídos</option><option value="cancelled">Parados</option><option value="replied">Respondidos</option></select>
+            <select value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
+              <option value="todos">Todos os canais</option>
+              <option value="5895">WhatsApp 5895 e demais</option>
+              {Object.entries(CHANNELS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
           </div>
           <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Funil</th><th>Cliente</th><th>Conversa</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-            {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); const pauseReason = item.pause_event?.payload?.reason; return <tr key={item.id}><td>{item.funnel || "—"}</td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span>{item.status === "paused" && pauseReason && <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 4 }}>Motivo: {pauseReason}</div>}</td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}
+            {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); const pauseReason = item.pause_event?.payload?.reason; return <tr key={item.id}><td>{item.funnel || "—"}<div style={{ color: "var(--text-dim)", fontSize: 11 }}>{CHANNELS[item.conversation?.channel_id] || "WhatsApp/outro"}</div><div style={{ color: "var(--text-faint)", fontSize: 11 }}>Origem: {item.origin === "ad_referral" ? "anúncio" : item.origin === "commercial_fallback" ? "primeira conversa comercial" : "—"} · 1ª aceitação: {item.first_acceptance_seconds == null ? "—" : `${item.first_acceptance_seconds}s`}</div></td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span>{item.status === "paused" && pauseReason && <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 4 }}>Motivo: {pauseReason}</div>}</td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}
           </tbody></table></div>
         </div>
 
