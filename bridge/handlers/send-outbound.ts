@@ -48,6 +48,8 @@ import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { buildHybridListFallback, type HybridListSection } from "../shared/hybrid-list.ts";
 import { UazapiResponseError } from "../shared/uazapi.ts";
 import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
+import { holdSocialWindowMessages } from "../shared/social-window-hold.ts";
+import { SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
 import {
@@ -521,6 +523,11 @@ export async function handle(req: Request): Promise<Response> {
   if (!hybrid) {
     const win = await windowState(db, conv as Json, channel as Json);
     if (!win.aberta) {
+      if (scheduledRow &&
+        ["facebook", "instagram"].includes(String(channel.type ?? "")) &&
+        String(funnelLink.funnel ?? "").startsWith(SOCIAL_N8N_FUNNEL)) {
+        await holdSocialWindowMessages(db, String(conv.id));
+      }
       const dia = new Date().toISOString().slice(0, 10);
       if (await claimDelivery(db, `wnote-${cwConvId}-${dia}`, "window-note")) {
         const nota =
