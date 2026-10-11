@@ -6,6 +6,25 @@ export type SocialMessage = {
   kind: "text" | "image" | "video" | "audio";
 };
 
+/** Metadados seguros de cada chamada Meta que compõe uma peça agendada. */
+export function socialPartReceiptPayload(
+  scheduledMessageId: string,
+  partIndex: number,
+  partCount: number,
+  providerMessageId: string | null,
+): Json {
+  if (!scheduledMessageId || !Number.isInteger(partIndex) || partIndex < 0 ||
+    !Number.isInteger(partCount) || partCount < 1 || partIndex >= partCount) {
+    throw new Error("índice de parte social inválido");
+  }
+  return {
+    scheduled_message_id: scheduledMessageId,
+    part_index: partIndex,
+    part_count: partCount,
+    provider_message_id: providerMessageId,
+  };
+}
+
 export function socialPriceActionClaimKey(
   channelId: string,
   messageId: string,
@@ -96,29 +115,37 @@ export function renderSocialFunnelMessages(
       });
     }
     if (platform === "facebook") {
+      for (let index = 0; index < buttons.length; index += 3) {
+        const group = buttons.slice(index, index + 3);
+        result.push({
+          kind: "text",
+          message: {
+            attachment: {
+              type: "template",
+              payload: {
+                template_type: "button",
+                text: index === 0 ? text : `Mais opções (${Math.floor(index / 3) + 1}/${Math.ceil(buttons.length / 3)})`,
+                buttons: group.map((button) => ({
+                  type: "postback",
+                  title: button.title.slice(0, 20),
+                  payload: button.id,
+                })),
+              },
+            },
+          },
+        });
+      }
+      return result;
+    }
+    for (let index = 0; index < buttons.length; index += 13) {
       result.push({
         kind: "text",
         message: {
-          attachment: {
-            type: "template",
-            payload: {
-              template_type: "button",
-              text,
-              buttons: buttons.slice(0, 3).map((button) => ({
-                type: "postback",
-                title: button.title.slice(0, 20),
-                payload: button.id,
-              })),
-            },
-          },
+          text: index === 0 ? text : `Mais opções (${Math.floor(index / 13) + 1}/${Math.ceil(buttons.length / 13)})`,
+          quick_replies: quickReplies(buttons.slice(index, index + 13)),
         },
       });
-      return result;
     }
-    result.push({
-      kind: "text",
-      message: { text, quick_replies: quickReplies(buttons) },
-    });
     return result;
   }
 
@@ -154,10 +181,17 @@ export function renderSocialFunnelMessages(
         },
       }));
     }
-    return [{
-      kind: "text",
-      message: { text, quick_replies: quickReplies(rows) },
-    }];
+    const messages: SocialMessage[] = [];
+    for (let index = 0; index < rows.length; index += 13) {
+      messages.push({
+        kind: "text",
+        message: {
+          text: index === 0 ? text : `Mais opções (${Math.floor(index / 13) + 1}/${Math.ceil(rows.length / 13)})`,
+          quick_replies: quickReplies(rows.slice(index, index + 13)),
+        },
+      });
+    }
+    return messages;
   }
 
   return [];

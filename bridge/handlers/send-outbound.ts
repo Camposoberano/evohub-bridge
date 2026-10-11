@@ -47,7 +47,7 @@ import {
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { buildHybridListFallback, type HybridListSection } from "../shared/hybrid-list.ts";
 import { UazapiResponseError } from "../shared/uazapi.ts";
-import { renderSocialFunnelMessages } from "../shared/social-funnel.ts";
+import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
 import {
@@ -1106,6 +1106,9 @@ export async function handle(req: Request): Promise<Response> {
         instagramAudioUrl = await toSocialAudio(
           String(payload.media_url ?? ""),
         );
+        if (scheduledRow && !instagramAudioUrl) {
+          throw new Error("conversão de áudio social indisponível");
+        }
         if (instagramAudioUrl) {
           socialPayload = { ...payload, media_url: instagramAudioUrl };
         }
@@ -1126,7 +1129,7 @@ export async function handle(req: Request): Promise<Response> {
           blocked: "invalid-payload",
         }, 400);
       }
-      for (const item of socialMessages) {
+      for (const [partIndex, item] of socialMessages.entries()) {
         dispatchStarted = true;
         const itemResult = await sendMeta(channelToken!, "me/messages", {
           recipient: { id: to },
@@ -1134,7 +1137,26 @@ export async function handle(req: Request): Promise<Response> {
           messaging_type: "RESPONSE",
         });
         res = itemResult;
-        if (itemResult.ok) acceptedProviderMessages++;
+        if (itemResult.ok) {
+          acceptedProviderMessages++;
+          if (scheduledRow && funnelLink.scheduled_message_id) {
+            const resultData = (itemResult.data ?? {}) as Json;
+            const { error: partError } = await db.from("events").insert({
+              source: "funil",
+              event_type: "social_provider_part_accepted",
+              channel_id: channel.id,
+              payload: socialPartReceiptPayload(
+                String(funnelLink.scheduled_message_id),
+                partIndex,
+                socialMessages.length,
+                typeof resultData.message_id === "string"
+                  ? resultData.message_id
+                  : null,
+              ),
+            });
+            if (partError) throw new Error("falha ao registrar aceitação de parte social");
+          }
+        }
         if (!itemResult.ok) break;
       }
       if (
