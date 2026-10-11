@@ -20,6 +20,19 @@ Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
   assertEquals(validateEnqueueBody({ request, pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
 });
 
+Deno.test("reparo de abertura exige sinal explícito e só vale no funil principal", () => {
+  const pieces = Array.from({ length: 31 }, (_, index) => ({
+    day: Math.min(5, Math.floor(index / 7) + 1),
+    type: "text",
+    payload: { content: "Peça" },
+    offset_seconds: index,
+  }));
+  assertEquals(validateEnqueueBody({ request: { ...request, repair_missing_opening: true }, pieces }).ok, true);
+  assertEquals(validateEnqueueBody({ request: { ...request, repair_missing_opening: "true" }, pieces }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...request, action: "preco", repair_missing_opening: true },
+    pieces: [{ day: 0, type: "text", payload: { content: "Preço" }, offset_seconds: 0 }] }).ok, false);
+});
+
 Deno.test("aceita intenção automática no mesmo workflow editável da macro", () => {
   const result = validateEnqueueBody({
     request: { ...request, action: "preco", source: "intent" },
@@ -35,6 +48,10 @@ Deno.test("aceita botão do funil certo e exige resultado para cotação", () =>
   assertEquals(valid("plantio", "plantio_10"), true);
   assertEquals(valid("nutricao", "nutricao_2"), true);
   assertEquals(valid("preco", "tam_4kg"), true);
+  assertEquals(valid("preco", "uso_silagem"), true);
+  assertEquals(valid("preco", "uso_pastejo"), true);
+  assertEquals(valid("preco", "uso_outro"), true);
+  assertEquals(valid("plantio", "uso_silagem"), false);
   assertEquals(valid("preco", "preco_cotar_tam_4kg", true), true);
   assertEquals(valid("preco", "preco_cotar_tam_4kg"), false);
   assertEquals(valid("plantio", "nutricao_2"), false);

@@ -1,6 +1,7 @@
 import { optionalEnv } from "./env.ts";
 import {
   isSoberanoAction,
+  SOBERANO_ACTIONS,
   type ActionRequest,
   type SoberanoAction,
 } from "./n8n-action-contract.ts";
@@ -10,8 +11,11 @@ export type ActionDispatchResult =
   | { ok: false; terminal: boolean; error: string };
 
 export function enabledN8nActions(
-  value = optionalEnv("SOBERANO_N8N_ACTIONS_ENABLED") ?? "",
+  value?: string,
 ): Set<SoberanoAction> {
+  // O 5895 tem um único dono de conteúdo. Sem flag em produção que possa
+  // reativar silenciosamente o roteiro antigo do bridge.
+  if (value === undefined) return new Set(SOBERANO_ACTIONS);
   return new Set(
     value.split(",").map((part) => part.trim()).filter(isSoberanoAction),
   );
