@@ -6,7 +6,7 @@ Inventário de 11/10/2026. Este documento registra a configuração e as evidên
 
 | Plataforma | Nome no Hub | ID do canal | Situação inicial |
 | --- | --- | --- | --- |
-| Facebook | campo soberano | `2e49dea3-9d93-4f5f-ad54-02882956d1ed` | Aguardando implantação |
+| Facebook | campo soberano | `2e49dea3-9d93-4f5f-ad54-02882956d1ed` | Habilitado para piloto; aguardando conversa nova de teste |
 | Facebook | Mega Sorgo Santa Elisa | `319d3aa4-26df-42bf-acbf-df440ef5981d` | Aguardando implantação |
 | Instagram | Atendimento IG | `93a082b0-e169-4cf8-9b1f-6e93758bf908` | Aguardando implantação |
 | Instagram | sorgo brasileiro | `1f056c55-fd58-4d55-943f-7d18c0dbc43b` | Aguardando implantação |
@@ -55,6 +55,8 @@ O consumidor `pQFCtRhzQTKqXTjS` foi publicado na versão `6902a5f7-f758-4d47-af8
 
 As execuções automáticas da fila continuam indicando oito peças antigas do WhatsApp 5895 bloqueadas por `previous-step-not-sent`: a etapa anterior 10 dessas sequências está marcada `failed`. O mesmo erro aparece na execução `161360`, iniciada antes da troca do consumidor, e nas execuções `161362` e `161363` após a troca. Essas peças não foram reenviadas; é necessário conferir a etapa 10 e os recibos do provedor antes de qualquer retentativa para não duplicar mídia incerta.
 
+A leitura individual das oito etapas 10 mostrou o mesmo resultado em todas: uma tentativa, `last_outcome=uncertain`, `transport_stage=await_response` e timeout de aproximadamente 45.002 ms. Nenhuma das oito tem linha de `messages` associada por `scheduled_message_id` no banco. A ausência de recibo local não confirma ausência de entrega no aparelho; consultar Chatwoot e provedor antes de reabrir as etapas.
+
 Às 16h59 de Fortaleza, a execução automática `161367` concluiu com nove itens consultados: um envio marcado `sent` pela fila e oito bloqueios antigos preservados. O estado `success` da execução comprova funcionamento do consumidor, mas não comprova entrega da mensagem no aparelho do destinatário.
 
-O código passou 65 testes dirigidos, `deno check` dos endpoints e `next build` do painel. Os quatro canais sociais ainda não foram habilitados; o piloto do Facebook `campo soberano` aguarda o número da conversa de teste para verificar a primeira peça e os recibos antes de acrescentar o primeiro ID à allowlist.
+O código passou 65 testes dirigidos, `deno check` dos endpoints e `next build` do painel. Às 17h02 de Fortaleza, `SOBERANO_SOCIAL_CHANNEL_IDS` foi configurada no Coolify com somente `2e49dea3-9d93-4f5f-ad54-02882956d1ed`; os restarts `xzfesjppjjiemesxityrzxl0` e `bhdemqzvn0wcsviqabc5npfm` terminaram, `/health` respondeu `ok` e `/version` mostrou 15 segundos de atividade. Os outros três canais continuam fora da allowlist. O piloto aguarda uma conversa nova de teste e seus recibos. A conversa #3539, aberta antes da habilitação, contém uma sequência histórica `mega-sorgo` concluída; não é evidência do novo funil.

@@ -22,7 +22,7 @@
 - **Logs**: `GET /applications/{uuid}/logs?lines=200`
 - Env **nova** é `POST /applications/{uuid}/envs`; `PATCH` só atualiza existente e
   responde `Environment variable not found.` se a chave ainda não existe
-- `GET /applications/{uuid}/restart` recria o container e já pega env nova —
+- `POST /applications/{uuid}/restart` recria o container e já pega env nova —
   confirmar por `uptime_s` baixo em `/version`
 
 ## Convenções
