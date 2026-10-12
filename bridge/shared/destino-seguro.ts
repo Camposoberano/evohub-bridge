@@ -29,6 +29,9 @@ export function ehIpInterno(ip: string): boolean {
   if (limpo.includes(":")) {
     const baixo = limpo.toLowerCase();
     if (baixo === "::1" || baixo === "::") return true;
+    // URL normaliza IPv4 mapeado para hexadecimal (::ffff:7f00:1), então
+    // checar apenas a forma decimal deixaria loopback passar.
+    if (baixo.startsWith("::ffff:")) return true;
     // IPv4 mapeado em IPv6 (::ffff:127.0.0.1)
     const mapeado = baixo.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
     if (mapeado) return ehIpInterno(mapeado[1]);

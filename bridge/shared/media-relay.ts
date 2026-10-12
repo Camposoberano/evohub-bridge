@@ -1,6 +1,7 @@
 import { admin } from "./supabase.ts";
 import { optionalEnv } from "./env.ts";
 import { avaliarDestino, ehIpInterno } from "./destino-seguro.ts";
+import { fetchSafeMedia, readLimitedMedia } from "./safe-media-download.ts";
 
 const BUCKET = "soberano-relay";
 const MAX_BYTES = 30 * 1024 * 1024;
@@ -70,9 +71,7 @@ async function garantirDestinoSeguro(sourceUrl: string): Promise<void> {
 async function baixarComRetry(sourceUrl: string): Promise<Response> {
   let ultimoStatus = 0;
   for (let tentativa = 0; ; tentativa++) {
-    const response = await fetch(sourceUrl, {
-      signal: AbortSignal.timeout(30_000),
-    });
+    const response = await fetchSafeMedia(sourceUrl);
     if (response.ok) return response;
     ultimoStatus = response.status;
     // 4xx que não seja 404 é definitivo (403/410): repetir só queima tempo.
@@ -94,7 +93,7 @@ export async function relayProviderMedia(
   if (declaredSize > MAX_BYTES) {
     throw new Error(`mídia excede ${MAX_BYTES / 1024 / 1024} MB`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readLimitedMedia(response, MAX_BYTES);
   if (bytes.length === 0) throw new Error("mídia vazia");
   if (bytes.length > MAX_BYTES) {
     throw new Error(`mídia excede ${MAX_BYTES / 1024 / 1024} MB`);
@@ -109,7 +108,7 @@ export async function relayProviderMedia(
   }/${crypto.randomUUID()}${extension}`;
   const { error } = await (admin() as any).storage.from(BUCKET).upload(
     path,
-    new Blob([bytes], { type: contentType }),
+    new Blob([Uint8Array.from(bytes)], { type: contentType }),
     { contentType, upsert: false },
   );
   if (error) throw new Error(`upload da mídia: ${error.message}`);

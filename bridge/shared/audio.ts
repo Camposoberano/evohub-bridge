@@ -2,6 +2,7 @@
 // Cloud API só renderiza bolha de voz quando o arquivo é audio/ogg (opus); mp3/m4a viram player de arquivo.
 // Fluxo: baixa o arquivo -> ffmpeg -> ogg/opus -> sobe em bucket público -> devolve URL pública.
 import { admin } from "./supabase.ts";
+import { fetchSafeMedia, readLimitedMedia } from "./safe-media-download.ts";
 
 const BUCKET = "soberano-out"; // público; mídia gerada pelo bridge (PTT)
 
@@ -55,9 +56,9 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
   // que o WhatsApp mostra como ARQUIVO, não como voz/PTT — só opus vira bolha de voz.)
   let inPath = "", outPath = "";
   try {
-    const res = await fetch(srcUrl);
+    const res = await fetchSafeMedia(srcUrl);
     if (!res.ok) return null;
-    const input = new Uint8Array(await res.arrayBuffer());
+    const input = await readLimitedMedia(res);
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
     outPath = await Deno.makeTempFile({ suffix: ".ogg" });
     await Deno.writeFile(inPath, input);
@@ -66,6 +67,8 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
     const cmd = new Deno.Command("ffmpeg", {
       args: [
         "-y",
+        "-nostdin",
+        "-loglevel", "error",
         "-i",
         inPath,
         "-vn",
@@ -79,11 +82,14 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
         "1",
         "-application",
         "voip",
+        "-t", "300",
+        "-fs", "31457280",
         outPath,
       ],
       env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
       stderr: "piped",
       stdout: "null",
+      signal: AbortSignal.timeout(30_000),
     });
     const { success, code, stderr } = await cmd.output();
     if (!success) {
@@ -93,6 +99,8 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
       );
       return null;
     }
+    const stat = await Deno.stat(outPath);
+    if (stat.size > 30 * 1024 * 1024) return null;
     const bytes = await Deno.readFile(outPath);
     if (bytes.length === 0) return null;
 
@@ -143,15 +151,17 @@ export async function toVoiceOgg(srcUrl: string): Promise<string | null> {
 export async function toSocialAudio(srcUrl: string): Promise<string | null> {
   let inPath = "", outPath = "";
   try {
-    const res = await fetch(srcUrl);
+    const res = await fetchSafeMedia(srcUrl);
     if (!res.ok) return null;
-    const input = new Uint8Array(await res.arrayBuffer());
+    const input = await readLimitedMedia(res);
     inPath = await Deno.makeTempFile({ suffix: ".bin" });
     outPath = await Deno.makeTempFile({ suffix: ".m4a" });
     await Deno.writeFile(inPath, input);
     const cmd = new Deno.Command("ffmpeg", {
       args: [
         "-y",
+        "-nostdin",
+        "-loglevel", "error",
         "-i",
         inPath,
         "-vn",
@@ -163,11 +173,14 @@ export async function toSocialAudio(srcUrl: string): Promise<string | null> {
         "44100",
         "-ac",
         "1",
+        "-t", "300",
+        "-fs", "31457280",
         outPath,
       ],
       env: { LD_LIBRARY_PATH: "/usr/lib:/lib" },
       stderr: "piped",
       stdout: "null",
+      signal: AbortSignal.timeout(30_000),
     });
     const { success, code, stderr } = await cmd.output();
     if (!success) {
@@ -177,6 +190,8 @@ export async function toSocialAudio(srcUrl: string): Promise<string | null> {
       );
       return null;
     }
+    const stat = await Deno.stat(outPath);
+    if (stat.size > 30 * 1024 * 1024) return null;
     const bytes = await Deno.readFile(outPath);
     if (bytes.length === 0) return null;
 

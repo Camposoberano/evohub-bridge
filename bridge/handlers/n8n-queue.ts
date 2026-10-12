@@ -9,6 +9,8 @@ import {
 import { isN8nManagedFunnel } from "../shared/social-window-hold.ts";
 import { isWithinFunnelSendHours } from "../shared/business-hours.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
+import { isContactBlocked, isContactExcludedFromAutomation } from "../shared/lead-block.ts";
+import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.ts";
 
 type Json = Record<string, unknown>;
 const QUEUE_LIMIT = 200;
@@ -24,6 +26,20 @@ function json(body: unknown, status = 200): Response {
 export function queueBaseVersion(funnel: unknown): string | null {
   if (!isN8nManagedFunnel(funnel)) return null;
   return String(funnel).split(":")[0];
+}
+
+export function queueBlockReason(conversation: {
+  contacts?: Record<string, unknown> | null;
+  outcome?: unknown;
+  labels?: unknown;
+  bot_muted_at?: unknown;
+}): string | null {
+  if (isContactBlocked(conversation.contacts) ||
+    isContactExcludedFromAutomation(conversation.contacts)) return "contato excluído";
+  const commercialBlock = bloqueioDaConversa(conversation);
+  if (commercialBlock) return motivoDoBloqueio(commercialBlock);
+  if (conversation.bot_muted_at) return "atendimento-humano";
+  return null;
 }
 
 /** Lista IDs, nunca payload, para o workflow não carregar conteúdo nem segredo do banco. */
@@ -98,10 +114,12 @@ async function send(req: Request): Promise<Response> {
     return json({ ok: true, sent: false, not_due: true });
   }
   const { data: conversation, error: conversationError } = await db.from("conversations")
-    .select("id,channel_id,chatwoot_conversation_id")
+    .select("id,channel_id,chatwoot_conversation_id,outcome,labels,bot_muted_at,contacts(*)")
     .eq("id", row.conversation_id).maybeSingle();
-  if (conversationError || !conversation ||
-    Number(conversation.chatwoot_conversation_id) !== Number(row.chatwoot_conversation_id)) {
+  if (conversationError || !conversation) {
+    return json({ ok: false, error: "falha ao consultar conversa" }, 503);
+  }
+  if (Number(conversation.chatwoot_conversation_id) !== Number(row.chatwoot_conversation_id)) {
     return json({ ok: false, error: "conversa inválida" }, 422);
   }
   const { data: channel, error: channelError } = await db.from("channels")
@@ -111,6 +129,8 @@ async function send(req: Request): Promise<Response> {
     funnelVersionForChannel(channel) !== queueBaseVersion(row.funnel)) {
     return json({ ok: false, error: "canal ou versão não autorizada" }, 422);
   }
+  const blocked = queueBlockReason(conversation);
+  if (blocked) return json({ ok: true, sent: false, blocked });
   const result = await sendOutbound(new Request(
     `http://internal/send-outbound?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,
     {
