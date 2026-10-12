@@ -25,8 +25,12 @@ export async function handle(req: Request): Promise<Response> {
   }
   try {
     const summary = await reconcile5895Uncertain();
-    return json({ ok: summary.unresolved === 0, ...summary },
-      summary.unresolved === 0 ? 200 : 503);
+    // A missing receipt is a known business incident, already visible in the
+    // operational alert. Keep real lookup/ambiguity failures red in n8n.
+    const hardFailures = summary.unresolved - (summary.errors.receipt_missing ?? 0);
+    return json({ ok: hardFailures === 0, ...summary,
+      awaiting_receipts: summary.errors.receipt_missing ?? 0 },
+      hardFailures === 0 ? 200 : 503);
   } catch (error) {
     console.error("n8n-reconcile-5895:", error instanceof Error ? error.name : "unknown");
     return json({ ok: false, error: "reconciliation_unavailable" }, 503);

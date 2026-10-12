@@ -52,7 +52,10 @@ import { AsyncVideoReceiptError, shouldUseAsyncVideoReceipt } from "../shared/as
 import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
 import { holdSocialWindowMessages } from "../shared/social-window-hold.ts";
 import { SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
-import { allowsContinuationAfterUnconfirmedVideo } from "../shared/unconfirmed-video-continuation.ts";
+import {
+  allowsContinuationAfterUnconfirmedVideo,
+  isAwaitingVideoReceipt,
+} from "../shared/unconfirmed-video-continuation.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
 import {
@@ -220,6 +223,7 @@ export async function handle(req: Request): Promise<Response> {
         blocked: "previous-step-not-sent",
         previous_step: previousUnsent.step,
         previous_status: previousUnsent.status,
+        in_progress: isAwaitingVideoReceipt(previousUnsent, scheduledRow.funnel),
       }, 409);
     }
     deliveryState = deliveryMetadata(scheduledPayload);
