@@ -13,7 +13,7 @@ import {
   claimDeliveryWithTtl,
   type DbClient,
 } from "../shared/supabase.ts";
-import { MAIN_FUNNELS } from "../shared/funnel-identity.ts";
+import { MAIN_FUNNELS, RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -63,6 +63,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const monitoringWindow = await ensureMonitoringWindow(db, now);
   const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const since15m = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
+  const since5m = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
   const overdue = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
   const [
     channelsResult,
@@ -71,6 +72,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     overdueQueue,
     recentContacts,
     adConversations,
+    unconfirmed5895Videos,
   ] = await Promise.all([
     db.from("channels").select(
       "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
@@ -93,6 +95,14 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       "id,channel_id,opened_at,ad_id,creative_id,attribution",
     )
       .eq("origem", "anuncio").gte("opened_at", since24h).limit(3000),
+    exactCount(
+      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+        .eq("funnel", RESTORED_5895_FUNNEL).eq("type", "video")
+        .eq("status", "failed")
+        .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+        .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
+        .lte("payload->__funnel_delivery->>last_attempt_at", since5m),
+    ),
   ]);
   if (channelsResult.error) throw channelsResult.error;
   if (recentContacts.error) throw recentContacts.error;
@@ -537,6 +547,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "warning",
       count: Object.values(mediaTimeouts).reduce((sum, count) => sum + count, 0),
       detail: Object.entries(mediaTimeouts).map(([bucket, count]) => `${bucket}: ${count}`).join("; ") || undefined,
+    },
+    {
+      key: "5895_video_receipt_overdue",
+      severity: "critical",
+      count: unconfirmed5895Videos,
+      detail: "vídeo sem confirmação de entrega há mais de 5 minutos",
     },
     {
       key: "funnel_delivery_retries_1h",

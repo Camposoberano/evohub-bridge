@@ -36,6 +36,7 @@ const ENTREGAVEIS = new Set([
   "canal_nao_cadastrado",
   "failed_messages_15m",
   "overdue_funnel_queue",
+  "5895_video_receipt_overdue",
   // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
   // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
   "uazapi_instance_disconnected",
@@ -65,6 +66,7 @@ const TITULOS: Record<string, string> = {
   canal_nao_cadastrado: "Número recebendo sem canal cadastrado",
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
+  "5895_video_receipt_overdue": "Vídeo do funil 5895 aguardando confirmação de entrega",
 };
 
 // Instância uazapi caída enquanto o canal segue `active` no banco.
