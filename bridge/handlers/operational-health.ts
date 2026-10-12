@@ -325,7 +325,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         : size < 15_000_000 ? "5to15mb" : "gte15mb";
       const type = ["video", "document", "audio", "image"].includes(String(payload.type))
         ? String(payload.type) : "other";
-      const stage = ["await_response", "read_body", "invalid_body"].includes(String(payload.transport_stage))
+      const stage = ["await_response", "read_body", "invalid_body", "await_receipt"].includes(String(payload.transport_stage))
         ? String(payload.transport_stage) : "other";
       const key = `${type}:${sizeBucket}:${stage}`;
       mediaTimeouts[key] = (mediaTimeouts[key] ?? 0) + 1;

@@ -6,6 +6,8 @@
 - Prova: exatamente um recibo da uazapi `Delivered`, `Read` ou `Played` para o destinatário, tipo, arquivo/texto e horário da tentativa. O update exige `status=failed` e o mesmo `attempt_id`; invocações concorrentes não confirmam uma tentativa diferente.
 - Sem prova, com prova ambígua ou falha de consulta: mantém `failed`, bloqueia as etapas seguintes da conversa e gera execução de erro. Não reenviar automaticamente.
 - Evento `provider_delivery_reconciled` identifica a confirmação. Eventos `funnel_delivery_attempt` incluem `media_size_bytes` quando o HEAD já forneceu tamanho; `/operational-health` agrupa timeouts por tipo, faixa de tamanho e etapa da resposta. Não inclui URL/telefone/conteúdo no agrupamento.
+- Vídeos agendados do funil restaurado 5895 usam `async: true` na Uazapi com `track_id` por tentativa. `Queued` significa apenas aceitação na fila interna: o bridge só marca `sent` após um único recibo `Delivered`, `Read` ou `Played` do mesmo vídeo, destinatário e tentativa. A espera imediata é limitada a 20 segundos; `await_receipt` no painel significa que o recibo não chegou a tempo. A reconciliação por minuto continua procurando o mesmo `track_id` sem repetir o envio.
+- Outros canais e tipos de peça continuam na rota existente. Se o recibo faltar ou houver mais de uma correspondência, mantenha a peça incerta e confira o histórico do provedor antes de qualquer intervenção manual.
 - Contingência manual: `ops/reconcile-5895-uncertain.ts` do PR #10, sempre em `dry-run` antes de `--apply`.
 
 ## Verificação de publicação

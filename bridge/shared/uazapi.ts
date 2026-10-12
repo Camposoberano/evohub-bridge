@@ -25,7 +25,7 @@ export function uazapiConfigured(): boolean {
   return Boolean(BASE() && ADMIN());
 }
 
-async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown }) {
+async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown; timeoutMs?: number }) {
   const controller = new AbortController();
   const startedAt = Date.now();
   let stage: "await_response" | "read_body" = "await_response";
@@ -33,7 +33,7 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE()}${path}`, {
       method: opts.method ?? "GET",
@@ -64,7 +64,7 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
 export const adminGet = (path: string) => call(path, { headers: { admintoken: ADMIN() } });
 export const adminPost = (path: string, body?: unknown) => call(path, { method: "POST", headers: { admintoken: ADMIN() }, body });
 export const instGet = (path: string, token: string) => call(path, { headers: { token } });
-export const instPost = (path: string, token: string, body?: unknown) => call(path, { method: "POST", headers: { token }, body });
+export const instPost = (path: string, token: string, body?: unknown, timeoutMs?: number) => call(path, { method: "POST", headers: { token }, body, timeoutMs });
 export const instPut = (path: string, token: string, body?: unknown) => call(path, { method: "PUT", headers: { token }, body });
 export const instDelete = (path: string, token: string, body?: unknown) => call(path, { method: "DELETE", headers: { token }, body });
 

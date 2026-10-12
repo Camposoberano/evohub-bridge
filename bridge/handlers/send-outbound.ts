@@ -48,6 +48,7 @@ import {
 import { buildHybridMenuFallback } from "../shared/hybrid-menu.ts";
 import { buildHybridListFallback, type HybridListSection } from "../shared/hybrid-list.ts";
 import { UazapiResponseError } from "../shared/uazapi.ts";
+import { AsyncVideoReceiptError, shouldUseAsyncVideoReceipt } from "../shared/async-video-receipt.ts";
 import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
 import { holdSocialWindowMessages } from "../shared/social-window-hold.ts";
 import { SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
@@ -377,7 +378,7 @@ export async function handle(req: Request): Promise<Response> {
     });
     return persisted;
   };
-  const beginDeliveryAttempt = async (): Promise<boolean> => {
+  const beginDeliveryAttempt = async (asyncVideoReceipt = false): Promise<boolean> => {
     if (!scheduledRow || !funnelLink.scheduled_message_id || !deliveryState) {
       return true;
     }
@@ -387,6 +388,7 @@ export async function handle(req: Request): Promise<Response> {
       ...deliveryState,
       attempts: attemptNumber,
       attempt_id: attemptId,
+      async_track_id: asyncVideoReceipt ? `funnel-${attemptId}` : undefined,
       last_attempt_at: new Date().toISOString(),
       last_outcome: "started",
       retry_at: undefined,
@@ -1017,7 +1019,14 @@ export async function handle(req: Request): Promise<Response> {
 
     let res: { ok: boolean; status: number; data: unknown } | undefined;
     const providerDispatchAt = Date.now();
-    if (!await beginDeliveryAttempt()) {
+    const asyncVideoReceipt = shouldUseAsyncVideoReceipt({
+      hasHybridRoute: Boolean(hybrid),
+      scheduled: Boolean(scheduledRow),
+      type,
+      funnel: scheduledRow?.funnel,
+      channelPhone: channel.phone_number,
+    });
+    if (!await beginDeliveryAttempt(asyncVideoReceipt)) {
       return json({
         ok: false,
         sent: false,
@@ -1040,6 +1049,12 @@ export async function handle(req: Request): Promise<Response> {
         const link = payload.media_url as string;
         res = (await hybridSendMedia(hybrid, to, link, type, {
           caption: payload.caption as string | undefined,
+          ...(asyncVideoReceipt && deliveryState?.async_track_id
+            ? { asyncReceipt: {
+              trackId: deliveryState.async_track_id,
+              startedAt: providerDispatchAt,
+            } }
+            : {}),
           ...(type === "document"
             ? { fileName: payload.file_name as string | undefined }
             : {}),
@@ -1375,10 +1390,11 @@ export async function handle(req: Request): Promise<Response> {
   } catch (error) {
     let cause: unknown = error;
     for (let depth = 0; depth < 4 && cause instanceof Error; depth++) {
-      if (cause instanceof UazapiResponseError) break;
+      if (cause instanceof UazapiResponseError || cause instanceof AsyncVideoReceiptError) break;
       cause = cause.cause;
     }
     const uazapiError = cause instanceof UazapiResponseError ? cause : null;
+    const receiptError = cause instanceof AsyncVideoReceiptError ? cause : null;
     const uncertainByTransport = error instanceof Error &&
       error.name === "UncertainDeliveryError";
     if (!dispatchStarted && !uncertainByTransport) {
@@ -1408,8 +1424,8 @@ export async function handle(req: Request): Promise<Response> {
       );
       await writeDeliveryOutcome(outcome, "failed", {
         failure_stage: "provider_transport",
-        transport_stage: uazapiError?.stage ?? null,
-        transport_elapsed_ms: uazapiError?.elapsedMs ?? null,
+        transport_stage: uazapiError?.stage ?? receiptError?.stage ?? null,
+        transport_elapsed_ms: uazapiError?.elapsedMs ?? receiptError?.elapsedMs ?? null,
         retryable: false,
         partial: acceptedProviderMessages > 0,
       });
@@ -1423,8 +1439,8 @@ export async function handle(req: Request): Promise<Response> {
           day: funnelLink.funnel_day,
           type,
           outcome,
-          transport_stage: uazapiError?.stage ?? null,
-          transport_elapsed_ms: uazapiError?.elapsedMs ?? null,
+          transport_stage: uazapiError?.stage ?? receiptError?.stage ?? null,
+          transport_elapsed_ms: uazapiError?.elapsedMs ?? receiptError?.elapsedMs ?? null,
         },
       }).then(() => {}, () => {});
       return json({
