@@ -34,6 +34,7 @@ import { toSocialAudio, toVoiceOgg } from "../shared/audio.ts";
 import {
   decidirSemMidia,
   midiaDisponivel,
+  tamanhoDaMidiaEmCache,
   urlDaPeca,
 } from "../shared/midia-funil.ts";
 import {
@@ -284,6 +285,7 @@ export async function handle(req: Request): Promise<Response> {
   let attemptId: string | null = null;
   let dispatchStarted = false;
   let acceptedProviderMessages = 0;
+  let mediaSizeBytes: number | null = null;
   const deliveryEventBase = ():
     | Omit<
       FunnelDeliveryEvent,
@@ -369,6 +371,7 @@ export async function handle(req: Request): Promise<Response> {
     await recordFunnelDeliveryEvent(db, String(channel.id ?? ""), {
       ...eventBase,
       ...details,
+      media_size_bytes: mediaSizeBytes,
       outcome,
       retry_at: retryAt ?? null,
     });
@@ -797,7 +800,9 @@ export async function handle(req: Request): Promise<Response> {
 
     // A mídia faz parte da etapa. Sem ela, não enviar legenda isolada nem avançar o funil.
     const urlPeca = urlDaPeca(type, payload);
-    if (urlPeca && !(await midiaDisponivel(urlPeca))) {
+    const mediaAvailable = urlPeca ? await midiaDisponivel(urlPeca) : true;
+    if (urlPeca) mediaSizeBytes = tamanhoDaMidiaEmCache(urlPeca);
+    if (urlPeca && !mediaAvailable) {
       const mediaKey = decodeURIComponent(
         urlPeca.split("?")[0].split("/").pop() ?? "",
       );

@@ -47,6 +47,7 @@ export type FunnelDeliveryEvent = {
   failure_stage?: string | null;
   transport_stage?: string | null;
   transport_elapsed_ms?: number | null;
+  media_size_bytes?: number | null;
   media_key?: string | null;
   partial?: boolean;
 };
