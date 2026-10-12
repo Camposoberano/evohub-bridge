@@ -45,6 +45,8 @@ import {
   sendCatalogJourneyReminder,
 } from "./catalog.ts";
 import { catalogTextClaimKey, clickDomain } from "../shared/journey-router.ts";
+import { confirmedVideoNotice } from "../shared/uazapi-video-status.ts";
+import { reconcile5895VideoNotice } from "../shared/reconcile-5895.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -70,11 +72,29 @@ export async function handle(req: Request): Promise<Response> {
 
   const eventType = rotuloDeEvento(p);
   const db = admin();
-  db.from("events").insert({
+  const { error: eventError } = await db.from("events").insert({
     source: "uazapi",
     event_type: eventType,
     payload: redactSecrets(p),
-  }).then(() => {}, () => {});
+  });
+  if (eventError) {
+    // A Uazapi pode tentar novamente quando não recebe 200. Confirmar antes de
+    // responder evita perder um recibo de entrega em uma falha transitória do banco.
+    console.error("uazapi-webhook: persistência do evento falhou", eventError.code ?? "database_error");
+    return new Response("temporarily unavailable", { status: 503 });
+  }
+
+  const videoNotice = confirmedVideoNotice(eventType, p);
+  if (videoNotice) {
+    // O cron de um minuto permanece como recuperação se este processo cair.
+    // Não reter o webhook enquanto a consulta ao histórico do provedor ocorre.
+    reconcile5895VideoNotice(videoNotice, db).catch((error) =>
+      console.error(
+        "uazapi-webhook: reconciliação do vídeo falhou",
+        error instanceof Error ? error.name : "unknown",
+      )
+    );
+  }
 
   if (isInboundUazapiEvent(eventType, p)) {
     handleInbound(db, p).catch((e) =>

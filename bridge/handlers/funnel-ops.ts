@@ -203,6 +203,7 @@ export async function handle(req: Request): Promise<Response> {
         provider_code: delivery.provider_code ?? null,
         transport_stage: delivery.transport_stage ?? null,
         transport_elapsed_ms: delivery.transport_elapsed_ms ?? null,
+        last_attempt_at: delivery.last_attempt_at ?? null,
         attempts: delivery.attempts ?? null,
         retryable: delivery.last_outcome === "rejected" &&
           Number(delivery.provider_status) === 429,
