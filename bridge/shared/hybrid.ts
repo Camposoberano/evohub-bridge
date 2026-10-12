@@ -11,6 +11,7 @@ import {
   tokenForInstance,
   uazapiConfigured,
 } from "./uazapi.ts";
+import { waitForVideoReceipt } from "./async-video-receipt.ts";
 import { optionalEnv } from "./env.ts";
 import { admin } from "./supabase.ts";
 import { configuredChannel, readHybridConfig } from "./hybrid-config.ts";
@@ -232,7 +233,12 @@ export async function hybridSendMedia(
   to: string,
   mediaUrl: string,
   mediaType: string,
-  opts: { caption?: string; fileName?: string; isVoice?: boolean },
+  opts: {
+    caption?: string;
+    fileName?: string;
+    isVoice?: boolean;
+    asyncReceipt?: { trackId: string; startedAt: number; maxWaitMs?: number };
+  },
 ): Promise<SendResult | null> {
   const startedAt = Date.now();
   try {
@@ -242,6 +248,11 @@ export async function hybridSendMedia(
       type: mediaType === "document" ? "document" : mediaType,
       text: opts.caption || undefined,
     };
+    if (opts.asyncReceipt) {
+      body.async = true;
+      body.track_source = "evohub-5895-funnel";
+      body.track_id = opts.asyncReceipt.trackId;
+    }
     // `docName`, não `fileName`: é o nome do campo na uazapi (openapi-bundled.json,
     // POST /send/media). Com o nome errado o documento chegava sem nome no WhatsApp.
     if (mediaType === "document") body.docName = opts.fileName ?? "arquivo";
@@ -273,10 +284,32 @@ export async function hybridSendMedia(
       );
       return null;
     }
+    if (opts.asyncReceipt) {
+      const queued = (r.data ?? {}) as Json;
+      const providerId = typeof queued.id === "string" ? queued.id : null;
+      const receipt = await waitForVideoReceipt(route, {
+        recipient: to,
+        mediaUrl,
+        trackId: opts.asyncReceipt.trackId,
+        providerId,
+        startedAt: opts.asyncReceipt.startedAt,
+      }, { maxWaitMs: opts.asyncReceipt.maxWaitMs });
+      await recordRouteEvent(route, "send_success", mediaType, to, r.status);
+      return {
+        ok: true,
+        status: r.status,
+        data: {
+          message_id: receipt.id,
+          provider_status: receipt.status,
+          confirmed_from: "uazapi_message_history",
+        },
+        via: "uazapi",
+      };
+    }
     await recordRouteEvent(route, "send_success", mediaType, to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
-    const receipt = await confirmedMediaReceipt(
+    const receipt = opts.asyncReceipt ? null : await confirmedMediaReceipt(
       route,
       to,
       mediaUrl,

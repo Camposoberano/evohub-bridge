@@ -36,3 +36,21 @@ Deno.test("sem recibo único, a peça permanece sem confirmação", () => {
   assertEquals(uniqueConfirmedReceipt([receipt, receipt]).error, "receipt_ambiguous");
   assertEquals(uniqueConfirmedReceipt([receipt]).receipt, receipt);
 });
+
+Deno.test("reconciliação do vídeo assíncrono exige track_id da tentativa", () => {
+  const tracked = {
+    type: "video",
+    payload: {
+      media_url: row.payload.media_url,
+      __funnel_delivery: { async_track_id: "funnel-attempt-1" },
+    },
+  };
+  assertEquals(matchingReceipt(tracked, { ...receipt, track_id: "funnel-attempt-1" }, at), true);
+  assertEquals(matchingReceipt(tracked, {
+    ...receipt,
+    track_id: "funnel-attempt-1",
+    messageTimestamp: at + 10 * 60_000,
+  }, at), true);
+  assertEquals(matchingReceipt(tracked, receipt, at), false);
+  assertEquals(matchingReceipt(tracked, { ...receipt, track_id: "funnel-other" }, at), false);
+});

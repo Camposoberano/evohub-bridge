@@ -18,6 +18,7 @@ export type FunnelDeliveryOutcome =
 export type FunnelDeliveryMetadata = {
   attempts: number;
   attempt_id?: string;
+  async_track_id?: string;
   last_attempt_at?: string;
   last_outcome?: FunnelDeliveryOutcome;
   retry_at?: string;
@@ -62,6 +63,9 @@ export function deliveryMetadata(payload: unknown): FunnelDeliveryMetadata {
     attempts: Math.max(0, Number(meta.attempts ?? 0) || 0),
     attempt_id: typeof meta.attempt_id === "string"
       ? meta.attempt_id
+      : undefined,
+    async_track_id: typeof meta.async_track_id === "string"
+      ? meta.async_track_id
       : undefined,
     last_attempt_at: typeof meta.last_attempt_at === "string"
       ? meta.last_attempt_at

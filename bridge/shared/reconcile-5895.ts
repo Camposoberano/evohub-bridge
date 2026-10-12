@@ -32,10 +32,15 @@ export function matchingReceipt(
   attemptAt: number,
 ): boolean {
   const timestamp = Number(message.messageTimestamp);
+  const delivery = (row.payload.__funnel_delivery ?? {}) as Json;
+  const asyncTrackId = typeof delivery.async_track_id === "string"
+    ? delivery.async_track_id : null;
+  const latest = asyncTrackId ? attemptAt + 24 * 60 * 60_000 : attemptAt + 180_000;
   if (!Number.isFinite(timestamp) || timestamp < attemptAt - 30_000 ||
-    timestamp > attemptAt + 180_000 || message.fromMe !== true ||
+    timestamp > latest || message.fromMe !== true ||
     !confirmedStatuses.has(String(message.status))) return false;
   const sendPayload = (message.sendPayload ?? {}) as Json;
+  if (asyncTrackId && message.track_id !== asyncTrackId) return false;
   if (["video", "document"].includes(row.type)) {
     return String(message.messageType).toLowerCase().includes(row.type) &&
       sendPayload.file === row.payload.media_url;

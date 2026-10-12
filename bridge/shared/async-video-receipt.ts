@@ -1,5 +1,6 @@
 /** Receipt check for async Uazapi video sends. A queued response is not delivery. */
 import { instPost } from "./uazapi.ts";
+import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 type Route = { token: string };
@@ -14,6 +15,18 @@ export type VideoReceiptCriteria = {
 
 const CONFIRMED = new Set(["Delivered", "Read", "Played"]);
 const digits = (value: unknown) => String(value ?? "").replace(/\D/g, "");
+
+export function shouldUseAsyncVideoReceipt(input: {
+  hasHybridRoute: boolean;
+  scheduled: boolean;
+  type: string;
+  funnel: unknown;
+  channelPhone: unknown;
+}): boolean {
+  return input.hasHybridRoute && input.scheduled && input.type === "video" &&
+    input.funnel === RESTORED_5895_FUNNEL &&
+    digits(input.channelPhone) === "5519999715895";
+}
 
 export function matchingAsyncVideoReceipt(
   message: Json,
@@ -35,7 +48,10 @@ export function matchingAsyncVideoReceipt(
 
 export class AsyncVideoReceiptError extends Error {
   readonly stage = "await_receipt";
-  constructor(readonly elapsedMs: number, reason: "missing" | "ambiguous" | "lookup_failed") {
+  constructor(
+    readonly elapsedMs: number,
+    reason: "missing" | "ambiguous" | "lookup_failed",
+  ) {
     super(`uazapi await_receipt ${reason} após ${elapsedMs}ms`);
     this.name = "AsyncVideoReceiptError";
   }
@@ -54,7 +70,8 @@ export async function waitForVideoReceipt(
   const maxWaitMs = opts.maxWaitMs ?? 20_000;
   const intervalMs = opts.intervalMs ?? 2_000;
   const started = Date.now();
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const sleep = opts.sleep ??
+    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const lookup = opts.lookup ?? lookupVideoReceipts;
   do {
     let messages: Json[];
@@ -63,7 +80,9 @@ export async function waitForVideoReceipt(
     } catch {
       throw new AsyncVideoReceiptError(Date.now() - started, "lookup_failed");
     }
-    const matches = messages.filter((message) => matchingAsyncVideoReceipt(message, criteria));
+    const matches = messages.filter((message) =>
+      matchingAsyncVideoReceipt(message, criteria)
+    );
     if (matches.length > 1) {
       throw new AsyncVideoReceiptError(Date.now() - started, "ambiguous");
     }
@@ -74,15 +93,21 @@ export async function waitForVideoReceipt(
   throw new AsyncVideoReceiptError(Date.now() - started, "missing");
 }
 
-async function lookupVideoReceipts(token: string, recipient: string): Promise<Json[]> {
+async function lookupVideoReceipts(
+  token: string,
+  recipient: string,
+): Promise<Json[]> {
   const messages: Json[] = [];
   for (let offset = 0; offset <= 400; offset += 200) {
     const page = await instPost("/message/find", token, {
-      chatid: `${digits(recipient)}@s.whatsapp.net`, limit: 200, offset,
-    });
+      chatid: `${digits(recipient)}@s.whatsapp.net`,
+      limit: 200,
+      offset,
+    }, 5_000);
     if (!page.ok) throw new Error("provider_lookup_failed");
     const found = Array.isArray((page.data as Json).messages)
-      ? (page.data as Json).messages as Json[] : [];
+      ? (page.data as Json).messages as Json[]
+      : [];
     messages.push(...found);
     if (found.length < 200) break;
   }
