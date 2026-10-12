@@ -24,7 +24,7 @@ const fail = (message: string): never => { throw new Error(message); };
 
 const { data: failed, error: failedError } = await db.from("scheduled_messages")
   .select("id,conversation_id,funnel,step,day,type,status,payload")
-  .eq("funnel", RESTORED_5895_FUNNEL).eq("status", "failed").limit(1000);
+  .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed").limit(1000);
 if (failedError) throw failedError;
 const rows = ((failed ?? []) as Row[]).filter((row) =>
   (row.payload?.__funnel_delivery as Json | undefined)?.last_outcome ===
@@ -62,7 +62,8 @@ if (!digits(channel.phone_number).endsWith("5895")) {
 const instance = (await listInstances()).find((item) =>
   digits(item.number) === digits(channel.phone_number)
 );
-if (!instance?.token) fail("instância uazapi 5895 não encontrada");
+const instanceToken = instance?.token;
+if (!instanceToken) throw new Error("instância uazapi 5895 não encontrada");
 
 const proof: Array<{
   row: Row;
@@ -85,7 +86,7 @@ for (const row of rows) {
   if (!Number.isFinite(attemptAt)) fail(`tentativa sem horário: ${row.id}`);
   const messages: Json[] = [];
   for (let offset = 0; offset <= 800; offset += 200) {
-    const provider = await instPost("/message/find", instance.token, {
+    const provider = await instPost("/message/find", instanceToken, {
       chatid: `${recipient}@s.whatsapp.net`,
       limit: 200,
       offset,
@@ -100,8 +101,8 @@ for (const row of rows) {
   const matches = messages.filter((message) => {
     const timestamp = Number(message.messageTimestamp);
     const sendPayload = (message.sendPayload ?? {}) as Json;
-    const sameContent = row.type === "video"
-      ? String(message.messageType).toLowerCase().includes("video") &&
+    const sameContent = row.type === "video" || row.type === "document"
+      ? String(message.messageType).toLowerCase().includes(row.type) &&
         sendPayload.file === row.payload.media_url
       : row.type === "interactive" &&
         sendPayload.text === row.payload.text;
