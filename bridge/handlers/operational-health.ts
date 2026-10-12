@@ -299,6 +299,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     .limit(3000);
   if (deliveryEventsError) throw deliveryEventsError;
   const funnelDeliveryByChannel: Record<string, Record<string, number>> = {};
+  const mediaTimeouts: Record<string, number> = {};
   const latestAttemptOutcome = new Map<string, {
     outcome: string;
     channel_type: string;
@@ -317,6 +318,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       });
     }
     if (outcome === "started") continue;
+    if (outcome === "uncertain" && payload.transport_stage) {
+      const size = Number(payload.media_size_bytes);
+      const sizeBucket = !Number.isFinite(size) || size <= 0 ? "unknown"
+        : size < 5_000_000 ? "lt5mb"
+        : size < 15_000_000 ? "5to15mb" : "gte15mb";
+      const type = ["video", "document", "audio", "image"].includes(String(payload.type))
+        ? String(payload.type) : "other";
+      const stage = ["await_response", "read_body", "invalid_body"].includes(String(payload.transport_stage))
+        ? String(payload.transport_stage) : "other";
+      const key = `${type}:${sizeBucket}:${stage}`;
+      mediaTimeouts[key] = (mediaTimeouts[key] ?? 0) + 1;
+    }
     const outcomes = funnelDeliveryByChannel[channelType] ??= {};
     outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
   }
@@ -520,6 +533,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         }).filter(Boolean).join("; ") || undefined,
     },
     {
+      key: "funnel_media_timeout_1h",
+      severity: "warning",
+      count: Object.values(mediaTimeouts).reduce((sum, count) => sum + count, 0),
+      detail: Object.entries(mediaTimeouts).map(([bucket, count]) => `${bucket}: ${count}`).join("; ") || undefined,
+    },
+    {
       key: "funnel_delivery_retries_1h",
       severity: "warning",
       count: scheduledDeliveryRetries,
@@ -606,6 +625,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       ad_first_steps_24h: adFirstStepByChannel,
       ad_first_steps_unverified_24h: unverifiedAdFirstSteps,
       funnel_delivery_1h: funnelDeliveryByChannel,
+      funnel_media_timeouts_1h: mediaTimeouts,
       funnel_stale_attempts_1h: staleStartedAttempts,
       failed_messages_24h: failedMessages24h,
     },
