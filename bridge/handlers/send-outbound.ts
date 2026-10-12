@@ -52,6 +52,7 @@ import { AsyncVideoReceiptError, shouldUseAsyncVideoReceipt } from "../shared/as
 import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
 import { holdSocialWindowMessages } from "../shared/social-window-hold.ts";
 import { SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
+import { allowsContinuationAfterUnconfirmedVideo } from "../shared/unconfirmed-video-continuation.ts";
 import { outboundClaimKey } from "../shared/outbound-dedup.ts";
 import { normalizeMsgType } from "../shared/msg-type.ts";
 import {
@@ -195,7 +196,7 @@ export async function handle(req: Request): Promise<Response> {
     const currentStep = Number(scheduledRow.step ?? 0);
     const { data: previousSteps, error: previousError } = await db
       .from("scheduled_messages")
-      .select("id,status,step,payload")
+      .select("id,status,step,type,payload")
       .eq("conversation_id", scheduledRow.conversation_id)
       .eq("funnel", scheduledRow.funnel)
       .lt("step", currentStep)
@@ -209,7 +210,8 @@ export async function handle(req: Request): Promise<Response> {
       const sameExecution = !currentSequenceId ||
         previousPayload.__funnel_sequence_id === currentSequenceId;
       return sameExecution && item.status !== "sent" &&
-        item.status !== "cancelled";
+        item.status !== "cancelled" &&
+        !allowsContinuationAfterUnconfirmedVideo(item, scheduledRow?.funnel);
     }) as Json | undefined;
     if (previousUnsent) {
       return json({

@@ -23,6 +23,7 @@ const MAX_CANDIDATES = 3;
 export type ReconcileSummary = {
   checked: number;
   reconciled: number;
+  released_unconfirmed: number;
   unresolved: number;
   errors: Record<string, number>;
 };
@@ -49,6 +50,26 @@ export function matchingReceipt(
   return row.type === "interactive" && sendPayload.text === row.payload.text;
 }
 
+/** A single accepted provider copy can release followups, but is not a delivery receipt. */
+export function matchingSentVideoCopy(
+  row: Pick<Row, "type" | "payload">,
+  message: Json,
+  attemptAt: number,
+): boolean {
+  const delivery = (row.payload.__funnel_delivery ?? {}) as Json;
+  const trackId = delivery.async_track_id;
+  const timestamp = Number(message.messageTimestamp);
+  const sendPayload = (message.sendPayload ?? {}) as Json;
+  return row.type === "video" && typeof trackId === "string" && !!trackId &&
+    typeof row.payload.media_url === "string" && !!row.payload.media_url &&
+    message.track_id === trackId && message.status === "Sent" &&
+    message.fromMe === true && String(message.id ?? "").length > 0 &&
+    Number.isFinite(timestamp) && timestamp >= attemptAt - 30_000 &&
+    timestamp <= attemptAt + 24 * 60 * 60_000 &&
+    String(message.messageType).toLowerCase().includes("video") &&
+    sendPayload.file === row.payload.media_url;
+}
+
 export function uniqueConfirmedReceipt(matches: Json[]):
   | { receipt: Json; error: null }
   | { receipt: null; error: "receipt_missing" | "receipt_ambiguous" } {
@@ -65,7 +86,7 @@ export async function reconcile5895Uncertain(
   db: DbClient = admin(),
   now = Date.now(),
 ): Promise<ReconcileSummary> {
-  const summary: ReconcileSummary = { checked: 0, reconciled: 0, unresolved: 0, errors: {} };
+  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, unresolved: 0, errors: {} };
   const { data, error } = await db.from("scheduled_messages")
     .select("id,conversation_id,funnel,step,type,status,payload")
     .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
@@ -118,6 +139,8 @@ export async function reconcile5895Uncertain(
     }
     try {
       const matches: Json[] = [];
+      const sentCopies = new Map<string, Json>();
+      let historyComplete = false;
       for (let offset = 0; offset <= 800; offset += 200) {
         const result = await instPost("/message/find", instance.token, {
           chatid: `${recipient}@s.whatsapp.net`, limit: 200, offset,
@@ -126,10 +149,65 @@ export async function reconcile5895Uncertain(
         const page = Array.isArray((result.data as Json).messages)
           ? (result.data as Json).messages as Json[] : [];
         matches.push(...page.filter((message) => matchingReceipt(row, message, attemptAt)));
-        if (page.length < 200) break;
+        for (const message of page) {
+          if (matchingSentVideoCopy(row, message, attemptAt)) {
+            sentCopies.set(String(message.id), message);
+          }
+        }
+        if (page.length < 200) {
+          historyComplete = true;
+          break;
+        }
       }
+      if (!historyComplete) throw new Error("provider_lookup_incomplete");
       const selected = uniqueConfirmedReceipt(matches);
       if (!selected.receipt) {
+        if (selected.error === "receipt_missing" &&
+          row.funnel === RESTORED_5895_FUNNEL && row.type === "video" &&
+          meta.transport_stage === "await_receipt" &&
+          attemptAt <= now - 10 * 60_000 && sentCopies.size === 1) {
+          if (!meta.followups_released_at) {
+            const copy = [...sentCopies.values()][0];
+            const { data: released, error: releaseError } = await db.from("scheduled_messages")
+              .update({ payload: {
+                ...row.payload,
+                __funnel_delivery: {
+                  ...meta,
+                  followups_released_at: new Date(now).toISOString(),
+                  provider_status: "Sent",
+                  provider_id: String(copy.id),
+                  provider_copies: 1,
+                },
+              } }).eq("id", row.id).eq("status", "failed")
+              .eq("payload->__funnel_delivery->>attempt_id", attemptId)
+              .is("payload->__funnel_delivery->>followups_released_at", null)
+              .select("id");
+            if (releaseError) throw releaseError;
+            if (released?.length !== 1) {
+              problem(summary, "attempt_changed");
+              continue;
+            }
+            const { error: eventError } = await db.from("events").insert({
+              source: "funil",
+              event_type: "video_followups_released_unconfirmed",
+              payload: {
+                conversation_id: row.conversation_id,
+                chatwoot_conversation_id: conversation.chatwoot_conversation_id,
+                scheduled_message_id: row.id,
+                step: row.step,
+                provider_status: "Sent",
+                provider_id: String(copy.id),
+                provider_copies: 1,
+                automated: true,
+              },
+            });
+            if (eventError) throw eventError;
+            summary.released_unconfirmed++;
+          }
+          continue;
+        }
+        if (selected.error === "receipt_missing" && meta.followups_released_at &&
+          row.funnel === RESTORED_5895_FUNNEL && row.type === "video") continue;
         problem(summary, selected.error);
         continue;
       }
@@ -177,8 +255,9 @@ export async function reconcile5895Uncertain(
       if (eventError) throw eventError;
       summary.reconciled++;
     } catch (error) {
-      problem(summary, error instanceof Error && error.message === "provider_lookup_failed"
-        ? "provider_lookup_failed" : "reconciliation_failed");
+      problem(summary, error instanceof Error &&
+          ["provider_lookup_failed", "provider_lookup_incomplete"].includes(error.message)
+        ? error.message : "reconciliation_failed");
     }
   }
   return summary;
@@ -190,7 +269,7 @@ export async function reconcile5895VideoNotice(
   notice: ConfirmedVideoNotice,
   db: DbClient = admin(),
 ): Promise<ReconcileSummary> {
-  const summary: ReconcileSummary = { checked: 0, reconciled: 0, unresolved: 0, errors: {} };
+  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, unresolved: 0, errors: {} };
   const { data: contacts, error: contactsError } = await db.from("contacts")
     .select("id,channel_id").eq("external_contact_id", notice.recipient).limit(20);
   if (contactsError) throw contactsError;

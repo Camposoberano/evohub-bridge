@@ -4,6 +4,7 @@ import { admin } from "../shared/supabase.ts";
 import { handle as funnelControl } from "./funil-control.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
 import { funnelLabel } from "../shared/funnel-identity.ts";
+import { allowsContinuationAfterUnconfirmedVideo } from "../shared/unconfirmed-video-continuation.ts";
 
 type Json = Record<string, unknown>;
 
@@ -51,7 +52,7 @@ export async function handle(req: Request): Promise<Response> {
       }
       const sequenceId = String(payload.__funnel_sequence_id ?? "");
       const { data: previousSteps, error: previousError } = await db
-        .from("scheduled_messages").select("id,status,step,payload")
+        .from("scheduled_messages").select("id,status,step,type,payload")
         .eq("conversation_id", failedRow.conversation_id)
         .eq("funnel", failedRow.funnel)
         .lt("step", Number(failedRow.step ?? 0))
@@ -64,7 +65,8 @@ export async function handle(req: Request): Promise<Response> {
         const sameSequence = !sequenceId ||
           previousPayload.__funnel_sequence_id === sequenceId;
         return sameSequence && item.status !== "sent" &&
-          item.status !== "cancelled";
+          item.status !== "cancelled" &&
+          !allowsContinuationAfterUnconfirmedVideo(item, failedRow.funnel);
       });
       if (previousUnsent) {
         return json({
@@ -207,6 +209,7 @@ export async function handle(req: Request): Promise<Response> {
         attempts: delivery.attempts ?? null,
         retryable: delivery.last_outcome === "rejected" &&
           Number(delivery.provider_status) === 429,
+        followups_released_at: delivery.followups_released_at ?? null,
       },
     });
   }

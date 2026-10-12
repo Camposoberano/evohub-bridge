@@ -72,7 +72,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     overdueQueue,
     recentContacts,
     adConversations,
-    unconfirmed5895Videos,
+    unconfirmed5895VideosResult,
   ] = await Promise.all([
     db.from("channels").select(
       "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
@@ -95,18 +95,25 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       "id,channel_id,opened_at,ad_id,creative_id,attribution",
     )
       .eq("origem", "anuncio").gte("opened_at", since24h).limit(3000),
-    exactCount(
-      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+    db.from("scheduled_messages")
+        .select("chatwoot_conversation_id", { count: "exact" })
         .eq("funnel", RESTORED_5895_FUNNEL).eq("type", "video")
         .eq("status", "failed")
         .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
         .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
-        .lte("payload->__funnel_delivery->>last_attempt_at", since5m),
-    ),
+        .lte("payload->__funnel_delivery->>last_attempt_at", since5m)
+        .limit(20),
   ]);
   if (channelsResult.error) throw channelsResult.error;
   if (recentContacts.error) throw recentContacts.error;
   if (adConversations.error) throw adConversations.error;
+  if (unconfirmed5895VideosResult.error) throw unconfirmed5895VideosResult.error;
+  const unconfirmed5895Videos = unconfirmed5895VideosResult.count ?? 0;
+  const unconfirmed5895Conversations = [...new Set(
+    ((unconfirmed5895VideosResult.data ?? []) as Json[])
+      .map((row) => Number(row.chatwoot_conversation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
 
   const channels = (channelsResult.data ?? []) as Json[];
   const contacts = (recentContacts.data ?? []) as Json[];
@@ -552,7 +559,9 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       key: "5895_video_receipt_overdue",
       severity: "critical",
       count: unconfirmed5895Videos,
-      detail: "vídeo sem confirmação de entrega há mais de 5 minutos",
+      detail: `vídeo sem confirmação de entrega há mais de 5 minutos; conversas: ${
+        unconfirmed5895Conversations.map((id) => `#${id}`).join(", ") || "não identificadas"
+      }`,
     },
     {
       key: "funnel_delivery_retries_1h",
