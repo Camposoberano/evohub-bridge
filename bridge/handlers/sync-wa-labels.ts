@@ -22,6 +22,7 @@ import {
   WA_PREFIX,
 } from "../shared/outcome-labels.ts";
 import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
+import { confirmNoPurchaseLabelsAbsent, ensureNoPurchaseLabels, reconcileNoPurchaseRemoval } from "../shared/commercial-outcome-labels.ts";
 
 type Chat = {
   wa_chatid?: string;
@@ -78,21 +79,33 @@ export async function handle(req: Request): Promise<Response> {
       );
       continue;
     }
+    const { data: blockedContacts, error: blockedError } = await db.from("contacts")
+      .select("external_contact_id").eq("channel_id", channelId)
+      .contains("attributes", { blocked: true });
+    if (blockedError) {
+      errors.push(`${inst.name}: ${blockedError.message}`);
+      continue;
+    }
+    const blockedPhones = new Set(
+      (blockedContacts ?? []).map((row: { external_contact_id: string }) =>
+        phoneOf(row.external_contact_id)
+      ),
+    );
 
     for (const chat of chats) {
       if (chat.wa_isGroup) continue;
       const ids = Array.isArray(chat.wa_label) ? chat.wa_label : [];
-      if (ids.length === 0) continue;
 
       const phone = phoneOf(chat.wa_chatid);
       if (!phone) continue;
+      if (ids.length === 0 && !blockedPhones.has(phone)) continue;
       scanned++;
 
       const names = ids
         .map((id) => labelName.get(id))
         .filter((n): n is string => Boolean(n))
         .map((n) => `${WA_PREFIX}${n.trim()}`);
-      if (names.length === 0) continue;
+      if (ids.length > 0 && names.length === 0) continue;
 
       const { data: contact } = await db.from("contacts")
         .select("id,attributes").eq("channel_id", channelId)
@@ -136,6 +149,26 @@ export async function handle(req: Request): Promise<Response> {
           errors.push(
             `${inst.name}/${phone}: stop ${e instanceof Error ? e.message : String(e)}`,
           );
+        }
+      }
+      if ((derived === "lost" ||
+        (contact.attributes as Record<string, unknown> | null)?.blocked_reason === "nao-compra") &&
+        !(contact.attributes as Record<string, unknown> | null)?.no_purchase_labels_confirmed_at) {
+        try {
+          const labels = await ensureNoPurchaseLabels(db, channelId, phone);
+          if (labels.errors.length) errors.push(`${inst.name}/${phone}: ${labels.errors.join("; ")}`);
+        } catch (e) {
+          errors.push(`${inst.name}/${phone}: labels ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      if (derived === null &&
+        (contact.attributes as Record<string, unknown> | null)?.blocked_reason === "nao-compra" &&
+        (contact.attributes as Record<string, unknown> | null)?.no_purchase_labels_confirmed_at) {
+        try {
+          const absent = await confirmNoPurchaseLabelsAbsent(db, String(contact.id));
+          await reconcileNoPurchaseRemoval(db, String(contact.id), String(row.id), next, absent);
+        } catch (e) {
+          errors.push(`${inst.name}/${phone}: unblock ${e instanceof Error ? e.message : String(e)}`);
         }
       }
       if (derived === "won" &&

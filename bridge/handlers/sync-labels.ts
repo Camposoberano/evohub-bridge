@@ -21,6 +21,7 @@ import {
   splitByOrigin,
 } from "../shared/outcome-labels.ts";
 import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
+import { confirmNoPurchaseLabelsAbsent, ensureNoPurchaseLabels, reconcileNoPurchaseRemoval } from "../shared/commercial-outcome-labels.ts";
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) {
@@ -81,7 +82,7 @@ export async function handle(req: Request): Promise<Response> {
 
       const derived = deriveOutcome(next);
       const manual = row.outcome_source === "dashboard";
-      if (derived && row.contact_id && row.channel_id) {
+      if ((derived || row.outcome === "lost") && row.contact_id && row.channel_id) {
         const { data: contact, error: contactError } = await db.from("contacts")
           .select("external_contact_id,attributes").eq("id", row.contact_id)
           .maybeSingle();
@@ -93,8 +94,22 @@ export async function handle(req: Request): Promise<Response> {
           try {
             if (derived === "won" && !contact.attributes?.automation_excluded) {
               await excludePaidContact(db, String(row.channel_id), String(contact.external_contact_id));
-            } else if (derived === "lost" && row.outcome !== "won" && !contact.attributes?.blocked) {
-              await stopContactAutomation(db, String(row.channel_id), String(contact.external_contact_id), "chatwoot-label");
+            } else if (derived === "lost" && row.outcome !== "won") {
+              if (!contact.attributes?.blocked) {
+                await stopContactAutomation(db, String(row.channel_id), String(contact.external_contact_id), "chatwoot-label");
+              }
+              if (!contact.attributes?.no_purchase_labels_confirmed_at) {
+                const labels = await ensureNoPurchaseLabels(db, String(row.channel_id), String(contact.external_contact_id));
+                if (labels.errors.length) errors.push(`conv ${cwId}: ${labels.errors.join("; ")}`);
+              }
+            } else if (derived === null && contact.attributes?.blocked_reason === "nao-compra") {
+              if (!contact.attributes?.no_purchase_labels_confirmed_at) {
+                const labels = await ensureNoPurchaseLabels(db, String(row.channel_id), String(contact.external_contact_id));
+                if (labels.errors.length) errors.push(`conv ${cwId}: ${labels.errors.join("; ")}`);
+              } else {
+                const absent = await confirmNoPurchaseLabelsAbsent(db, String(row.contact_id));
+                await reconcileNoPurchaseRemoval(db, String(row.contact_id), String(row.id), next, absent);
+              }
             }
           } catch (error) {
             errors.push(`conv ${cwId}: ${error instanceof Error ? error.message : String(error)}`);

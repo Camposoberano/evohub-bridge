@@ -39,6 +39,7 @@ import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
 import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
+import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import {
   funnelLabel,
   LEGACY_MAIN_FUNNEL,
@@ -321,6 +322,9 @@ export async function handle(req: Request): Promise<Response> {
     const result = await stopContactAutomation(
       db, String(conv.channel_id), String(contact.external_contact_id), "manual",
     );
+    const labels = await ensureNoPurchaseLabels(
+      db, String(conv.channel_id), String(contact.external_contact_id),
+    );
     await nota(
       cwConvId,
       `🚫 *Marcado como NÃO COMPRA* — ${result.scheduled} peças do funil e ${result.campaigns} disparos pendentes excluídos.`,
@@ -331,6 +335,7 @@ export async function handle(req: Request): Promise<Response> {
       action: "marcar-nao-compra",
       cancelled: result.scheduled,
       campaigns: result.campaigns,
+      label_errors: labels.errors,
     });
   }
 
