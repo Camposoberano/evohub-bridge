@@ -73,6 +73,7 @@ import {
   persistFunnelDeliveryState,
   providerDiagnostic,
   recordFunnelDeliveryEvent,
+  withConfirmedVideoReceipt,
 } from "../shared/funnel-delivery.ts";
 
 type Json = Record<string, unknown>;
@@ -1242,6 +1243,10 @@ export async function handle(req: Request): Promise<Response> {
 
     if (res.ok) {
       const sentAt = new Date().toISOString();
+      if (asyncVideoReceipt && deliveryState) {
+        const route = "via" in res ? String(res.via) : undefined;
+        deliveryState = withConfirmedVideoReceipt(deliveryState, route, d);
+      }
       await writeDeliveryOutcome("sent", "sent");
       await advanceFunnelSequence(sentAt);
       await confirmRecoveryIfComplete();
