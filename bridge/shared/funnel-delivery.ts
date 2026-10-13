@@ -22,7 +22,10 @@ export type FunnelDeliveryMetadata = {
   last_attempt_at?: string;
   last_outcome?: FunnelDeliveryOutcome;
   retry_at?: string;
-  provider_status?: number;
+  provider_status?: number | string;
+  provider_id?: string;
+  provider_copies?: number;
+  confirmed_from?: string;
   provider_code?: string | number;
   transport_stage?: string;
   transport_elapsed_ms?: number;
@@ -74,8 +77,21 @@ export function deliveryMetadata(payload: unknown): FunnelDeliveryMetadata {
       ? meta.last_outcome as FunnelDeliveryOutcome
       : undefined,
     retry_at: typeof meta.retry_at === "string" ? meta.retry_at : undefined,
-    provider_status: Number.isFinite(Number(meta.provider_status))
-      ? Number(meta.provider_status)
+    provider_status: typeof meta.provider_status === "string"
+      ? meta.provider_status
+      : typeof meta.provider_status === "number" &&
+          Number.isFinite(meta.provider_status)
+      ? meta.provider_status
+      : undefined,
+    provider_id: typeof meta.provider_id === "string"
+      ? meta.provider_id
+      : undefined,
+    provider_copies: typeof meta.provider_copies === "number" &&
+        Number.isFinite(meta.provider_copies)
+      ? meta.provider_copies
+      : undefined,
+    confirmed_from: typeof meta.confirmed_from === "string"
+      ? meta.confirmed_from
       : undefined,
     provider_code: typeof meta.provider_code === "string" ||
         typeof meta.provider_code === "number"
@@ -87,6 +103,28 @@ export function deliveryMetadata(payload: unknown): FunnelDeliveryMetadata {
     transport_elapsed_ms: Number.isFinite(Number(meta.transport_elapsed_ms))
       ? Number(meta.transport_elapsed_ms)
       : undefined,
+  };
+}
+
+/** Preserve the unique Uazapi receipt obtained before a scheduled video is marked sent. */
+export function withConfirmedVideoReceipt(
+  metadata: FunnelDeliveryMetadata,
+  via: string | undefined,
+  responseData: unknown,
+): FunnelDeliveryMetadata {
+  if (via !== "uazapi" || !responseData || typeof responseData !== "object") {
+    return metadata;
+  }
+  const data = responseData as Json;
+  const status = String(data.provider_status ?? "");
+  const id = typeof data.message_id === "string" ? data.message_id : "";
+  if (!id || !["Delivered", "Read", "Played"].includes(status)) return metadata;
+  return {
+    ...metadata,
+    provider_id: id,
+    provider_status: status,
+    provider_copies: 1,
+    confirmed_from: "uazapi_message_history",
   };
 }
 
