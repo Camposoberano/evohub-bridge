@@ -26,6 +26,23 @@ Deno.test("normaliza referencia de anuncio da Meta e provedores hibridos", () =>
   assertEquals(result.creative_id, "creative-9");
 });
 
+Deno.test("normaliza chaves reais do externalAdReply da UAZAPI", () => {
+  const result = normalizeLeadAttribution({
+    source_type: "ad",
+    externalAdReply: {
+      sourceID: "ad-5895",
+      sourceURL: "https://example.test/ad-5895",
+      title: "Mega Sorgo",
+      body: "Mensagem do criativo",
+    },
+  });
+  assertEquals(result.ad_id, "ad-5895");
+  assertEquals(result.ad_name, "Mega Sorgo");
+  assertEquals(result.source_url, "https://example.test/ad-5895");
+  assertEquals(result.creative_name, "Mensagem do criativo");
+  assertEquals(result.source_type, "ad");
+});
+
 Deno.test("preserva primeira origem e atualiza ultima atribuicao", () => {
   const channel = {
     id: "channel-1",
