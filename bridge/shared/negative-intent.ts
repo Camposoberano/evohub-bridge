@@ -10,5 +10,6 @@ export function isNegativeIntent(value: string | null | undefined): boolean {
   const text = normalize(String(value ?? ""));
   if (!text) return false;
   return /^(?:nao tenho interesse|sem interesse|nao quero(?: mais)?|pode parar|pare de (?:mandar|enviar)|sair da lista|remover da lista|nao compra)$/.test(text) ||
+    /^(?:no momento )?nao (?:irei|vou|quero) (?:adquirir|comprar)(?: agora| no momento)?(?: obrigado)?$/.test(text) ||
     /\b(?:pare de|parar de) (?:mandar|enviar)\b/.test(text);
 }

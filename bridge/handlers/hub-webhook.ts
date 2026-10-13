@@ -43,6 +43,7 @@ import {
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
+import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isComprovanteMsgType,
@@ -394,6 +395,8 @@ async function handleWhatsApp(db: Db, p: Json) {
               from,
               "explicit-reply",
             );
+            const labels = await ensureNoPurchaseLabels(db, String(channel.id), from);
+            if (labels.errors.length) console.warn("hub: etiquetas de recusa pendentes", labels.errors);
             console.log(
               "hub: contato bloqueado por desinteresse",
               JSON.stringify(result),

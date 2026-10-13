@@ -12,6 +12,7 @@ import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
+import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
   isLogisticaIntent,
@@ -274,6 +275,8 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
             "explicit-reply",
           );
+          const labels = await ensureNoPurchaseLabels(db, String(channel.id), msg.from);
+          if (labels.errors.length) console.warn("uazapi: etiquetas de recusa pendentes", labels.errors);
           console.log(
             "uazapi: contato bloqueado por desinteresse",
             JSON.stringify(result),

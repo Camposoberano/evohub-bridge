@@ -20,6 +20,8 @@ import {
   sameLabels,
   splitByOrigin,
 } from "../shared/outcome-labels.ts";
+import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
+import { confirmNoPurchaseLabelsAbsent, ensureNoPurchaseLabels, reconcileNoPurchaseRemoval } from "../shared/commercial-outcome-labels.ts";
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) {
@@ -59,7 +61,7 @@ export async function handle(req: Request): Promise<Response> {
       scanned++;
 
       const { data: row, error: selErr } = await db.from("conversations")
-        .select("id,labels,outcome,outcome_source")
+        .select("id,channel_id,contact_id,labels,outcome,outcome_source")
         .eq("chatwoot_conversation_id", cwId)
         .maybeSingle();
       if (selErr) {
@@ -80,6 +82,41 @@ export async function handle(req: Request): Promise<Response> {
 
       const derived = deriveOutcome(next);
       const manual = row.outcome_source === "dashboard";
+      if ((derived || row.outcome === "lost") && row.contact_id && row.channel_id) {
+        const { data: contact, error: contactError } = await db.from("contacts")
+          .select("external_contact_id,attributes").eq("id", row.contact_id)
+          .maybeSingle();
+        if (contactError) {
+          errors.push(`conv ${cwId}: ${contactError.message}`);
+          continue;
+        }
+        if (contact?.external_contact_id) {
+          try {
+            if (derived === "won" && !contact.attributes?.automation_excluded) {
+              await excludePaidContact(db, String(row.channel_id), String(contact.external_contact_id));
+            } else if (derived === "lost" && row.outcome !== "won") {
+              if (!contact.attributes?.blocked) {
+                await stopContactAutomation(db, String(row.channel_id), String(contact.external_contact_id), "chatwoot-label");
+              }
+              if (!contact.attributes?.no_purchase_labels_confirmed_at) {
+                const labels = await ensureNoPurchaseLabels(db, String(row.channel_id), String(contact.external_contact_id));
+                if (labels.errors.length) errors.push(`conv ${cwId}: ${labels.errors.join("; ")}`);
+              }
+            } else if (derived === null && contact.attributes?.blocked_reason === "nao-compra") {
+              if (!contact.attributes?.no_purchase_labels_confirmed_at) {
+                const labels = await ensureNoPurchaseLabels(db, String(row.channel_id), String(contact.external_contact_id));
+                if (labels.errors.length) errors.push(`conv ${cwId}: ${labels.errors.join("; ")}`);
+              } else {
+                const absent = await confirmNoPurchaseLabelsAbsent(db, String(row.contact_id));
+                await reconcileNoPurchaseRemoval(db, String(row.contact_id), String(row.id), next, absent);
+              }
+            }
+          } catch (error) {
+            errors.push(`conv ${cwId}: ${error instanceof Error ? error.message : String(error)}`);
+            continue;
+          }
+        }
+      }
       if (derived && !manual && row.outcome !== derived) {
         patch.outcome = derived;
         patch.outcome_source = "chatwoot-label";
