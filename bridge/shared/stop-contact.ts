@@ -11,16 +11,17 @@ export async function stopContactAutomation(
   db: DbClient,
   channelId: string,
   externalContactId: string,
-  reason: "explicit-reply" | "whatsapp-label",
+  reason: "explicit-reply" | "whatsapp-label" | "chatwoot-label" | "manual",
 ): Promise<{ conversations: number; scheduled: number; campaigns: number }> {
   const phone = digits(externalContactId);
-  const { data: contact } = await db.from("contacts").select("id,attributes")
+  const { data: contact, error: contactError } = await db.from("contacts").select("id,attributes")
     .eq("channel_id", channelId).eq("external_contact_id", externalContactId)
     .maybeSingle();
+  if (contactError) throw contactError;
   if (!contact) return { conversations: 0, scheduled: 0, campaigns: 0 };
 
   const attrs = (contact.attributes ?? {}) as Json;
-  await db.from("contacts").update({
+  const { error: blockError } = await db.from("contacts").update({
     attributes: {
       ...attrs,
       blocked: true,
@@ -28,40 +29,46 @@ export async function stopContactAutomation(
       blocked_at: new Date().toISOString(),
     },
   }).eq("id", contact.id);
+  if (blockError) throw blockError;
 
-  const { data: conversations } = await db.from("conversations")
+  const { data: conversations, error: conversationsError } = await db.from("conversations")
     .select("id,outcome,outcome_source")
     .eq("contact_id", contact.id);
+  if (conversationsError) throw conversationsError;
   const ids = ((conversations ?? []) as Json[]).map((row) => String(row.id));
   let scheduled = 0;
   for (const conversationId of ids) {
-    const { count } = await db.from("scheduled_messages").update({
+    const { count, error: scheduledError } = await db.from("scheduled_messages").update({
       status: "cancelled",
     }).eq("conversation_id", conversationId).in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
+    if (scheduledError) throw scheduledError;
     scheduled += count ?? 0;
-    await db.from("sales_sequences").update({ status: "cancelled" })
+    const { error: sequenceError } = await db.from("sales_sequences").update({ status: "cancelled" })
       .eq("conversation_id", conversationId).in("status", ["running", "paused"]);
-    await db.from("conversations").update({
+    if (sequenceError) throw sequenceError;
+    const { error: outcomeError } = await db.from("conversations").update({
       outcome: "lost",
       outcome_source: reason,
       outcome_set_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq("id", conversationId).neq("outcome", "won");
+    if (outcomeError) throw outcomeError;
   }
 
   let campaigns = 0;
   if (phone) {
-    const { count } = await publicTable(db, "campaign_queue").update({
+    const { count, error: campaignError } = await publicTable(db, "campaign_queue").update({
       status: "skipped",
       last_error: "contato marcou não compra",
       updated_at: new Date().toISOString(),
     }).eq("contact_key", phone).in("status", ["pending", "paused", "processing"])
       .select("id", { count: "exact", head: true });
+    if (campaignError) throw campaignError;
     campaigns = count ?? 0;
   }
 
-  await db.from("events").insert({
+  const { error: eventError } = await db.from("events").insert({
     source: "funil",
     event_type: "contact_blocked_no_interest",
     channel_id: channelId,
@@ -74,6 +81,7 @@ export async function stopContactAutomation(
       campaigns,
     },
   });
+  if (eventError) throw eventError;
   return { conversations: ids.length, scheduled, campaigns };
 }
 
@@ -84,13 +92,14 @@ export async function excludePaidContact(
   externalContactId: string,
 ): Promise<{ conversations: number; scheduled: number; campaigns: number }> {
   const phone = digits(externalContactId);
-  const { data: contact } = await db.from("contacts").select("id,attributes")
+  const { data: contact, error: contactError } = await db.from("contacts").select("id,attributes")
     .eq("channel_id", channelId).eq("external_contact_id", externalContactId)
     .maybeSingle();
+  if (contactError) throw contactError;
   if (!contact) return { conversations: 0, scheduled: 0, campaigns: 0 };
 
   const attrs = (contact.attributes ?? {}) as Json;
-  await db.from("contacts").update({
+  const { error: excludeError } = await db.from("contacts").update({
     attributes: {
       ...attrs,
       automation_excluded: true,
@@ -98,33 +107,38 @@ export async function excludePaidContact(
       automation_excluded_at: new Date().toISOString(),
     },
   }).eq("id", contact.id);
+  if (excludeError) throw excludeError;
 
-  const { data: conversations } = await db.from("conversations")
+  const { data: conversations, error: conversationsError } = await db.from("conversations")
     .select("id").eq("contact_id", contact.id);
+  if (conversationsError) throw conversationsError;
   const ids = ((conversations ?? []) as Json[]).map((row) => String(row.id));
   let scheduled = 0;
   for (const conversationId of ids) {
-    const { count } = await db.from("scheduled_messages").update({
+    const { count, error: scheduledError } = await db.from("scheduled_messages").update({
       status: "cancelled",
     }).eq("conversation_id", conversationId).in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
+    if (scheduledError) throw scheduledError;
     scheduled += count ?? 0;
-    await db.from("sales_sequences").update({ status: "cancelled" })
+    const { error: sequenceError } = await db.from("sales_sequences").update({ status: "cancelled" })
       .eq("conversation_id", conversationId).in("status", ["running", "paused"]);
+    if (sequenceError) throw sequenceError;
   }
 
   let campaigns = 0;
   if (phone) {
-    const { count } = await publicTable(db, "campaign_queue").update({
+    const { count, error: campaignError } = await publicTable(db, "campaign_queue").update({
       status: "skipped",
       last_error: "contato já pago; campanha normal excluída",
       updated_at: new Date().toISOString(),
     }).eq("contact_key", phone).in("status", ["pending", "paused", "processing"])
       .select("id", { count: "exact", head: true });
+    if (campaignError) throw campaignError;
     campaigns = count ?? 0;
   }
 
-  await db.from("events").insert({
+  const { error: eventError } = await db.from("events").insert({
     source: "funil",
     event_type: "contact_excluded_paid",
     channel_id: channelId,
@@ -136,5 +150,6 @@ export async function excludePaidContact(
       campaigns,
     },
   });
+  if (eventError) throw eventError;
   return { conversations: ids.length, scheduled, campaigns };
 }

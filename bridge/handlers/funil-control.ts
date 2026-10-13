@@ -38,7 +38,7 @@ import {
 import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
-import { blockContact } from "../shared/lead-block.ts";
+import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
 import {
   funnelLabel,
   LEGACY_MAIN_FUNNEL,
@@ -290,59 +290,47 @@ export async function handle(req: Request): Promise<Response> {
   // server.ts, startOutcomeLabelLoop -- diferente do poll de cmd-* que remove a etiqueta
   // depois de rodar). Cícero marca a etiqueta e ela fica visível como status permanente.
   if (action === "marcar-pago") {
-    const { count: cancelled } = await db.from("scheduled_messages").update({
-      status: "cancelled",
-    })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .in("status", ["pending", "paused"])
-      .select("id", { count: "exact", head: true });
-    await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .in("status", ["running", "paused"]);
-    await db.from("conversations").update({
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("external_contact_id").eq("id", conv.contact_id).maybeSingle();
+    if (contactError || !contact?.external_contact_id) {
+      return json({ error: "contato indisponível para excluir dos disparos" }, 500);
+    }
+    const { error: outcomeError } = await db.from("conversations").update({
       outcome: "won",
       outcome_source: "label",
       outcome_set_at: new Date().toISOString(),
     }).eq("id", conv.id);
+    if (outcomeError) throw outcomeError;
+    const result = await excludePaidContact(
+      db, String(conv.channel_id), String(contact.external_contact_id),
+    );
     await nota(
       cwConvId,
-      `✅ *Marcado como PAGO* — funil encerrado (${
-        cancelled ?? 0
-      } mensagens removidas da fila).`,
+      `✅ *Marcado como PAGO* — ${result.scheduled} peças do funil e ${result.campaigns} disparos pendentes excluídos.`,
       acct,
     );
-    return json({ ok: true, action: "marcar-pago", cancelled: cancelled ?? 0 });
+    return json({ ok: true, action: "marcar-pago", cancelled: result.scheduled, campaigns: result.campaigns });
   }
 
   if (action === "marcar-nao-compra") {
-    const { count: cancelled } = await db.from("scheduled_messages").update({
-      status: "cancelled",
-    })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .in("status", ["pending", "paused"])
-      .select("id", { count: "exact", head: true });
-    await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .in("status", ["running", "paused"]);
-    await db.from("conversations").update({
-      outcome: "lost",
-      outcome_source: "label",
-      outcome_set_at: new Date().toISOString(),
-    }).eq("id", conv.id);
-    if (conv.contact_id) {
-      await blockContact(db, conv.contact_id as string, "nao-compra");
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("external_contact_id").eq("id", conv.contact_id).maybeSingle();
+    if (contactError || !contact?.external_contact_id) {
+      return json({ error: "contato indisponível para excluir dos disparos" }, 500);
     }
+    const result = await stopContactAutomation(
+      db, String(conv.channel_id), String(contact.external_contact_id), "manual",
+    );
     await nota(
       cwConvId,
-      `🚫 *Marcado como NÃO COMPRA* — funil encerrado (${
-        cancelled ?? 0
-      } mensagens removidas da fila) e contato bloqueado pra futuros funis.`,
+      `🚫 *Marcado como NÃO COMPRA* — ${result.scheduled} peças do funil e ${result.campaigns} disparos pendentes excluídos.`,
       acct,
     );
     return json({
       ok: true,
       action: "marcar-nao-compra",
-      cancelled: cancelled ?? 0,
+      cancelled: result.scheduled,
+      campaigns: result.campaigns,
     });
   }
 
