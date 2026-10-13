@@ -293,18 +293,25 @@ export async function resumoDaFila(
   db: DbClient,
   campaignId: string,
 ): Promise<ResumoFila> {
-  const { data, error } = await publicTable(db, "campaign_queue")
-    .select("status")
-    .eq("campaign_id", campaignId)
-    .limit(10_000);
-  if (error) throw error;
-  const linhas = (data ?? []) as Json[];
-  const conta = (s: string) => linhas.filter((r) => r.status === s).length;
+  // PostgREST limita cada resposta a 1.000 linhas neste projeto, mesmo com
+  // `.limit(10_000)`. Contar no servidor evita truncar campanhas maiores.
+  const conta = async (status: string): Promise<number> => {
+    const { count, error } = await publicTable(db, "campaign_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .eq("status", status);
+    if (error) throw error;
+    return count ?? 0;
+  };
+  const [pendentes, pausados, enviados, falhas, pulados] = await Promise.all([
+    conta("pending"), conta("paused"), conta("sent"), conta("failed"),
+    conta("skipped"),
+  ]);
   return {
-    pendentes: conta("pending"),
-    pausados: conta("paused"),
-    enviados: conta("sent"),
-    falhas: conta("failed"),
-    pulados: conta("skipped"),
+    pendentes,
+    pausados,
+    enviados,
+    falhas,
+    pulados,
   };
 }

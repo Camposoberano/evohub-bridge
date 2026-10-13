@@ -255,7 +255,8 @@ async function ingestInboundClaimed(
 
   let conv = openConv as Json | null;
   const previouslyMarkedAsAd = conv?.origem === "anuncio";
-  const source = sourceSnapshot(channel, msg.from, msg.referral);
+  const effectiveReferral = msg.referral ?? (openConv?.referral as Json | null) ?? null;
+  const source = sourceSnapshot(channel, msg.from, effectiveReferral);
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
     const cwConv = skip
@@ -275,12 +276,26 @@ async function ingestInboundClaimed(
     if (convInsertError) throw convInsertError;
     conv = insertedConv as Json;
   } else {
-    const sourceUpdate = {
+    const sourceUpdate: Json = {
       ...source,
       origem: msg.referral ? "anuncio" : conv.origem,
       referral: msg.referral ?? conv.referral ?? null,
     };
-    await db.from("conversations").update(sourceUpdate).eq("id", conv.id);
+    if (!effectiveReferral) {
+      for (const key of [
+        "ad_id", "ad_name", "campaign_id", "campaign_name", "creative_id",
+        "creative_name", "source_url", "ctwa_clid",
+      ]) {
+        if (sourceUpdate[key] == null && conv[key] != null) delete sourceUpdate[key];
+      }
+      if (!Object.keys(sourceUpdate.attribution as Json).length &&
+        Object.keys((conv.attribution ?? {}) as Json).length) {
+        delete sourceUpdate.attribution;
+      }
+    }
+    const { error: sourceUpdateError } = await db.from("conversations")
+      .update(sourceUpdate).eq("id", conv.id);
+    if (sourceUpdateError) throw sourceUpdateError;
     conv = { ...conv, ...sourceUpdate };
   }
 
