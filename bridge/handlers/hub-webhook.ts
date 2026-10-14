@@ -430,6 +430,7 @@ async function handleWhatsApp(db: Db, p: Json) {
               channel as Json,
               from,
               menuClick?.id ?? null,
+              content,
             )
           ) continue;
         } catch (e) {
