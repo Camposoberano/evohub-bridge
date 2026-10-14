@@ -347,6 +347,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
               channel as Json,
               msg.from,
               msg.menuClickId ?? null,
+              msg.content,
             )
           ) continue;
         } catch (e) {

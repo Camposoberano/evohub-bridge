@@ -13,6 +13,7 @@ import {
   runFlow,
 } from "./flow-runner.ts";
 import { stepById } from "./flow.ts";
+import { resolveEmbrapaOfferReply } from "./embrapa-offer-reply.ts";
 import { gravadorDeFluxo } from "./flow-record.ts";
 import {
   claimFlowStep,
@@ -201,6 +202,7 @@ export async function continueFlowOnReply(
   channel: Json,
   from: string,
   replyId: string | null,
+  text?: string | null,
 ): Promise<boolean> {
   let estado;
   try {
@@ -221,6 +223,18 @@ export async function continueFlowOnReply(
     });
     return false;
   }
+
+  const embrapaReply = resolveEmbrapaOfferReply({
+    campaignId: camp.id,
+    stepId: estado.step_id,
+    replyId,
+    text,
+  });
+  if (embrapaReply === null) {
+    // Pergunta, dúvida ou texto não inequívoco: preserva a espera e não libera PDF.
+    return false;
+  }
+  const branchReplyId = embrapaReply === undefined ? replyId : embrapaReply;
 
   // Reserva o passo antes de enviar qualquer coisa. Gravar o estado antes não bastava:
   // evitava o clique repetido com segundos de intervalo, mas não dois eventos simultâneos —
@@ -250,7 +264,7 @@ export async function continueFlowOnReply(
       ch,
       from,
       passo,
-      replyId,
+      branchReplyId,
       Date.now(),
       gravadorDeFluxo(db, channel, from),
     );
