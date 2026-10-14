@@ -106,7 +106,7 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { flowChannelFor, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   campanhasComFila,
@@ -1389,7 +1389,7 @@ function startCampaignQueueLoop() {
         const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
         const decisao = podeEnviarAgora({
           cfg,
-          inicioCampanha: Date.parse(camp.createdAt),
+          inicioCampanha: Date.parse(camp.paceStartAt ?? camp.createdAt),
           enviadosHoje: await enviadosHoje(db, campaignId),
           ultimoEnvioAt: await ultimoEnvioAt(db, campaignId),
           now: Date.now(),
@@ -1513,7 +1513,7 @@ function startCampaignQueueLoop() {
           const checkedAt = Date.now();
           const decisaoAtual = podeEnviarAgora({
             cfg,
-            inicioCampanha: Date.parse(camp.createdAt),
+            inicioCampanha: Date.parse(camp.paceStartAt ?? camp.createdAt),
             enviadosHoje: enviadosRecentes,
             ultimoEnvioAt: ultimoEnvioRecente,
             now: checkedAt,
@@ -1666,6 +1666,28 @@ function startFlowTimeoutLoop() {
   console.log("flow-timeout loop ON (2min)");
 }
 
+// Pedidos "Quero" recebidos fora do expediente: um PDF por minuto, somente 08h–20h.
+function startDeferredEmbrapaPdfLoop() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await pumpDeferredEmbrapaPdf(admin());
+      if (result.sent || result.blocked || result.failed) {
+        console.log("embrapa-pdf-deferred:", JSON.stringify(result));
+      }
+    } catch (error) {
+      console.error("embrapa-pdf-deferred loop erro:", error);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, 30_000);
+  setInterval(tick, 60_000);
+  console.log("embrapa-pdf-deferred loop ON (1min, 08h–20h BRT)");
+}
+
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
@@ -1780,6 +1802,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
+  startDeferredEmbrapaPdfLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
   startUazapiCatchupLoop();

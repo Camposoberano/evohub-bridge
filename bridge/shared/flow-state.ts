@@ -13,7 +13,7 @@ export type FlowStateRow = {
   channel_id: string | null;
   step_id: string | null;
   waiting_since: string | null;
-  status: "waiting" | "done";
+  status: "waiting" | "processing" | "deferred" | "done" | "failed";
 };
 
 /** Número só com dígitos — mesma normalização de campaigns.numKey. */
@@ -71,6 +71,104 @@ export async function claimFlowStep(
     .select("campaign_id");
   if (error) throw error;
   return Array.isArray(data) && data.length > 0;
+}
+
+/** Guarda um "Quero" já reservado para envio na próxima janela. */
+export async function deferFlowStep(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+  stepId: string,
+  channelId: string,
+): Promise<void> {
+  const { data, error } = await publicTable(db, "campaign_flow_state")
+    .update({ status: "deferred", channel_id: channelId, updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("contact_key", contactKey(contact))
+    .eq("step_id", stepId)
+    .eq("status", "processing")
+    .select("campaign_id");
+  if (error) throw error;
+  if (!data?.length) throw new Error("reserva do PDF não encontrada");
+}
+
+export async function findDeferredFlows(
+  db: DbClient,
+  campaignId: string,
+  limit = 50,
+): Promise<FlowStateRow[]> {
+  const { data, error } = await publicTable(db, "campaign_flow_state")
+    .select("campaign_id,contact_key,conversation_id,channel_id,step_id,waiting_since,status")
+    .eq("campaign_id", campaignId)
+    .eq("status", "deferred")
+    .order("updated_at", { ascending: true })
+    .limit(limit);
+  if (error) throw error;
+  return (data ?? []) as FlowStateRow[];
+}
+
+/** Reserva exclusiva entre réplicas; um PDF aceito pelo provedor nunca é repetido. */
+export async function claimDeferredFlow(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+  stepId: string,
+): Promise<boolean> {
+  const { data, error } = await publicTable(db, "campaign_flow_state")
+    .update({ status: "processing", updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("contact_key", contactKey(contact))
+    .eq("step_id", stepId)
+    .eq("status", "deferred")
+    .select("campaign_id");
+  if (error) throw error;
+  return Boolean(data?.length);
+}
+
+export async function setClaimedFlowStatus(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+  stepId: string,
+  status: "deferred" | "done" | "failed",
+): Promise<void> {
+  const { error } = await publicTable(db, "campaign_flow_state")
+    .update({ status, step_id: status === "done" ? null : stepId, updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("contact_key", contactKey(contact))
+    .eq("step_id", stepId)
+    .eq("status", "processing");
+  if (error) throw error;
+}
+
+export async function findDeferredFlowForContact(
+  db: DbClient,
+  contact: string,
+): Promise<FlowStateRow | null> {
+  const { data, error } = await publicTable(db, "campaign_flow_state")
+    .select("campaign_id,contact_key,conversation_id,channel_id,step_id,waiting_since,status")
+    .eq("contact_key", contactKey(contact))
+    .eq("status", "deferred")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data as FlowStateRow | null) ?? null;
+}
+
+export async function cancelDeferredFlow(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+  stepId: string,
+): Promise<void> {
+  const { error } = await publicTable(db, "campaign_flow_state")
+    .update({ status: "done", step_id: null, updated_at: new Date().toISOString() })
+    .eq("campaign_id", campaignId)
+    .eq("contact_key", contactKey(contact))
+    .eq("step_id", stepId)
+    .eq("status", "deferred");
+  if (error) throw error;
 }
 
 /**
