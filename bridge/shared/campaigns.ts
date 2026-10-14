@@ -36,6 +36,8 @@ export type Campaign = {
    * e envia na hora, que é o caminho de teste.
    */
   pace?: Partial<PaceConfig>;
+  /** Início da rampa de envio; preserva createdAt como data de criação/auditoria. */
+  paceStartAt?: string;
 };
 export type Target = { campaignId: string; status: "awaiting" | "active" | "done"; step: number; ts: string };
 export type CampaignState = { campaigns: Campaign[]; targets: Record<string, Target> };

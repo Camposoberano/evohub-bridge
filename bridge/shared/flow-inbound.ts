@@ -5,6 +5,9 @@
 // oficial, campanha híbrida ficava muda depois que o lead respondia.
 import type { DbClient } from "./supabase.ts";
 import { readCampaigns } from "./campaigns.ts";
+import { dentroDaJanela, PACE_PADRAO } from "./campaign-pace.ts";
+import { EMBRAPA_5895_CAMPAIGN_ID, shouldDeferEmbrapaPdf } from "./embrapa-offer-reply.ts";
+import { isBotMutedForContact } from "./bot-mute.ts";
 import { getHybridRoute } from "./hybrid.ts";
 import {
   advanceFlow,
@@ -16,10 +19,16 @@ import { stepById } from "./flow.ts";
 import { resolveEmbrapaOfferReply } from "./embrapa-offer-reply.ts";
 import { gravadorDeFluxo } from "./flow-record.ts";
 import {
+  cancelDeferredFlow,
+  claimDeferredFlow,
   claimFlowStep,
+  deferFlowStep,
+  findDeferredFlowForContact,
+  findDeferredFlows,
   findExpiredWaits,
   findWaitingFlow,
   saveFlowPosition,
+  setClaimedFlowStatus,
 } from "./flow-state.ts";
 import {
   type Bloqueio,
@@ -211,7 +220,23 @@ export async function continueFlowOnReply(
     console.error("flow-inbound: consulta de estado falhou:", e);
     return false;
   }
-  if (!estado?.step_id) return false;
+  if (!estado?.step_id) {
+    // Um segundo "Quero" não abre outro envio. Uma recusa posterior cancela o PDF
+    // ainda aguardando a janela, antes da reserva exclusiva pelo worker.
+    const deferred = await findDeferredFlowForContact(db, from);
+    if (deferred?.campaign_id !== EMBRAPA_5895_CAMPAIGN_ID || !deferred.step_id) return false;
+    const choice = resolveEmbrapaOfferReply({
+      campaignId: deferred.campaign_id,
+      stepId: deferred.step_id,
+      replyId,
+      text,
+    });
+    if (choice === "nao") {
+      await cancelDeferredFlow(db, deferred.campaign_id, from, deferred.step_id);
+      return true;
+    }
+    return choice === "quero";
+  }
 
   const state = await readCampaigns();
   const camp = state.campaigns.find((c) => c.id === estado.campaign_id);
@@ -258,7 +283,34 @@ export async function continueFlowOnReply(
     channelId: String(channel.id),
   };
   try {
+    if (camp.id === EMBRAPA_5895_CAMPAIGN_ID && branchReplyId === "quero") {
+      const [blocked, muted] = await Promise.all([
+        bloqueioPorContato(db, String(channel.id), from),
+        isBotMutedForContact(db, String(channel.id), from),
+      ]);
+      if (blocked || muted) {
+        await saveFlowPosition(db, camp.id, from, { stepId: null, done: true }, extra);
+        console.log("flow: PDF Embrapa bloqueado", from.slice(-4), blocked ?? "bot-off");
+        return true;
+      }
+    }
+    if (shouldDeferEmbrapaPdf({
+      campaignId: camp.id, stepId: passo, branchReplyId,
+      pace: camp.pace, now: Date.now(),
+    })) {
+      await deferFlowStep(db, camp.id, from, passo, String(channel.id));
+      console.log("flow: PDF Embrapa aguardando janela", from.slice(-4));
+      return true;
+    }
     const ch = await flowChannelFor(db, channel);
+    // A consulta de rota pode atravessar as 20h; a última checagem vem antes do envio.
+    if (shouldDeferEmbrapaPdf({
+      campaignId: camp.id, stepId: passo, branchReplyId,
+      pace: camp.pace, now: Date.now(),
+    })) {
+      await deferFlowStep(db, camp.id, from, passo, String(channel.id));
+      return true;
+    }
     const r = await advanceFlow(
       camp.flow,
       ch,
@@ -288,4 +340,80 @@ export async function continueFlowOnReply(
     throw e;
   }
   return true;
+}
+
+/** Retoma pedidos de PDF feitos fora das 08h–20h, sem repetir envios após falha incerta. */
+export async function pumpDeferredEmbrapaPdf(
+  db: DbClient,
+  now = Date.now(),
+): Promise<{ pending: number; sent: number; blocked: number; failed: number }> {
+  const result = { pending: 0, sent: 0, blocked: 0, failed: 0 };
+  const state = await readCampaigns();
+  const camp = state.campaigns.find((c) => c.id === EMBRAPA_5895_CAMPAIGN_ID);
+  if (!camp?.flow) return result;
+  const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
+  if (!dentroDaJanela(cfg, now)) return result;
+  // Um pedido por minuto; uma manhã com várias respostas noturnas não vira rajada.
+  const pending = await findDeferredFlows(db, camp.id, 1);
+  result.pending = pending.length;
+  for (const p of pending) {
+    if (!p.step_id) continue;
+    if (!dentroDaJanela(cfg, Date.now())) break;
+    if (!await claimDeferredFlow(db, camp.id, p.contact_key, p.step_id)) continue;
+    let sending = false;
+    try {
+      if (!p.channel_id) {
+        await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "failed");
+        result.failed++;
+        continue;
+      }
+      const { data: canal, error } = await db.from("channels")
+        .select("id,type,name,phone_number,phone_number_id,chatwoot_inbox_id,chatwoot_inbox_identifier")
+        .eq("id", p.channel_id).maybeSingle();
+      if (error) throw error;
+      if (!canal) {
+        await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "failed");
+        result.failed++;
+        continue;
+      }
+      const [blocked, muted] = await Promise.all([
+        bloqueioPorContato(db, String(canal.id), p.contact_key),
+        isBotMutedForContact(db, String(canal.id), p.contact_key),
+      ]);
+      if (blocked || muted) {
+        await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "done");
+        result.blocked++;
+        continue;
+      }
+      const ch = await flowChannelFor(db, canal as Json);
+      if (!dentroDaJanela(cfg, Date.now())) {
+        await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "deferred");
+        break;
+      }
+      sending = true;
+      const r = await advanceFlow(
+        camp.flow, ch, p.contact_key, p.step_id, "quero", Date.now(),
+        gravadorDeFluxo(db, canal as Json, p.contact_key),
+      );
+      if (r.enviados === 0 || r.falhas > 0) {
+        await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "failed");
+        result.failed++;
+        console.error("flow: PDF Embrapa falhou; revisão manual necessária", p.contact_key.slice(-4));
+        continue;
+      }
+      await saveFlowPosition(db, camp.id, p.contact_key, r.position, {
+        conversationId: p.conversation_id,
+        channelId: String(canal.id),
+      });
+      result.sent++;
+    } catch (error) {
+      // Após iniciar o envio, o resultado pode ser incerto: não há retry automático.
+      await setClaimedFlowStatus(
+        db, camp.id, p.contact_key, p.step_id, sending ? "failed" : "deferred",
+      );
+      result.failed++;
+      console.error("flow: PDF Embrapa adiado/falhou", p.contact_key.slice(-4), error);
+    }
+  }
+  return result;
 }

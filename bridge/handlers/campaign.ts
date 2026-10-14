@@ -119,7 +119,7 @@ export async function handle(req: Request): Promise<Response> {
     for (const campaign of state.campaigns) {
       const cfg = { ...PACE_PADRAO, ...(campaign.pace ?? {}) } as PaceConfig;
       const sentToday = await enviadosHoje(admin(), campaign.id, now);
-      const capToday = capDoDia(cfg, Date.parse(campaign.createdAt), now);
+      const capToday = capDoDia(cfg, Date.parse(campaign.paceStartAt ?? campaign.createdAt), now);
       const windowOpen = dentroDaJanela(cfg, now);
       pace[campaign.id] = {
         sentToday,

@@ -1,6 +1,19 @@
 // A oferta da Embrapa aceita respostas digitadas explícitas além dos dois botões.
 // Retorna undefined para todos os outros fluxos, para preservar o tratamento deles.
-const CAMPAIGN_ID = "isca-embrapa-sul-sudeste-5895-2026-09-25";
+export const EMBRAPA_5895_CAMPAIGN_ID = "isca-embrapa-sul-sudeste-5895-2026-09-25";
+import { dentroDaJanela, PACE_PADRAO, type PaceConfig } from "./campaign-pace.ts";
+
+export function shouldDeferEmbrapaPdf(input: {
+  campaignId: string;
+  stepId: string;
+  branchReplyId: string | null;
+  pace?: Partial<PaceConfig>;
+  now: number;
+}): boolean {
+  return input.campaignId === EMBRAPA_5895_CAMPAIGN_ID &&
+    input.stepId === "oferta" && input.branchReplyId === "quero" &&
+    !dentroDaJanela({ ...PACE_PADRAO, ...(input.pace ?? {}) }, input.now);
+}
 
 function normalize(text: string): string {
   return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -13,7 +26,7 @@ export function resolveEmbrapaOfferReply(input: {
   replyId: string | null;
   text: string | null | undefined;
 }): "quero" | "nao" | null | undefined {
-  if (input.campaignId !== CAMPAIGN_ID || input.stepId !== "oferta") {
+  if (input.campaignId !== EMBRAPA_5895_CAMPAIGN_ID || input.stepId !== "oferta") {
     return undefined;
   }
   if (input.replyId === "quero" || input.replyId === "nao") {
