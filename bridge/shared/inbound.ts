@@ -259,9 +259,34 @@ async function ingestInboundClaimed(
   const source = sourceSnapshot(channel, msg.from, effectiveReferral);
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
-    const cwConv = skip
-      ? null
-      : await createConversation(inboxId, sourceId!, acct);
+    let cwConv: { id: number } | null = null;
+    if (!skip) {
+      try {
+        cwConv = await createConversation(inboxId, sourceId!, acct);
+      } catch (error) {
+        // O contato pode ter sido apagado no Chatwoot enquanto o Supabase ainda guarda
+        // o source_id antigo. Um 404 na criação da conversa exige recriar o vínculo.
+        if (!(error instanceof Error) ||
+          !error.message.startsWith("Chatwoot createConversation 404:")) {
+          throw error;
+        }
+        const repaired = await ensureContact(inboxId, {
+          name: msg.name ?? (contact.name as string | undefined),
+          phone: phone ?? undefined,
+          identifier: msg.from,
+        }, acct);
+        sourceId = repaired.source_id;
+        const repairedAttributes = { ...leadAttributes, source_id: sourceId };
+        const { error: repairError } = await db.from("contacts").update({
+          chatwoot_contact_id: repaired.contact_id ?? null,
+          attributes: repairedAttributes,
+        }).eq("id", contact.id);
+        if (repairError) throw repairError;
+        contact = { ...contact, attributes: repairedAttributes,
+          chatwoot_contact_id: repaired.contact_id ?? null };
+        cwConv = await createConversation(inboxId, sourceId, acct);
+      }
+    }
     const { data: insertedConv, error: convInsertError } = await db.from(
       "conversations",
     ).insert({
