@@ -246,6 +246,26 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const canaisSociais = activeChannels.filter((c) =>
     c.type === "facebook" || c.type === "instagram"
   );
+  const instagramAtivo = canaisSociais.some((c) => c.type === "instagram");
+  const { data: ultimaSincroniaInstagram, error: instagramSyncError } = await db
+    .from("events").select("received_at,payload")
+    .eq("source", "sync-facebook").eq("event_type", "sync_completed")
+    .eq("payload->>channel_type", "instagram")
+    .eq("payload->>mode", "inbound")
+    .order("received_at", { ascending: false }).limit(1).maybeSingle();
+  if (instagramSyncError) throw instagramSyncError;
+  const ultimaSincroniaInstagramMs = Date.parse(
+    String(ultimaSincroniaInstagram?.received_at ?? ""),
+  );
+  const instagramSyncStale = instagramAtivo &&
+    (!Number.isFinite(ultimaSincroniaInstagramMs) ||
+      now.getTime() - ultimaSincroniaInstagramMs > 2 * 60_000);
+  const instagramSyncErrors = ((ultimaSincroniaInstagram?.payload ?? {}) as Json)
+    .errors;
+  const instagramSyncFailures = instagramAtivo && !instagramSyncStale &&
+      Array.isArray(instagramSyncErrors)
+    ? instagramSyncErrors.length
+    : 0;
   const tokensInvalidos: string[] = [];
   for (const canal of canaisSociais) {
     const { data: secret } = await db.from("channel_secrets")
@@ -509,6 +529,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: tokensInvalidos.length,
       detail: tokensInvalidos.join("; ") || undefined,
+    },
+    {
+      key: "instagram_sync_stale",
+      severity: "critical",
+      count: instagramSyncStale ? 1 : 0,
+      detail: "sincronização de directs sem conclusão há mais de 2 minutos",
+    },
+    {
+      key: "instagram_sync_error",
+      severity: "critical",
+      count: instagramSyncFailures,
+      detail: "um ou mais canais falharam na última sincronização",
     },
     {
       key: "channel_silent",

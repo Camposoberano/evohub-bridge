@@ -483,7 +483,10 @@ export async function listConversationMessages(
   const url = `${
     baseOf(acct)
   }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages`;
-  let res = await fetch(url, { headers: appHeaders(acct) });
+  let res = await fetch(url, {
+    headers: appHeaders(acct),
+    signal: AbortSignal.timeout(10_000),
+  });
 
   // O token do agente pode não ser membro de todas as inboxes. O pull de segurança
   // precisa enxergar a conversa mesmo assim; quando disponível, tenta o token admin.
@@ -493,6 +496,7 @@ export async function listConversationMessages(
         "api_access_token": acct.adminToken,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(10_000),
     });
   }
   if (!res.ok) {
