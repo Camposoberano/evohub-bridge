@@ -385,35 +385,28 @@ const STARTED_AT = new Date().toISOString();
 // Messenger). /sync-facebook é o único caminho de entrada pro IG, então roda em loop
 // interno aqui — sem depender de cron externo no Coolify. Pra Facebook é só redundância
 // (a entrada já chega por webhook); duplicados são ignorados pelo dedup do próprio sync.
-const SYNC_LOOP_INTERVAL_MS = 30_000;
 function startSyncLoop() {
   const token = segredoParaChamadaInterna();
   // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
   // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
   // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
-  const url = `http://internal/sync-facebook?token=${
-    encodeURIComponent(token)
-  }&since_minutes=1440`;
-
-  let running = false;
-  setInterval(async () => {
-    if (running) return;
-    running = true;
-    try {
+  for (const [channelType, mode, intervaloMs] of [
+    ["instagram", "inbound", 10_000],
+    ["instagram", "outgoing", 30_000],
+    ["facebook", "both", 30_000],
+  ] as const) {
+    const url = `http://internal/sync-facebook?token=${
+      encodeURIComponent(token)
+    }&since_minutes=1440&channel_type=${channelType}&mode=${mode}`;
+    agendarLoop(`sync-${channelType}-${mode}`, async () => {
       const res = await syncFacebook(new Request(url));
       const body = await res.json();
-      if (
-        body.errors?.length || body.inserted > 0 || body.outgoing_sent > 0 ||
-        body.media_repaired > 0
-      ) {
-        console.log("sync-facebook (auto):", JSON.stringify(body));
+      if (!res.ok || body.errors?.length || body.inserted > 0 ||
+        body.outgoing_sent > 0 || body.media_repaired > 0) {
+        console.log(`sync-${channelType}-${mode} (auto):`, JSON.stringify(body));
       }
-    } catch (e) {
-      console.error("sync-facebook (auto) erro:", e);
-    } finally {
-      running = false;
-    }
-  }, SYNC_LOOP_INTERVAL_MS);
+    }, { intervaloMs, primeiraEmMs: 1_000, travaMaximaMs: 90_000 });
+  }
 }
 
 // Comentários de posts/anúncios (FB Pages + Instagram) — fallback por pull (Graph) a cada

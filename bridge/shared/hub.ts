@@ -29,6 +29,7 @@ export async function getMeta(
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(`${HUB()}/meta/${path.replace(/^\/+/, "")}`, {
     headers: { "Authorization": `Bearer ${channelToken}` },
+    signal: AbortSignal.timeout(10_000),
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };
