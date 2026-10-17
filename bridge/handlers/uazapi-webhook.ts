@@ -52,6 +52,15 @@ import { reconcile5895VideoNotice } from "../shared/reconcile-5895.ts";
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
+function inboundErrorReason(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (/await_response|timeout|timed out/.test(message)) return "Consulta à UAZAPI expirou";
+  if (/chatwoot|502|503/.test(message)) return "Chatwoot indisponível";
+  if (/n8n/.test(message)) return "Ação do n8n falhou";
+  if (/token|credencia/.test(message)) return "Credencial da instância indisponível";
+  return error instanceof Error ? error.name : "Falha desconhecida";
+}
+
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") {
     return new Response("method not allowed", { status: 405 });
@@ -73,7 +82,9 @@ export async function handle(req: Request): Promise<Response> {
 
   const eventType = rotuloDeEvento(p);
   const db = admin();
+  const eventId = crypto.randomUUID();
   const { error: eventError } = await db.from("events").insert({
+    id: eventId,
     source: "uazapi",
     event_type: eventType,
     payload: redactSecrets(p),
@@ -98,8 +109,8 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (isInboundUazapiEvent(eventType, p)) {
-    handleInbound(db, p).catch((e) =>
-      console.error("uazapi-webhook handleInbound erro:", e)
+    processInboundUazapiEvent(db, p, eventId).catch((e) =>
+      console.error("uazapi-webhook handleInbound erro:", eventId, inboundErrorReason(e))
     );
   }
 
@@ -143,7 +154,27 @@ function isInboundUazapiEvent(eventType: string, p: Json): boolean {
   return false;
 }
 
-async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
+export async function processInboundUazapiEvent(
+  db: ReturnType<typeof admin>,
+  p: Json,
+  rawEventId = "",
+): Promise<void> {
+  try {
+    await handleInbound(db, p, rawEventId);
+  } catch (error) {
+    await db.from("events").insert({
+      source: "uazapi",
+      event_type: "inbound_processing_failed",
+      payload: {
+        raw_event_id: rawEventId || null,
+        reason: inboundErrorReason(error),
+      },
+    }).then(() => {}, () => {});
+    throw error;
+  }
+}
+
+async function handleInbound(db: ReturnType<typeof admin>, p: Json, rawEventId = "") {
   const data = (p.data && typeof p.data === "object") ? p.data as Json : p;
   const instanceName = firstString(
     (p.instanceData as Json | undefined)?.instance,
@@ -193,8 +224,15 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   }
 
   const acct = await accountForChannel(channel.id as string);
-  const instanceToken = await tokenForInstance(instanceName);
+  // Textos e cliques não precisam de credencial da instância. Uma consulta lenta ao
+  // /instance/all jamais deve impedir a resposta do cliente de entrar.
+  let instanceToken: string | null = null;
+  let tokenLookupDone = false;
   for (const rawMsg of messages) {
+    if (!tokenLookupDone && requiresInstanceToken(rawMsg)) {
+      tokenLookupDone = true;
+      instanceToken = await tokenForInstance(instanceName);
+    }
     const msg = await parseUazapiMessage(rawMsg, p, instanceToken ?? undefined);
     // Saida gerada pela API ja foi criada no Chatwoot pelo webhook de origem.
     // Saida digitada no aparelho precisa entrar como echo na conversa.
@@ -229,7 +267,17 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
           );
         }
       } catch (e) {
-        console.error("uazapi-webhook click erro:", e);
+        console.error("uazapi-webhook click erro:", rawEventId, inboundErrorReason(e));
+        await db.from("events").insert({
+          source: "uazapi",
+          event_type: "inbound_action_failed",
+          channel_id: channel.id,
+          payload: {
+            raw_event_id: rawEventId || null,
+            meta_message_id: msg.metaMessageId ?? null,
+            reason: inboundErrorReason(e),
+          },
+        }).then(() => {}, () => {});
       }
     }
 
@@ -237,7 +285,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     // pelo ingestInbound, então a retentativa do webhook volta a ser possível; o evento
     // existe pra essa perda aparecer em vez de sumir no log do container.
     try {
-      await ingestInbound(db, channel as Json, {
+      const ingest = await ingestInbound(db, channel as Json, {
         from: msg.from,
         name: msg.name,
         metaMessageId: msg.metaMessageId,
@@ -249,18 +297,27 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         acct,
         referral: msg.referral,
       });
+      // O catchup antigo salvava cliques de lista com conteúdo vazio. No replay,
+      // reparar o texto visível sem criar outra mensagem.
+      if (!ingest.inserted && msg.menuClickId && msg.content && msg.metaMessageId) {
+        await db.from("messages").update({ content: msg.content })
+          .eq("channel_id", channel.id)
+          .eq("meta_message_id", msg.metaMessageId)
+          .eq("content", "");
+      }
     } catch (e) {
-      console.error("uazapi-webhook: ingest falhou", msg.metaMessageId, e);
+      console.error("uazapi-webhook: ingest falhou", rawEventId, inboundErrorReason(e));
       await db.from("events").insert({
         source: "uazapi",
         event_type: "inbound_ingest_failed",
         channel_id: channel.id,
         payload: {
           meta_message_id: msg.metaMessageId ?? null,
-          from: msg.from,
+          raw_event_id: rawEventId || null,
+          from_suffix: sufixoContato(msg.from),
           msg_type: msg.msgType,
           direction: msg.direction,
-          erro: e instanceof Error ? e.message : String(e),
+          reason: inboundErrorReason(e),
         },
       }).then(() => {}, () => {});
       continue;
@@ -883,6 +940,7 @@ async function parseUazapiMessage(
     getString(message, "content"),
     getString(getJson(message, "content"), "text"),
     getString(getJson(message, "content"), "body"),
+    getString(getJson(message, "content"), "title"),
     getString(message, "text"),
     getString(message, "vote"),
     getString(context, "text"),
@@ -1092,6 +1150,19 @@ function isMediaType(msgType: string): boolean {
   const normalized = msgType.toLowerCase();
   return ["audio", "ptt", "image", "video", "document", "sticker"]
     .some((type) => normalized.includes(type));
+}
+
+export function requiresInstanceToken(message: Json): boolean {
+  const content = getJson(message, "content");
+  const type = firstString(
+    message.mediaType,
+    message.messageType,
+    content?.PTT === true ? "ptt" : undefined,
+    content?.mimetype,
+    getJson(message, "media")?.type,
+    message.type,
+  ) ?? "text";
+  return isMediaType(type);
 }
 
 function hasAdReferral(message: Json, context: Json): boolean {

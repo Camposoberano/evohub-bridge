@@ -45,6 +45,15 @@ Deno.test("contagem zerada não vira alerta", () => {
   );
 });
 
+Deno.test("entrada pendente gera alerta com destino no painel", () => {
+  const issues = alertasParaEntregar([{
+    key: "inbound_unprocessed", severity: "critical", count: 1,
+    detail: "5895 ••••1151: clique pendente",
+  }]);
+  assertEquals(issues.length, 1);
+  assertEquals(formatarAlerta(issues, new Date("2026-10-17T20:00:00Z")).includes("Monitor de eventos"), true);
+});
+
 Deno.test("texto nomeia o problema e carrega o detalhe", () => {
   const texto = formatarAlerta(
     alertasParaEntregar(ISSUES),
