@@ -1,5 +1,12 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+## Publicação verificada — 17/10/2026, 18h21 BRT
+
+- A [PR #24](https://github.com/Camposoberano/evohub-bridge/pull/24) foi incorporada à `main` no commit `c074a419afca3bab289099c2de4dcbe480d5d1a8`. Coolify concluiu o deploy do bridge `irxjcc7no7ebrhfdrsfemsha` às 18h17 BRT e do painel `31f0pkvppiparhapv6qz6uzy` às 18h20 BRT, ambos no mesmo commit.
+- `/health` do bridge e `/eventos` do painel responderam HTTP 200. A rota nova `/inbound-incidents` recusou requisição sem autenticação com HTTP 401. O bundle publicado contém o painel de entradas.
+- O loop `inbound-watchdog` iniciou no bridge e o evento `alert_delivered` para `inbound_unprocessed` foi registrado às 18h18 BRT. A auditoria pós-publicação ainda mostra 3 entradas registradas com atraso e uma pendência: `menu_nutricao` da conversa 3693.
+- Por escolha explícita do usuário, o clique antigo da conversa 3693 **não foi reprocessado** e ficou para atendimento manual. O claim de ação continua ausente; a publicação não enviou resposta ao cliente para esse clique.
+
 ## Atualização — 17/10/2026: entradas UAZAPI atrasadas e clique 3693
 
 - Base de comparação: `origin/main` em `b0391a3`, versão publicada em 16/10. A seção antiga abaixo descreve o estado de 06/10 e deve ser tratada como histórico.
@@ -7,7 +14,7 @@
 - Causa confirmada para 3693: `handleInbound` aguardava `/instance/all` para obter token mesmo em clique sem mídia. A consulta expirou após 45 segundos, já depois do HTTP 200 ao webhook. A varredura posterior registrou a mensagem, mas não executou a ação. Para os dois casos anteriores, o sintoma é igual; a causa específica não foi comprovada por logs antigos.
 - Correção local: textos e cliques deixam de consultar `/instance/all`; o token só é buscado para mídia. Falhas geram eventos com motivo seguro e referência ao webhook. `/inbound-incidents` compara webhook, mensagem e claim da ação; o watchdog reprocessa entradas recentes sem claim e envia alertas quando restam pendências. O painel `/eventos` mostra pendências, atrasos, link da conta correta do Chatwoot e botão de reprocessamento. A varredura deixa de tratar `call_` como mensagem e preserva o título de cliques de lista.
 - O botão de recuperação pode iniciar resposta ao cliente. **Não foi acionado** nesta auditoria. O claim da ação indica início do handler, não confirmação de entrega; a conversa deve ser conferida após reprocessar. Falha após início fica para revisão humana, sem reenvio automático incerto.
-- Leitura do diagnóstico novo contra a produção: 373 entradas, 3 atrasadas, 1 pendência (`5895`, conversa 3693, `menu_nutricao`). `ALERT_WHATSAPP_TO` está configurado no Coolify e `AUTO_LOOPS_ENABLED=true` no ambiente de produção (preview usa `false`); os valores sensíveis não foram expostos. O código novo ainda não foi publicado.
+- Leitura anterior à publicação: 373 entradas, 3 atrasadas, 1 pendência (`5895`, conversa 3693, `menu_nutricao`). `ALERT_WHATSAPP_TO` está configurado no Coolify e `AUTO_LOOPS_ENABLED=true` no ambiente de produção (preview usa `false`); os valores sensíveis não foram expostos.
 - Validação local: `deno check` nos módulos alterados, 41 testes focados, build Next.js e `git diff --check` passaram. A consulta em lote inicial recebeu 502; lotes de 25 IDs passaram e reproduziram os 3 atrasos e a pendência.
 
 > **Documento de estado do projeto — atualizado em 06/10/2026 (America/Fortaleza).** Leia esta seção antes de retomar. As notas abaixo de “Contexto histórico” são registros antigos e podem estar desatualizadas.
