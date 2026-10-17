@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   candidatasARecuperar,
+  conteudoRecuperado,
   dataDaQueda,
   JANELA_PADRAO_MS,
   janelaDeBusca,
@@ -59,9 +60,16 @@ Deno.test("só entra mensagem de cliente, fora de grupo, dentro da janela", () =
     { id: "velha", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 7 * H) },
     // chegou há 2 minutos: é do webhook; a varredura não pode passar na frente da automação
     { id: "recente", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 2 * 60_000) },
+    { id: "call_123", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
+    { id: "x_call", fromMe: false, isGroup: false, messageType: "CallLogMessage", chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
     { fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
   ];
   assertEquals(candidatasARecuperar(lista, desde, ate).map((m) => m.id), ["a"]);
+});
+
+Deno.test("recuperação preserva o título visível do clique de lista", () => {
+  assertEquals(conteudoRecuperado({ content: { title: "🧪 Info nutricional" } }), "🧪 Info nutricional");
+  assertEquals(conteudoRecuperado({ text: "Oi" }), "Oi");
 });
 
 // --- paginação e margem -------------------------------------------------------------------

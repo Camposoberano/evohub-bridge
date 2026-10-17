@@ -31,6 +31,7 @@ const ENTREGAVEIS = new Set([
   "social_token_invalid",
   "channel_silent",
   "inbound_lost",
+  "inbound_unprocessed",
   // Número conectado na uazapi sem canal cadastrado: cliente escrevendo, bridge descartando.
   // Exige ação humana imediata (cadastrar o canal) e o conserto é de minutos.
   "canal_nao_cadastrado",
@@ -63,6 +64,7 @@ const TITULOS: Record<string, string> = {
   social_token_invalid: "Token de canal social inválido",
   channel_silent: "Canal ativo parou de receber mensagem",
   inbound_lost: "Mensagem de cliente perdida na ingestão",
+  inbound_unprocessed: "Entrada ou clique do cliente pendente; abrir Monitor de eventos",
   canal_nao_cadastrado: "Número recebendo sem canal cadastrado",
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
@@ -220,7 +222,9 @@ export function formatarAlerta(issues: OperationalIssue[], agora: Date): string 
     "",
     ...linhas,
     "",
-    "Detalhe em /operational-health no painel.",
+    issues.some((issue) => issue.key === "inbound_unprocessed")
+      ? "Detalhe em Monitor de eventos no painel."
+      : "Detalhe em /operational-health no painel.",
   ].join("\n");
 }
 

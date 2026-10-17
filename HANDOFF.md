@@ -1,5 +1,15 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+## Atualização — 17/10/2026: entradas UAZAPI atrasadas e clique 3693
+
+- Base de comparação: `origin/main` em `b0391a3`, versão publicada em 16/10. A seção antiga abaixo descreve o estado de 06/10 e deve ser tratada como histórico.
+- Auditoria de leitura dos últimos 3 dias, às 17h47 BRT: 373 webhooks individuais de entrada, 3 mensagens registradas com 35–42 minutos de atraso no canal 5895. A conversa 3693 contém o clique `menu_nutricao` recebido às 16h43 BRT e registrado só pela varredura às 17h25; o clique não iniciou a ação e não há resposta nutricional confirmada. Os outros dois casos são as conversas 3673 (15/10) e 3692 (16/10).
+- Causa confirmada para 3693: `handleInbound` aguardava `/instance/all` para obter token mesmo em clique sem mídia. A consulta expirou após 45 segundos, já depois do HTTP 200 ao webhook. A varredura posterior registrou a mensagem, mas não executou a ação. Para os dois casos anteriores, o sintoma é igual; a causa específica não foi comprovada por logs antigos.
+- Correção local: textos e cliques deixam de consultar `/instance/all`; o token só é buscado para mídia. Falhas geram eventos com motivo seguro e referência ao webhook. `/inbound-incidents` compara webhook, mensagem e claim da ação; o watchdog reprocessa entradas recentes sem claim e envia alertas quando restam pendências. O painel `/eventos` mostra pendências, atrasos, link da conta correta do Chatwoot e botão de reprocessamento. A varredura deixa de tratar `call_` como mensagem e preserva o título de cliques de lista.
+- O botão de recuperação pode iniciar resposta ao cliente. **Não foi acionado** nesta auditoria. O claim da ação indica início do handler, não confirmação de entrega; a conversa deve ser conferida após reprocessar. Falha após início fica para revisão humana, sem reenvio automático incerto.
+- Leitura do diagnóstico novo contra a produção: 373 entradas, 3 atrasadas, 1 pendência (`5895`, conversa 3693, `menu_nutricao`). `ALERT_WHATSAPP_TO` está configurado no Coolify e `AUTO_LOOPS_ENABLED=true` no ambiente de produção (preview usa `false`); os valores sensíveis não foram expostos. O código novo ainda não foi publicado.
+- Validação local: `deno check` nos módulos alterados, 41 testes focados, build Next.js e `git diff --check` passaram. A consulta em lote inicial recebeu 502; lotes de 25 IDs passaram e reproduziram os 3 atrasos e a pendência.
+
 > **Documento de estado do projeto — atualizado em 06/10/2026 (America/Fortaleza).** Leia esta seção antes de retomar. As notas abaixo de “Contexto histórico” são registros antigos e podem estar desatualizadas.
 
 ## Estado atual — 06/10/2026

@@ -24,6 +24,10 @@ import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
 import {
+  handle as inboundIncidents,
+  runInboundWatchdog,
+} from "./handlers/inbound-incidents.ts";
+import {
   janelaProfunda,
   recuperarEntradaUazapi,
 } from "./shared/catchup-uazapi.ts";
@@ -149,6 +153,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
+  "/inbound-incidents": inboundIncidents,
   "/send-outbound": sendOutbound,
   "/n8n-action-enqueue": n8nActionEnqueue,
   "/n8n-action-send-now": n8nActionSendNow,
@@ -1771,6 +1776,20 @@ function startOperationalMonitorLoop() {
   console.log("operational-monitor loop ON (15min)");
 }
 
+function startInboundWatchdogLoop() {
+  agendarLoop("inbound-watchdog", async () => {
+    try {
+      await runInboundWatchdog(admin());
+    } catch (error) {
+      console.error("inbound-watchdog erro:", error);
+    }
+  }, {
+    intervaloMs: 2 * 60_000,
+    primeiraEmMs: 60_000,
+  });
+  console.log("inbound-watchdog loop ON (2min)");
+}
+
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
 } else {
@@ -1798,6 +1817,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDeferredEmbrapaPdfLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
+  startInboundWatchdogLoop();
   startUazapiCatchupLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);

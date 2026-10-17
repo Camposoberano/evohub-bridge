@@ -98,9 +98,17 @@ export function candidatasARecuperar(
     if (m.fromMe !== false) return false;
     if (m.isGroup === true || String(m.chatid ?? "").includes("@g.us")) return false;
     if (typeof m.id !== "string" || !m.id) return false;
+    // /message/find também devolve sinalização de chamadas. Isso não é mensagem
+    // de cliente e não deve virar conversa nem alerta de recuperação.
+    if (m.id.startsWith("call_") || /call/i.test(String(m.messageType ?? ""))) return false;
     const t = msDoTimestamp(m.messageTimestamp);
     return t >= desde && t <= ate;
   });
+}
+
+export function conteudoRecuperado(m: Json): string {
+  const content = m.content && typeof m.content === "object" ? m.content as Json : {};
+  return String(m.text ?? content.text ?? content.title ?? "");
 }
 
 function instanciaConectada(status: unknown): boolean {
@@ -451,7 +459,7 @@ export async function recuperarEntradaUazapi(
           name: (m.senderName as string | undefined) ?? undefined,
           metaMessageId: id,
           msgType: tipo,
-          content: String(m.text ?? (m.content as Json | undefined)?.text ?? ""),
+          content: conteudoRecuperado(m),
           attachments: anexos,
           sentAt: new Date(msDoTimestamp(m.messageTimestamp)).toISOString(),
           acct,
