@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { matchingReceipt, uniqueConfirmedReceipt } from "../shared/reconcile-5895.ts";
+import { matchingReceipt, reconcilable5895Type, uniqueConfirmedReceipt } from "../shared/reconcile-5895.ts";
 
 const at = Date.parse("2026-10-12T12:00:00Z");
 const row = { type: "video", payload: { media_url: "https://example.test/video.mp4" } };
@@ -53,4 +53,11 @@ Deno.test("reconciliação do vídeo assíncrono exige track_id da tentativa", (
   }, at), true);
   assertEquals(matchingReceipt(tracked, receipt, at), false);
   assertEquals(matchingReceipt(tracked, { ...receipt, track_id: "funnel-other" }, at), false);
+});
+
+Deno.test("áudio incerto não entra na conciliação de recibos suportados", () => {
+  assertEquals(reconcilable5895Type("audio"), false);
+  assertEquals(reconcilable5895Type("video"), true);
+  assertEquals(reconcilable5895Type("document"), true);
+  assertEquals(reconcilable5895Type("interactive"), true);
 });

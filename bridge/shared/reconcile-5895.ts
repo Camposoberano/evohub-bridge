@@ -20,6 +20,10 @@ const HUB_5895_NUMBER = "5519999715895";
 const confirmedStatuses = new Set(["Delivered", "Read", "Played"]);
 const MAX_CANDIDATES = 3;
 
+export function reconcilable5895Type(type: unknown): boolean {
+  return type === "video" || type === "document" || type === "interactive";
+}
+
 export type ReconcileSummary = {
   checked: number;
   reconciled: number;
@@ -90,6 +94,7 @@ export async function reconcile5895Uncertain(
   const { data, error } = await db.from("scheduled_messages")
     .select("id,conversation_id,funnel,step,type,status,payload")
     .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
+    .in("type", ["video", "document", "interactive"])
     .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
     .order("send_at", { ascending: true }).limit(1000);
   if (error) throw error;
@@ -133,10 +138,7 @@ export async function reconcile5895Uncertain(
       problem(summary, "invalid_attempt");
       continue;
     }
-    if (!["video", "document", "interactive"].includes(row.type)) {
-      problem(summary, "unsupported_type");
-      continue;
-    }
+    if (!reconcilable5895Type(row.type)) continue;
     try {
       const matches: Json[] = [];
       const sentCopies = new Map<string, Json>();

@@ -38,6 +38,19 @@ export type InboundIncident = {
   chatwoot_url: string | null;
 };
 
+export function inbound5895AlertCandidates(
+  incidents: InboundIncident[],
+  manualEventIds: ReadonlySet<string>,
+): InboundIncident[] {
+  return incidents.filter((incident) =>
+    incident.channel === "5895" && !manualEventIds.has(incident.event_id)
+  );
+}
+
+export function inbound5895AlertKey(eventId: string): string {
+  return `alerta-5895-inbound-${eventId}`;
+}
+
 type Candidate = {
   eventId: string;
   messageId: string;

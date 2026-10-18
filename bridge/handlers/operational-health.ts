@@ -14,6 +14,7 @@ import {
   type DbClient,
 } from "../shared/supabase.ts";
 import { MAIN_FUNNELS, RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import { mediaBlocks5895, mediaBlocks5895Detail, mediaBlocks5895Key } from "../shared/5895-media-incidents.ts";
 
 type Json = Record<string, unknown>;
 
@@ -73,6 +74,8 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     recentContacts,
     adConversations,
     unconfirmed5895VideosResult,
+    overdue5895Queue,
+    media5895Result,
   ] = await Promise.all([
     db.from("channels").select(
       "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
@@ -102,12 +105,27 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
         .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
         .lte("payload->__funnel_delivery->>last_attempt_at", since5m)
+        .is("payload->__funnel_delivery->>followups_released_at", null)
         .limit(20),
+    exactCount(
+      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+        .eq("status", "pending")
+        .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+        .lt("send_at", overdue),
+    ),
+    db.from("scheduled_messages")
+      .select("id,chatwoot_conversation_id,step,type,status,payload")
+      .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+      .eq("status", "failed")
+      .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+      .limit(1000),
   ]);
   if (channelsResult.error) throw channelsResult.error;
   if (recentContacts.error) throw recentContacts.error;
   if (adConversations.error) throw adConversations.error;
   if (unconfirmed5895VideosResult.error) throw unconfirmed5895VideosResult.error;
+  if (media5895Result.error) throw media5895Result.error;
+  const media5895Blocks = mediaBlocks5895((media5895Result.data ?? []) as Json[]);
   const unconfirmed5895Videos = unconfirmed5895VideosResult.count ?? 0;
   const unconfirmed5895Conversations = [...new Set(
     ((unconfirmed5895VideosResult.data ?? []) as Json[])
@@ -569,7 +587,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "warning",
       count: failedMessages24h,
     },
-    { key: "overdue_funnel_queue", severity: "critical", count: overdueQueue },
+    { key: "overdue_funnel_queue", severity: "critical", count: Math.max(0, overdueQueue - overdue5895Queue) },
+    {
+      key: "5895_media_blocked", severity: "critical",
+      count: media5895Blocks.length,
+      detail: mediaBlocks5895Detail(media5895Blocks),
+    },
     {
       key: "funnel_delivery_failure_1h",
       severity: "critical",
@@ -654,16 +677,30 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
 
   const entrega = await entregarAlertas(
     db,
-    issues as OperationalIssue[],
+    issues.filter((issue) => !issue.key.startsWith("5895_")) as OperationalIssue[],
     now,
   ).catch((e) => {
     console.error("operational-alert erro:", e);
     return { enviado: false, motivo: "excecao" };
   });
+  const alerta5895 = media5895Blocks.length
+    ? await entregarAlertas(db, [{
+      key: "5895_media_blocked", severity: "critical",
+      count: media5895Blocks.length,
+      detail: mediaBlocks5895Detail(media5895Blocks),
+    }], now, {
+      dedupeKey: await mediaBlocks5895Key(media5895Blocks),
+      ttlMs: 7 * 24 * 60 * 60_000,
+    }).catch((e) => {
+      console.error("operational-alert 5895 erro:", e);
+      return { enviado: false, motivo: "excecao" };
+    })
+    : { enviado: false, motivo: "sem-bloqueio" };
 
   return {
     ok: !issues.some((issue) => issue.severity === "critical"),
     alerta: entrega,
+    alerta_5895: alerta5895,
     checked_at: now.toISOString(),
     monitoring_window: monitoringWindow,
     ai: {
@@ -682,6 +719,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       ad_first_steps_24h: adFirstStepByChannel,
       ad_first_steps_unverified_24h: unverifiedAdFirstSteps,
       funnel_delivery_1h: funnelDeliveryByChannel,
+      funnel_overdue_5895: overdue5895Queue,
       funnel_media_timeouts_1h: mediaTimeouts,
       funnel_stale_attempts_1h: staleStartedAttempts,
       failed_messages_24h: failedMessages24h,

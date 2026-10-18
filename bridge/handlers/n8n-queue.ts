@@ -42,6 +42,12 @@ export function queueBlockReason(conversation: {
   return null;
 }
 
+/** Só um desfecho comercial definitivo encerra a peça do 5895. */
+export function shouldCancelTerminal5895(funnel: unknown, blocked: string | null): boolean {
+  return queueBaseVersion(funnel) === RESTORED_5895_FUNNEL &&
+    (blocked === "nao-compra" || blocked === "ja-comprou");
+}
+
 /** Lista IDs, nunca payload, para o workflow não carregar conteúdo nem segredo do banco. */
 async function due(): Promise<Response> {
   if (!isWithinFunnelSendHours()) return json([]);
@@ -130,6 +136,24 @@ async function send(req: Request): Promise<Response> {
     return json({ ok: false, error: "canal ou versão não autorizada" }, 422);
   }
   const blocked = queueBlockReason(conversation);
+  if (shouldCancelTerminal5895(row.funnel, blocked)) {
+    const { data: cancelled, error: cancelError } = await db.from("scheduled_messages")
+      .update({ status: "cancelled" }).eq("id", id).eq("status", "pending")
+      .select("id").maybeSingle();
+    if (cancelError) return json({ ok: false, error: "falha ao cancelar peça obsoleta" }, 503);
+    if (!cancelled) return json({ ok: true, sent: false, blocked: "peça não pendente" });
+    const { error: auditError } = await db.from("events").insert({
+      source: "n8n-queue",
+      event_type: "5895_obsolete_queue_cancelled",
+      payload: {
+        scheduled_message_id: id,
+        chatwoot_conversation_id: row.chatwoot_conversation_id,
+        reason: blocked,
+      },
+    });
+    if (auditError) console.error("n8n-queue: falha ao auditar cancelamento", auditError.code);
+    return json({ ok: true, sent: false, blocked, cancelled: true });
+  }
   if (blocked) return json({ ok: true, sent: false, blocked });
   const result = await sendOutbound(new Request(
     `http://internal/send-outbound?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,

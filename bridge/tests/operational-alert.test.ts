@@ -246,3 +246,14 @@ Deno.test("instância caída é entregue e o texto diz o que fazer", () => {
   assertEquals(texto.includes("reconectar o QR"), true);
   assertEquals(texto.includes("6836: instância 6836 disconnected"), true);
 });
+
+Deno.test("mídia bloqueadora do 5895 é alertável com a conversa e a etapa", () => {
+  const issues = alertasParaEntregar([{
+    key: "5895_media_blocked", severity: "critical", count: 2,
+    detail: "#3677 etapa 24 audio; #3728 etapa 5 video",
+  }]);
+  assertEquals(issues.length, 1);
+  const text = formatarAlerta(issues, new Date("2026-10-18T06:00:00Z"));
+  assertEquals(text.includes("#3677 etapa 24"), true);
+  assertEquals(text.includes("#3728 etapa 5"), true);
+});
