@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { inboundCandidate, inboundState } from "../shared/inbound-incidents.ts";
+import { inboundCandidate, inboundState, inbound5895AlertCandidates, inbound5895AlertKey } from "../shared/inbound-incidents.ts";
 
 Deno.test("o clique do 5895 é identificado sem expor telefone inteiro", () => {
   const candidate = inboundCandidate({
@@ -52,4 +52,18 @@ Deno.test("chamadas não são tratadas como entrada de cliente", () => {
     }),
     null,
   );
+});
+
+Deno.test("incidente manual do 5895 não gera novo alerta; evento novo gera", () => {
+  const sample = (event_id: string, channel: string) => ({
+    event_id, channel, state: "missing_action" as const,
+  });
+  const incidents = [sample("old", "5895"), sample("new", "5895"), sample("other", "0595")];
+  const candidates = inbound5895AlertCandidates(
+    incidents as Parameters<typeof inbound5895AlertCandidates>[0],
+    new Set(["old"]),
+  );
+  assertEquals(candidates.map((item) => item.event_id), ["new"]);
+  assertEquals(inbound5895AlertKey("new"), "alerta-5895-inbound-new");
+  assertEquals(inbound5895AlertKey("old") === inbound5895AlertKey("new"), false);
 });

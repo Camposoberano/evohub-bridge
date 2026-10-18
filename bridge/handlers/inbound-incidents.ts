@@ -9,6 +9,8 @@ import {
 } from "../shared/supabase.ts";
 import {
   auditInboundIncidents,
+  inbound5895AlertCandidates,
+  inbound5895AlertKey,
   type InboundIncident,
 } from "../shared/inbound-incidents.ts";
 import { processInboundUazapiEvent } from "./uazapi-webhook.ts";
@@ -130,13 +132,39 @@ export async function runInboundWatchdog(
   if (fullAudit) lastFullAuditAt = now.getTime();
   const unresolved = after.incidents;
   if (!unresolved.length) return;
-  const detail = unresolved.slice(0, 4).map((incident) =>
+  const manual = new Set<string>();
+  if (unresolved.some((incident) => incident.channel === "5895")) {
+    const { data, error } = await db.from("events").select("payload")
+      .eq("source", "inbound-watchdog")
+      .eq("event_type", "inbound_incident_manual")
+      .gte("received_at", new Date(now.getTime() - 72 * 60 * 60_000).toISOString())
+      .order("received_at", { ascending: false }).limit(2000);
+    if (error) throw error;
+    for (const event of data ?? []) {
+      const id = String((event.payload as Json)?.raw_event_id ?? "");
+      if (id) manual.add(id);
+    }
+  }
+  for (const incident of inbound5895AlertCandidates(unresolved, manual)) {
+    await entregarAlertas(db, [{
+      key: "inbound_unprocessed",
+      severity: "critical",
+      count: 1,
+      detail: `${incident.channel} ${incident.contact_suffix}: ${incident.state}`,
+    }], new Date(), {
+      dedupeKey: inbound5895AlertKey(incident.event_id),
+      ttlMs: 72 * 60 * 60_000,
+    });
+  }
+  const others = unresolved.filter((incident) => incident.channel !== "5895");
+  if (!others.length) return;
+  const detail = others.slice(0, 4).map((incident) =>
     `${incident.channel} ${incident.contact_suffix}: ${incident.state}`
   ).join("; ");
   await entregarAlertas(db, [{
     key: "inbound_unprocessed",
     severity: "critical",
-    count: unresolved.length,
+    count: others.length,
     detail,
   }], new Date());
 }

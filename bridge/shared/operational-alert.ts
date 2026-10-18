@@ -9,7 +9,7 @@
 // porque alerta não precisa custar mensagem oficial.
 import { optionalEnv } from "./env.ts";
 import type { DbClient } from "./supabase.ts";
-import { claimDeliveryWithTtl } from "./supabase.ts";
+import { claimDeliveryWithTtl, releaseDelivery } from "./supabase.ts";
 import { getHybridRoute, hybridSendText, isHybridRecipient } from "./hybrid.ts";
 import { sendMeta } from "./hub.ts";
 
@@ -38,6 +38,7 @@ const ENTREGAVEIS = new Set([
   "failed_messages_15m",
   "overdue_funnel_queue",
   "5895_video_receipt_overdue",
+  "5895_media_blocked",
   // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
   // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
   "uazapi_instance_disconnected",
@@ -69,6 +70,7 @@ const TITULOS: Record<string, string> = {
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
   "5895_video_receipt_overdue": "Vídeo do funil 5895 aguardando confirmação de entrega",
+  "5895_media_blocked": "Funil 5895 bloqueado por mídia sem confirmação (revisar antes de reenviar)",
 };
 
 // Instância uazapi caída enquanto o canal segue `active` no banco.
@@ -234,6 +236,7 @@ export async function entregarAlertas(
   db: DbClient,
   issues: OperationalIssue[],
   agora: Date,
+  options?: { dedupeKey: string; ttlMs: number },
 ): Promise<{ enviado: boolean; motivo?: string }> {
   const entregaveis = alertasParaEntregar(issues);
   if (entregaveis.length === 0) return { enviado: false, motivo: "sem-critico" };
@@ -243,8 +246,11 @@ export async function entregarAlertas(
 
   // Um alerta por hora no máximo: o monitor roda a cada 15min e repetir o mesmo texto
   // quatro vezes por hora vira ruído que o time aprende a ignorar.
-  const chave = `alerta-op-${entregaveis.map((i) => i.key).sort().join("+")}`;
-  if (!await claimDeliveryWithTtl(db, chave, "operational-alert", 60 * 60_000, agora)) {
+  const chave = options?.dedupeKey ??
+    `alerta-op-${entregaveis.map((i) => i.key).sort().join("+")}`;
+  if (!await claimDeliveryWithTtl(
+    db, chave, "operational-alert", options?.ttlMs ?? 60 * 60_000, agora,
+  )) {
     return { enviado: false, motivo: "ja-avisado-nesta-hora" };
   }
 
@@ -253,54 +259,65 @@ export async function entregarAlertas(
     .select("id,name,phone_number,phone_number_id")
     .eq("name", nomeCanal).eq("type", "whatsapp").maybeSingle();
   if (!canal?.phone_number_id) {
+    if (options) await releaseDelivery(db, chave);
     return { enviado: false, motivo: `canal ${nomeCanal} sem phone_number_id` };
   }
 
-  const texto = formatarAlerta(entregaveis, agora);
-  const rota = isHybridRecipient(destino)
-    ? await getHybridRoute(
-      canal.id as string,
-      canal.phone_number_id as string,
-      canal.phone_number as string,
-    )
-    : null;
+  let delivered = false;
+  try {
+    const texto = formatarAlerta(entregaveis, agora);
+    const rota = isHybridRecipient(destino)
+      ? await getHybridRoute(
+        canal.id as string,
+        canal.phone_number_id as string,
+        canal.phone_number as string,
+      )
+      : null;
 
-  let ok = false;
-  if (rota) {
-    const r = await hybridSendText(rota, destino, texto);
-    ok = Boolean(r?.ok);
-  }
-  if (!ok) {
-    // Sem rota híbrida (ou ela falhou) o alerta vale a mensagem oficial: perder o aviso
-    // custa mais caro que a mensagem.
-    const r = await sendMeta(
-      (await db.from("channel_secrets").select("channel_token")
-        .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string,
-      `${canal.phone_number_id}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: destino,
-        type: "text",
-        text: { body: texto },
-      },
-    );
-    ok = r.ok;
-    if (!ok) {
-      console.error(
-        "operational-alert: envio falhou",
-        r.status,
-        JSON.stringify(r.data).slice(0, 200),
-      );
+    let ok = false;
+    if (rota) {
+      const r = await hybridSendText(rota, destino, texto);
+      ok = Boolean(r?.ok);
     }
+    if (!ok) {
+      // Sem rota híbrida (ou ela falhou) o alerta vale a mensagem oficial: perder o aviso
+      // custa mais caro que a mensagem.
+      const r = await sendMeta(
+        (await db.from("channel_secrets").select("channel_token")
+          .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string,
+        `${canal.phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: destino,
+          type: "text",
+          text: { body: texto },
+        },
+      );
+      ok = r.ok;
+      if (!ok) {
+        console.error(
+          "operational-alert: envio falhou",
+          r.status,
+          JSON.stringify(r.data).slice(0, 200),
+        );
+      }
+    }
+
+    await db.from("events").insert({
+      source: "operational-monitor",
+      event_type: ok ? "alert_delivered" : "alert_delivery_failed",
+      payload: {
+        keys: entregaveis.map((i) => i.key),
+        destino_sufixo: destino.slice(-4),
+        ...(options ? { dedupe_key: chave } : {}),
+      },
+    }).then(() => {}, () => {});
+    delivered = ok;
+    return { enviado: ok, motivo: ok ? undefined : "envio-falhou" };
+  } finally {
+    // A chave específica do 5895 só fica retida se houve entrega confirmada.
+    if (!delivered && options) await releaseDelivery(db, chave);
   }
-
-  await db.from("events").insert({
-    source: "operational-monitor",
-    event_type: ok ? "alert_delivered" : "alert_delivery_failed",
-    payload: { keys: entregaveis.map((i) => i.key), destino_sufixo: destino.slice(-4) },
-  }).then(() => {}, () => {});
-
-  return { enviado: ok, motivo: ok ? undefined : "envio-falhou" };
 }
 
 export type { Json };
