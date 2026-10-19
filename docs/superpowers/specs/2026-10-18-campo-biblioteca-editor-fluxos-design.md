@@ -1,7 +1,7 @@
 # Campo Soberano: biblioteca e editor visual de fluxos
 
 **Data:** 2026-10-18
-**Estado:** especificação pronta para revisão; implementação e deploy pendentes
+**Estado:** aprovada pelo usuário em 2026-10-19; implementação e deploy pendentes
 **Origem funcional:** Faculdade CECAPE, `origin/main` em `e337af7`; mudanças de referência `0452d9e` (editor), `f070b61` (simulador), `e30b3b7` (biblioteca) e `937979c` (carregamento sob demanda).
 **Destino:** repositório `evohub-bridge`, serviços `bridge/` e `web/` do Campo Soberano.
 
