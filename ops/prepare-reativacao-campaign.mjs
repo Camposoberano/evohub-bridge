@@ -24,7 +24,7 @@ const CFG = {
   // Template aprovado na Meta (Business Manager). Trocar pelo nome real quando aprovar.
   templateName: process.env.REATIVACAO_TEMPLATE ?? "reativacao_video_2026",
   templateLanguage: "pt_BR",
-  headerSlot: "producao_img", // imagem do header do template (lembrança de marca)
+  headerSlot: "reativacao_header", // slot dedicado (cand_10 limpa); não mexe no producao_img do funil
   videoSlot: "video_3", // vídeo entregue no clique (resultados reais)
   funnel: "mega-sorgo",
   // Copy do CTA pós-vídeo (texto livre, dentro da janela já aberta). Sem preço automático.
