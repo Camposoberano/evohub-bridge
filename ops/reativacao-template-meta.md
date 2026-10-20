@@ -7,7 +7,7 @@ WABA do canal 5895: `743886211614541`.
 - **Nome:** `reativacao_video_2026`  (minúsculas + underscore; se mudar, setar env `REATIVACAO_TEMPLATE`)
 - **Categoria:** Marketing
 - **Idioma:** Português (BR) — `pt_BR`
-- **Cabeçalho:** Mídia → **Imagem**. Subir um sample (a arte `producao_img`). No envio real o bridge troca pela URL viva do slot `producao_img`.
+- **Cabeçalho:** Mídia → **Imagem**. Sample = arte **cand_10 limpa** ("O vizinho ficou chocado…", HD 2816×1536, tag de slide removido) — em `D:\sementes\SORGO\Imagens\selecao-header\10-vizinho-chocado-LIMPA.png`. No envio o bridge usa o slot `reativacao_header` (a mesma arte, subida no storage).
 - **Corpo (copy C, sem variáveis):**
 
   > Tem produtor colhendo silagem de qualidade o ano todo com o Mega Sorgo Santa Elisa. Gravei um vídeo com os resultados — quer dar uma olhada?
