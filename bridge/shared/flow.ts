@@ -52,6 +52,15 @@ export type FlowStep = {
   template?: FlowTemplate;
   /** etiquetas aplicadas à conversa depois que a saída for aceita pelo provedor */
   labels?: string[];
+  /**
+   * Ao enviar este step, registra pedido de humano: pausa o funil SEM prazo, levanta o
+   * alerta e atribui ao Cícero. É o mesmo handoff do funil ramificado (shared/pedido-humano),
+   * mas disparado de dentro do fluxo — a resposta da campanha passa por `continueFlowOnReply`,
+   * não por `handleMenuClick`, então sem isto o lead que pede cotação ficaria só com etiqueta.
+   * `handoffContexto` entra no evento `pediu_humano` (ex.: { area_hectares: 2 }).
+   */
+  pedirHumano?: boolean;
+  handoffContexto?: Record<string, unknown>;
   /** kind=buttons — o WhatsApp aceita no máximo 3 */
   buttons?: FlowButton[];
   /** imagem no topo do cartão de botões */

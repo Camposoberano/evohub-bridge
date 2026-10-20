@@ -35,8 +35,57 @@ import {
   bloqueioPorContato,
   motivoDoBloqueio,
 } from "./gate-comercial.ts";
+import { registrarPedidoHumano } from "./pedido-humano.ts";
+import { assignConversation } from "./chatwoot.ts";
+import { accountForChannel } from "./accounts.ts";
+import { optionalEnv } from "./env.ts";
+import { descreveErro } from "./erros.ts";
 
 type Json = Record<string, unknown>;
+
+/**
+ * Pedido de humano disparado de dentro do fluxo (step com `pedirHumano`): pausa sem prazo,
+ * alerta e atribui ao Cícero — o mesmo handoff do funil ramificado, mas a resposta da
+ * campanha não passa por `handleMenuClick`, então é aqui que ele se repete. Nunca lança: é o
+ * caminho da resposta do cliente, e derrubá-lo deixaria o lead mudo.
+ */
+async function executarHandoff(
+  db: DbClient,
+  channel: Json,
+  from: string,
+  conversationId: string | null,
+  origem: "whatsapp" | "uazapi",
+  contexto: Record<string, unknown> | undefined,
+  campaignId: string,
+): Promise<void> {
+  try {
+    let chatwootConversationId: number | null = null;
+    if (conversationId) {
+      const { data: conv } = await db.from("conversations")
+        .select("chatwoot_conversation_id").eq("id", conversationId).maybeSingle();
+      const cw = (conv as Json | null)?.chatwoot_conversation_id;
+      chatwootConversationId = cw != null ? Number(cw) : null;
+    }
+    const pedido = await registrarPedidoHumano(db, {
+      conversationId,
+      channelId: String(channel.id),
+      chatwootConversationId,
+      origem,
+      contato: from,
+      contexto: { origem_fluxo: "campanha", campanha: campaignId, ...(contexto ?? {}) },
+    });
+    const assignee = Number(optionalEnv("CHATWOOT_ASSIGNEE_ID") ?? "0");
+    if (pedido.registrado && assignee > 0 && chatwootConversationId) {
+      await assignConversation(
+        chatwootConversationId,
+        assignee,
+        await accountForChannel(String(channel.id)),
+      );
+    }
+  } catch (e) {
+    console.error("flow: handoff (pedido-humano) falhou", descreveErro(e).slice(0, 160));
+  }
+}
 
 /**
  * Tira o contato do fluxo de vez porque a venda fechou ou o cliente disse que não compra.
@@ -328,6 +377,17 @@ export async function continueFlowOnReply(
       `${passo} -> ${r.position.stepId ?? "fim"}`,
       `enviados=${r.enviados} falhas=${r.falhas}`,
     );
+    if (r.pedirHumano) {
+      await executarHandoff(
+        db,
+        channel,
+        from,
+        estado.conversation_id,
+        ch.route ? "uazapi" : "whatsapp",
+        r.handoffContexto,
+        camp.id,
+      );
+    }
   } catch (e) {
     // Sem isto o estado ficaria em `processing` para sempre: nem o webhook (que busca
     // `waiting`) nem o loop de timeout voltariam nele, e o lead ficaria mudo no meio da

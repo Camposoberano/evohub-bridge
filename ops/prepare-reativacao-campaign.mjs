@@ -27,13 +27,18 @@ const CFG = {
   headerSlot: "reativacao_header", // slot dedicado (cand_10 limpa); não mexe no producao_img do funil
   videoSlot: "video_3", // vídeo entregue no clique (resultados reais)
   funnel: "mega-sorgo",
-  // Copy do CTA pós-vídeo (texto livre, dentro da janela já aberta). Sem preço automático.
-  ctaPergunta: "Quer que eu veja o melhor pacote e o preço certo pra sua área? 🌱",
-  ctaSim: "Quero cotação 💬",
-  ctaNao: "Agora não",
-  ctaConfirma: "Perfeito! Já vou te passar pro nosso especialista pra fechar os detalhes. 👨‍🌾",
-  ctaAck: "Tranquilo! Qualquer dúvida é só me chamar aqui. 👍",
-  labelInteresse: "interesse-video",
+  // Qualificação pós-vídeo (texto livre, dentro da janela já aberta). Sem preço automático:
+  // escolher a área registra o pacote e chama o Cícero, igual ao funil ramificado.
+  videoLegenda: "🎥 Dá uma olhada no resultado real no campo 👇",
+  areaPergunta: "📐 Pra eu já separar o volume certo: *qual área você pretende plantar?*",
+  // 1 ha → 4 kg, 2 ha → 10 kg, 4 ha → 20 kg; acima disso vai pra cotação com o Cícero.
+  pacotes: {
+    "1": { kg: 4, cobre: "1 hectare" },
+    "2": { kg: 10, cobre: "2 hectares" },
+    "4": { kg: 20, cobre: "4 hectares" },
+  },
+  maiorTexto: "Pra área acima de 4 hectares, me diga *quantos hectares* e sua *região (município/UF)* que o Cícero calcula o volume e a cotação exata. 👨‍🌾",
+  labels: ["interesse-video", "cotacao"],
   // Ritmo conservador: lista fria grande derruba quality rating se sair em rajada.
   pace: { horaInicio: 8, horaFim: 20, capInicial: 50, capIncremento: 5, capMaximo: 7000 },
 };
@@ -260,8 +265,14 @@ async function discover(db, env) {
   return { canal, videoUrl: String(video.url), headerUrl: String(header.url), templateStatus };
 }
 
-// ── monta o flow (mesma forma do teste reativacao-flow.test.ts) ──
+// Texto do pacote, sem preço — o Cícero confirma o valor (regra do dono).
+function textoPacote(kg, cobre) {
+  return `🌱 *Opção de ${kg} kg — atende ${cobre}.*\n\n🚚 *Frete grátis.*\n💸 Desconto progressivo conforme a quantidade, podendo chegar a *30% em pedidos acima de 100 kg*.\n\nJá anotei aqui e o Cícero confirma o valor exato pro seu pedido. 👨‍🌾`;
+}
+
+// ── monta o flow (abridor oficial → vídeo → qualifica área → pacote → handoff Cícero) ──
 function buildFlow(videoUrl, headerUrl) {
+  const p = CFG.pacotes;
   return {
     startId: "abertura",
     steps: [
@@ -276,14 +287,27 @@ function buildFlow(videoUrl, headerUrl) {
         fallbackNext: "video", // clique do template chega sem id de botão -> vai pro vídeo
       },
       { id: "video", kind: "media", media: { type: "video", url: videoUrl },
-        text: "🎥 Dá uma olhada no resultado real no campo 👇", delaySeg: 1, next: "cta" },
-      { id: "cta", kind: "buttons", text: CFG.ctaPergunta,
-        buttons: [{ id: "cotar", title: CFG.ctaSim }, { id: "depois", title: CFG.ctaNao }],
-        branches: { cotar: "cotar", depois: "ack" }, fallbackNext: "cotar" },
-      { id: "cotar", kind: "text", text: CFG.ctaConfirma, labels: [CFG.labelInteresse], next: "fim" },
+        text: CFG.videoLegenda, delaySeg: 1, next: "area" },
+      // Qualifica pela área. Lista (não botões) porque são 4 opções e o WhatsApp só aceita 3 botões.
+      { id: "area", kind: "list", text: CFG.areaPergunta,
+        sections: [{ title: "Sua área", rows: [
+          { id: "area_1", title: "1 hectare", description: `≈ ${p["1"].kg} kg de semente` },
+          { id: "area_2", title: "2 hectares", description: `≈ ${p["2"].kg} kg de semente` },
+          { id: "area_4", title: "4 hectares", description: `≈ ${p["4"].kg} kg de semente` },
+          { id: "area_mais", title: "Mais de 4 hectares", description: "a gente calcula junto" },
+        ] }],
+        branches: { area_1: "pac1", area_2: "pac2", area_4: "pac4", area_mais: "maior" },
+        fallbackNext: "maior" }, // texto livre: trata como área a definir
+      // Cada escolha registra o pacote, chama o Cícero (pedirHumano) e encerra o fluxo.
+      { id: "pac1", kind: "text", text: textoPacote(p["1"].kg, p["1"].cobre), labels: CFG.labels,
+        pedirHumano: true, handoffContexto: { area_hectares: 1, pacote_kg: p["1"].kg }, next: "fim" },
+      { id: "pac2", kind: "text", text: textoPacote(p["2"].kg, p["2"].cobre), labels: CFG.labels,
+        pedirHumano: true, handoffContexto: { area_hectares: 2, pacote_kg: p["2"].kg }, next: "fim" },
+      { id: "pac4", kind: "text", text: textoPacote(p["4"].kg, p["4"].cobre), labels: CFG.labels,
+        pedirHumano: true, handoffContexto: { area_hectares: 4, pacote_kg: p["4"].kg }, next: "fim" },
+      { id: "maior", kind: "text", text: CFG.maiorTexto, labels: CFG.labels,
+        pedirHumano: true, handoffContexto: { area_hectares: ">4" }, next: "fim" },
       { id: "fim", kind: "end" },
-      { id: "ack", kind: "text", text: CFG.ctaAck, next: "fim2" },
-      { id: "fim2", kind: "end" },
     ],
   };
 }
