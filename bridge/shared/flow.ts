@@ -17,8 +17,25 @@ export type FlowStepKind =
   | "media"
   | "buttons"
   | "list"
+  | "template"
   | "wait"
   | "end";
+
+/**
+ * Abridor oficial de janela fria. Lista fria no WhatsApp oficial tem a janela de 24h
+ * fechada: a Meta recusa texto/mídia/botão interativo e SÓ aceita um template aprovado
+ * (ver flow-runner). Este step manda esse template (com os botões quick-reply que já estão
+ * aprovados nele) e ESPERA o clique, igual a um `buttons`. O header de imagem é preenchido
+ * no envio por `headerMedia`. Só sai pelo canal oficial — nunca pela uazapi.
+ */
+export type FlowTemplate = {
+  /** nome do template aprovado na Meta (por WABA) */
+  name: string;
+  /** código do idioma, ex.: "pt_BR" */
+  language?: string;
+  /** header de mídia preenchido no envio (a imagem que faz o lead lembrar da marca) */
+  headerMedia?: { type: "image" | "video" | "document"; url: string };
+};
 
 export type FlowStep = {
   id: string;
@@ -31,6 +48,8 @@ export type FlowStep = {
     url: string;
     fileName?: string;
   };
+  /** kind=template — abridor oficial de janela fria (ver FlowTemplate) */
+  template?: FlowTemplate;
   /** etiquetas aplicadas à conversa depois que a saída for aceita pelo provedor */
   labels?: string[];
   /** kind=buttons — o WhatsApp aceita no máximo 3 */
@@ -72,7 +91,8 @@ export type Flow = {
 
 /** Steps que param o fluxo aguardando o lead. `wait` pausa por tempo, não por resposta. */
 export function esperaResposta(step: FlowStep): boolean {
-  return step.kind === "buttons" || step.kind === "list";
+  return step.kind === "buttons" || step.kind === "list" ||
+    step.kind === "template";
 }
 
 export function stepById(flow: Flow, id: string): FlowStep | undefined {
@@ -233,6 +253,21 @@ export function validateFlow(flow: Flow): FlowProblema[] {
     }
     if (s.kind === "media" && !s.media?.url) {
       problemas.push({ stepId: s.id, problema: "media sem url" });
+    }
+    if (s.kind === "template") {
+      if (!s.template?.name) {
+        problemas.push({ stepId: s.id, problema: "template sem name" });
+      }
+      // A resposta a um template quick-reply chega como `type:"button"`, que o webhook
+      // entrega sem id de botão (replyId null) -> o avanço só acha caminho por fallbackNext.
+      // Sem ele, quem clica fica preso depois de abrir a janela, que é o pior dos mundos:
+      // pagou o template e não entregou o que prometeu.
+      if (!s.fallbackNext && !Object.keys(s.branches ?? {}).length) {
+        problemas.push({
+          stepId: s.id,
+          problema: "template sem fallbackNext/branches — o clique não teria pra onde ir",
+        });
+      }
     }
     if (s.kind === "text" && !s.text?.trim()) {
       problemas.push({ stepId: s.id, problema: "texto vazio" });

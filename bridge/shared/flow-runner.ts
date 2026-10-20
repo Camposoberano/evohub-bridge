@@ -78,6 +78,40 @@ async function enviarStep(
   to: string,
   step: FlowStep,
 ): Promise<boolean> {
+  // Abridor oficial de janela fria: template NUNCA sai pela uazapi. É um conceito do
+  // WhatsApp oficial (Meta Cloud) e é a ÚNICA coisa que a Meta aceita fora da janela de 24h
+  // — texto/mídia/botão interativo são recusados até o lead responder. Por isso ignora a
+  // rota híbrida e vai direto no oficial; sem token oficial, não há como abrir.
+  if (step.kind === "template") {
+    if (!ch.token || !ch.phoneNumberId || !step.template?.name) return false;
+    const components: Json[] = [];
+    const hm = step.template.headerMedia;
+    if (hm?.url) {
+      components.push({
+        type: "header",
+        parameters: [{ type: hm.type, [hm.type]: { link: hm.url } }],
+      });
+    }
+    const body: Json = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: step.template.name,
+        language: { code: step.template.language ?? "pt_BR" },
+        ...(components.length ? { components } : {}),
+      },
+    };
+    const r = await sendMeta(ch.token, `${ch.phoneNumberId}/messages`, body);
+    if (!r.ok) {
+      console.error(
+        `flow: template ${step.template.name} falhou no oficial:`,
+        JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200),
+      );
+    }
+    return r.ok;
+  }
+
   if (ch.route) {
     let r = null;
     if (step.kind === "text" && step.text) {
