@@ -22,7 +22,7 @@ const CFG = {
   campaignName: "Reativação — vídeo resultados — frios",
   channelMatch: "5895", // canal WhatsApp oficial
   // Template aprovado na Meta (Business Manager). Trocar pelo nome real quando aprovar.
-  templateName: process.env.REATIVACAO_TEMPLATE ?? "reativacao_video_2026",
+  templateName: process.env.REATIVACAO_TEMPLATE ?? "reativacao_video_b_2026",
   templateLanguage: "pt_BR",
   headerSlot: "reativacao_header", // slot dedicado (cand_10 limpa); não mexe no producao_img do funil
   videoSlot: "video_reativacao", // anúncio HD 9x16 (22s) entregue no clique
