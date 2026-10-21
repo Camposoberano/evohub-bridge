@@ -29,6 +29,8 @@ const CFG = {
   funnel: "mega-sorgo",
   // Qualificação pós-vídeo (texto livre, dentro da janela já aberta). Sem preço automático:
   // escolher a área registra o pacote e chama o Cícero, igual ao funil ramificado.
+  // abridor uazapi (não-oficial, sem template): cartão imagem + botão. Corpo = copy C.
+  aberturaUazapiTexto: "Tem produtor colhendo silagem de qualidade o ano todo com o Mega Sorgo Santa Elisa. Gravei um vídeo com os resultados — quer dar uma olhada?",
   videoLegenda: "🎥 Dá uma olhada no resultado real no campo 👇",
   areaPergunta: "📐 Pra eu já separar o volume certo: *qual área você pretende plantar?*",
   // 1 ha → 4 kg, 2 ha → 10 kg, 4 ha → 20 kg; acima disso vai pra cotação com o Cícero.
@@ -39,9 +41,21 @@ const CFG = {
   },
   maiorTexto: "Pra área acima de 4 hectares, me diga *quantos hectares* e sua *região (município/UF)* que o Cícero calcula o volume e a cotação exata. 👨‍🌾",
   labels: ["interesse-video", "cotacao"],
-  // Ritmo conservador: lista fria grande derruba quality rating se sair em rajada.
-  pace: { horaInicio: 8, horaFim: 20, capInicial: 50, capIncremento: 5, capMaximo: 7000 },
+  // Ritmo: começa 25/dia, +5/dia, teto 100. Janela 8–18h. O motor (campaign-pace.intervaloMs)
+  // espalha o cap do dia igualmente na janela — sem intervalo fixo, adapta conforme o cap cresce.
+  pace: { horaInicio: 8, horaFim: 18, capInicial: 25, capIncremento: 5, capMaximo: 100 },
 };
+
+// Multi-disparador: 5 senders paralelos (2 oficiais + 3 uazapi), cada um = 1 campanha com seu
+// canal + abridor + ritmo próprio (o pump roda todas em paralelo). Oficiais pegam as fatias
+// fixas do topo da lista (melhores regiões); os uazapi dividem o resto igualmente.
+const SENDERS = [
+  { key: "reativacao-5895-of", channelName: "5895", opener: "template", fixo: 1500 },
+  { key: "reativacao-6836-of", channelName: "6836", opener: "template", fixo: 1500 },
+  { key: "reativacao-5895-uz", channelName: "5895", opener: "buttons" },
+  { key: "reativacao-6836-uz", channelName: "6836", opener: "buttons" },
+  { key: "reativacao-0595-uz", channelName: "0595", opener: "buttons" },
+];
 
 // Nordeste menos Bahia sai (8 estados). Mantém BA; sobram 19 estados.
 const REMOVE_UF = new Set(["MA", "PI", "CE", "RN", "PB", "PE", "AL", "SE"]);
@@ -270,22 +284,33 @@ function textoPacote(kg, cobre) {
   return `🌱 *Opção de ${kg} kg — atende ${cobre}.*\n\n🚚 *Frete grátis.*\n💸 Desconto progressivo conforme a quantidade, podendo chegar a *30% em pedidos acima de 100 kg*.\n\nJá anotei aqui e o Cícero confirma o valor exato pro seu pedido. 👨‍🌾`;
 }
 
-// ── monta o flow (abridor oficial → vídeo → qualifica área → pacote → handoff Cícero) ──
-function buildFlow(videoUrl, headerUrl) {
+// Abridor: oficial = template (abre janela fria, pago); uazapi = botões nativos (sem janela,
+// grátis). O resto do flow é idêntico. flow-runner já manda cada um pela rota certa (template
+// só oficial; botões uazapi-first).
+function abertura(openerType, headerUrl) {
+  if (openerType === "template") {
+    return {
+      id: "abertura", kind: "template",
+      template: { name: CFG.templateName, language: CFG.templateLanguage, headerMedia: { type: "image", url: headerUrl } },
+      fallbackNext: "video", // clique do template chega sem id de botão
+    };
+  }
+  // uazapi: cartão com imagem + 1 botão; clique vai pro vídeo
+  return {
+    id: "abertura", kind: "buttons",
+    text: CFG.aberturaUazapiTexto, imageUrl: headerUrl,
+    buttons: [{ id: "ver", title: "Quero ver o vídeo" }],
+    branches: { ver: "video" }, fallbackNext: "video",
+  };
+}
+
+// ── monta o flow (abridor → vídeo → qualifica área → pacote → handoff Cícero) ──
+function buildFlow(openerType, videoUrl, headerUrl) {
   const p = CFG.pacotes;
   return {
     startId: "abertura",
     steps: [
-      {
-        id: "abertura",
-        kind: "template",
-        template: {
-          name: CFG.templateName,
-          language: CFG.templateLanguage,
-          headerMedia: { type: "image", url: headerUrl },
-        },
-        fallbackNext: "video", // clique do template chega sem id de botão -> vai pro vídeo
-      },
+      abertura(openerType, headerUrl),
       { id: "video", kind: "media", media: { type: "video", url: videoUrl },
         text: CFG.videoLegenda, delaySeg: 1, next: "area" },
       // Qualifica pela área. Lista (não botões) porque são 4 opções e o WhatsApp só aceita 3 botões.
@@ -327,14 +352,109 @@ function buildCampaign(flow) {
   };
 }
 
+// ─────────────────────── multi-disparador (5 senders) ───────────────────────
+async function getMedia(db) {
+  const media = await db.scan("funnel_media", "slot,url,active",
+    `funnel=eq.${CFG.funnel}&active=eq.true&slot=in.(${CFG.videoSlot},${CFG.headerSlot})`);
+  const video = media.find((m) => m.slot === CFG.videoSlot && m.url);
+  const header = media.find((m) => m.slot === CFG.headerSlot && m.url);
+  if (!video) fail(`slot de vídeo ${CFG.videoSlot} ausente/inativo`);
+  if (!header) fail(`slot de imagem ${CFG.headerSlot} ausente/inativo`);
+  return { videoUrl: String(video.url), headerUrl: String(header.url) };
+}
+
+async function templateStatusFor(env, wabaId) {
+  const metaToken = env.META_ACCESS_TOKEN;
+  if (!metaToken || !wabaId) return "SEM WABA/TOKEN";
+  const graph = env.META_GRAPH_VERSION || "v21.0";
+  const r = await fetch(`https://graph.facebook.com/${graph}/${wabaId}/message_templates?limit=200&fields=name,status,language`,
+    { headers: { Authorization: `Bearer ${metaToken}` } });
+  if (!r.ok) return `erro Graph ${r.status}`;
+  const d = await r.json();
+  const t = (d.data || []).find((x) => x.name === CFG.templateName);
+  return t ? `${t.status} (${t.language})` : "NÃO EXISTE";
+}
+
+// Canal por NOME exato. Oficial (template) exige phone_number_id+waba; uazapi (botões) não.
+async function discoverChannel(db, env, name, opener) {
+  const canais = await db.scan("channels", "id,name,phone_number,phone_number_id,waba_id,status,type");
+  const canal = canais.find((c) => String(c.name) === name && String(c.type).toLowerCase() === "whatsapp");
+  if (!canal) fail(`canal ${name} não encontrado`);
+  let templateStatus = "n/a (uazapi)";
+  if (opener === "template") {
+    if (!canal.phone_number_id) fail(`canal ${name} sem phone_number_id (precisa oficial)`);
+    templateStatus = await templateStatusFor(env, canal.waba_id);
+  }
+  return { canal, templateStatus };
+}
+
+function buildCampaignFor(id, name, flow) {
+  return { id, name, template: "(fluxo)", language: CFG.templateLanguage, steps: [], flow,
+    pace: { ...CFG.pace }, delayMin: 0, delayMax: 0, createdAt: new Date().toISOString() };
+}
+
+// Fatia a lista: oficiais pegam as cotas fixas do topo (melhores regiões); os uazapi dividem o resto.
+function splitEntreSenders(phones) {
+  const slices = {}; let idx = 0;
+  for (const s of SENDERS.filter((x) => x.fixo)) { slices[s.key] = phones.slice(idx, idx + s.fixo); idx += s.fixo; }
+  const resto = phones.slice(idx);
+  const uz = SENDERS.filter((x) => !x.fixo);
+  const per = Math.ceil(resto.length / Math.max(1, uz.length));
+  uz.forEach((s, i) => { slices[s.key] = resto.slice(i * per, (i + 1) * per); });
+  return slices;
+}
+
+async function multi(db, env, apply, argv) {
+  const { phones } = await deriveTargets(db);
+  const { videoUrl, headerUrl } = await getMedia(db);
+  const slices = splitEntreSenders(phones);
+
+  console.log("=== Multi-disparador (dry-run" + (apply ? "/APPLY" : "") + ") ===");
+  console.log("ritmo por campanha:", JSON.stringify(CFG.pace), "\n");
+
+  const planos = [];
+  for (const s of SENDERS) {
+    const { canal, templateStatus } = await discoverChannel(db, env, s.channelName, s.opener);
+    const fatia = slices[s.key] || [];
+    const pronto = s.opener === "buttons" || /^APPROVED/.test(templateStatus);
+    planos.push({ s, canal, templateStatus, fatia, pronto });
+    console.log(`${s.key.padEnd(20)} canal=${s.channelName} abridor=${s.opener.padEnd(8)} fatia=${String(fatia.length).padStart(5)} template=${templateStatus} -> ${pronto ? "PRONTO" : "SEGURADO"}`);
+  }
+  const total = planos.reduce((a, p) => a + p.fatia.length, 0);
+  console.log("\nTOTAL distribuído:", total, "de", phones.length, "(sobra", phones.length - total, ")");
+
+  if (!apply) { console.log("\n(dry-run) nada gravado. --multi --apply cria/enfileira as campanhas PRONTAS."); return; }
+
+  const state = (await db.storageDownloadJson(CAMPAIGNS_FILE)) ?? { campaigns: [], targets: {} };
+  if (!Array.isArray(state.campaigns)) state.campaigns = [];
+  for (const p of planos) {
+    if (!p.pronto) { console.log(`• ${p.s.key}: PULADO (template ${p.templateStatus})`); continue; }
+    if (!p.fatia.length) { console.log(`• ${p.s.key}: sem contatos`); continue; }
+    const flow = buildFlow(p.s.opener, videoUrl, headerUrl);
+    if (!state.campaigns.some((c) => c?.id === p.s.key)) {
+      state.campaigns.push(buildCampaignFor(p.s.key, `Reativação ${p.s.channelName} ${p.s.opener}`, flow));
+      await db.storageUploadJson(CAMPAIGNS_FILE, state);
+    }
+    const rows = p.fatia.map((contact_key) => ({ campaign_id: p.s.key, contact_key, channel_id: p.canal.id, status: "pending" }));
+    for (let i = 0; i < rows.length; i += QUEUE_BATCH) await db.enqueue(rows.slice(i, i + QUEUE_BATCH));
+    const check = await db.scan("campaign_queue", "status", `campaign_id=eq.${encodeURIComponent(p.s.key)}`);
+    console.log(`• ${p.s.key}: enfileirados ${p.fatia.length} | pending ${check.filter((r) => r.status === "pending").length}`);
+  }
+  console.log("\nDisparo começa no próximo tick (1min), dentro de 8–18h BRT, 25/dia subindo +5 (teto 100) por campanha.");
+}
+
 async function main(argv = process.argv.slice(2)) {
   const apply = argv.includes("--apply");
+  const ti = argv.indexOf("--test");
+  const testPhone = ti >= 0 ? argv[ti + 1] : null; // --test <fone>: enfileira só esse número
   const env = await loadEnv();
   const db = rest(env);
 
+  if (argv.includes("--multi")) return multi(db, env, apply, argv);
+
   const { phones, resumo } = await deriveTargets(db);
   const found = await discover(db, env);
-  const flow = buildFlow(found.videoUrl, found.headerUrl);
+  const flow = buildFlow("template", found.videoUrl, found.headerUrl);
   const campaign = buildCampaign(flow);
 
   console.log("=== Campanha de reativação (dry-run) ===");
@@ -348,38 +468,42 @@ async function main(argv = process.argv.slice(2)) {
   console.log("TOTAL a enfileirar:", phones.length);
   console.log("amostra:", phones.slice(0, 3).map((p) => p.slice(-4)).join(" "), "...");
 
-  if (!apply) {
-    console.log("\n(dry-run) nada foi gravado. Rode com --apply para criar e enfileirar.");
+  // alvo: --test enfileira só o número informado; --apply enfileira a lista toda.
+  const alvo = testPhone ? [toE164(testPhone)].filter((p) => p.length >= 12) : phones;
+
+  if (!apply && !testPhone) {
+    console.log(`\n(dry-run) nada foi gravado. --test <fone> enfileira 1 número; --apply enfileira os ${phones.length}.`);
     return;
   }
 
-  // ── apply: trava dura ──
+  // writes exigem template APPROVED
   if (!/^APPROVED/.test(found.templateStatus)) {
-    fail(`--apply recusado: template "${CFG.templateName}" não está APPROVED (está: ${found.templateStatus}). Crie/aprove no Meta Business Manager primeiro.`);
+    fail(`recusado: template "${CFG.templateName}" não está APPROVED (está: ${found.templateStatus}). Crie/aprove no Meta Business Manager primeiro.`);
   }
-  if (!phones.length) fail("--apply recusado: lista vazia");
+  if (!alvo.length) fail("recusado: nenhum número válido pra enfileirar");
 
+  // Garante a campanha em campaigns.json — cria se faltar, reaproveita se já existe. Assim
+  // --test e --apply compõem: o teste cria a campanha com 1 número, o apply depois só adiciona
+  // o resto (o enqueue é upsert ignore-duplicates, ninguém entra duas vezes).
   const state = (await db.storageDownloadJson(CAMPAIGNS_FILE)) ?? { campaigns: [], targets: {} };
   if (!Array.isArray(state.campaigns)) state.campaigns = [];
-  if (state.campaigns.some((c) => c?.id === campaign.id)) {
-    fail(`--apply recusado: campanha ${campaign.id} já existe em campaigns.json`);
-  }
-  const existing = await db.scan("campaign_queue", "status", `campaign_id=eq.${encodeURIComponent(campaign.id)}`);
-  if (existing.some((r) => r.status !== "skipped")) {
-    fail(`--apply recusado: já há itens não-skipped na fila de ${campaign.id}`);
+  if (!state.campaigns.some((c) => c?.id === campaign.id)) {
+    state.campaigns.push(campaign);
+    await db.storageUploadJson(CAMPAIGNS_FILE, state);
+    console.log("campanha criada em campaigns.json");
+  } else {
+    console.log("campanha já existe em campaigns.json — reaproveitando");
   }
 
-  state.campaigns.push(campaign);
-  await db.storageUploadJson(CAMPAIGNS_FILE, state);
-  const rows = phones.map((contact_key) => ({
+  const rows = alvo.map((contact_key) => ({
     campaign_id: campaign.id, contact_key, channel_id: found.canal.id, status: "pending",
   }));
   for (let i = 0; i < rows.length; i += QUEUE_BATCH) await db.enqueue(rows.slice(i, i + QUEUE_BATCH));
 
   const check = await db.scan("campaign_queue", "status", `campaign_id=eq.${encodeURIComponent(campaign.id)}`);
   const pend = check.filter((r) => r.status === "pending").length;
-  console.log(`\n(apply) campanha gravada e ${pend} contatos enfileirados (pending).`);
-  console.log("O disparo começa no próximo tick do loop da bridge, dentro de 8–20h BRT.");
+  console.log(`\n${testPhone ? "(test)" : "(apply)"} enfileirados ${alvo.length} número(s). Total pending na fila: ${pend}.`);
+  console.log("O disparo começa no próximo tick do loop (1min), dentro de 8–20h BRT.");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

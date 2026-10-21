@@ -97,6 +97,29 @@ Deno.test("cada área vai pro pacote certo e pede humano", () => {
   }
 });
 
+// Variante uazapi: abridor é um step `buttons` (sem template). O resto do flow é igual.
+function flowReativacaoUazapi(): Flow {
+  const f = flowReativacao();
+  f.steps[0] = {
+    id: "abertura", kind: "buttons",
+    text: "Gravei um vídeo com os resultados — quer dar uma olhada?",
+    imageUrl: "https://exemplo/header.jpg",
+    buttons: [{ id: "ver", title: "Quero ver o vídeo" }],
+    branches: { ver: "video" }, fallbackNext: "video",
+  };
+  return f;
+}
+
+Deno.test("abridor uazapi (botões) é válido e vai pro vídeo", () => {
+  const flow = flowReativacaoUazapi();
+  assertEquals(validateFlow(flow), []);
+  const ab = stepById(flow, "abertura")!;
+  assertEquals(ab.kind, "buttons");
+  assert(esperaResposta(ab));
+  assertEquals(resolveNext(ab, "ver"), "video"); // clique no botão nativo
+  assertEquals(resolveNext(ab, null), "video"); // fallback
+});
+
 Deno.test("template sem name ou sem destino é recusado", () => {
   const ruim: Flow = {
     steps: [{ id: "t", kind: "template", template: { name: "" } }],
