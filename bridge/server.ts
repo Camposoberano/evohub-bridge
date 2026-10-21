@@ -111,9 +111,13 @@ import {
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
 import { flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
-import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
+import { PACE_PADRAO } from "./shared/campaign-pace.ts";
 import {
-  campanhasComFila,
+  chooseCampaignRotation,
+  ROTATION_CAMPAIGNS,
+  type CampaignRotationSnapshot,
+} from "./shared/campaign-rotation.ts";
+import {
   devolverReserva,
   enviadosHoje,
   marcarEnviado,
@@ -122,7 +126,8 @@ import {
   marcarPulado,
   marcarResultadoIncerto,
   pausarCampanha,
-  reservarProximoItem,
+  pendentesElegiveis,
+  reservarProximoItemRotacao,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
 import { validarContatoAntesDaCampanha } from "./shared/campaign-preflight.ts";
@@ -1346,11 +1351,8 @@ async function runRecoveryChain() {
   );
 }
 
-// Fila de campanha — entrega UM contato por vez, no ritmo configurado.
-//
-// O loop roda de minuto em minuto, mas quem decide se manda é `podeEnviarAgora`: janela de
-// horário, teto do dia (que sobe pela rampa) e intervalo desde o último envio. Um contato por
-// tick no máximo — é o que espalha 200 mensagens por 14 horas em vez de despejá-las juntas.
+// Rotação das campanhas 5895, 0595 e 6836: um contato por vez, com teto por número.
+// O intervalo global ocupa a janela restante e encurta quando um número está atrasado.
 // Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
 const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
 
@@ -1361,8 +1363,8 @@ function startCampaignQueueLoop() {
   // folga. Duas rodadas simultâneas liam `enviadosHoje` e `ultimoEnvioAt` antes de qualquer
   // uma gravar, as duas decidiam "pode enviar", e o ritmo virava rajada.
   //
-  // A reserva transacional impede duas réplicas de pegar contatos da mesma campanha. Este
-  // bloqueio local também evita ticks sobrepostos e mantém o loop serial dentro do processo.
+  // A reserva transacional impede duas réplicas de processar qualquer uma das quatro filas
+  // ao mesmo tempo. Este bloqueio local também evita ticks sobrepostos no processo.
   let rodando = false;
   const run = async () => {
     if (rodando) return;
@@ -1376,25 +1378,28 @@ function startCampaignQueueLoop() {
           idAbandonada,
         );
       }
-      const campanhas = await campanhasComFila(db);
-      if (!campanhas.length) return;
-
       const state = await readCampaigns();
+      const rotationSnapshots = await Promise.all(ROTATION_CAMPAIGNS.map(async (campaignId) => {
+        const camp = state.campaigns.find((c) => c.id === campaignId);
+        if (!camp?.flow) throw new Error(`campanha da rotação ausente: ${campaignId}`);
+        const [pending, sentToday, lastSentAt] = await Promise.all([
+          pendentesElegiveis(db, campaignId),
+          enviadosHoje(db, campaignId),
+          ultimoEnvioAt(db, campaignId),
+        ]);
+        return {
+          campaignId, pending, sentToday, lastSentAt,
+          createdAt: Date.parse(camp.paceStartAt ?? camp.createdAt),
+          pace: { ...PACE_PADRAO, ...(camp.pace ?? {}) },
+        } satisfies CampaignRotationSnapshot;
+      }));
+      const rotation = chooseCampaignRotation(rotationSnapshots, Date.now());
+      const campanhas = rotation ? [rotation.campaignId] : [];
       for (const campaignId of campanhas) {
         const camp = state.campaigns.find((c) => c.id === campaignId);
         if (!camp?.flow) continue;
 
-        const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
-        const decisao = podeEnviarAgora({
-          cfg,
-          inicioCampanha: Date.parse(camp.paceStartAt ?? camp.createdAt),
-          enviadosHoje: await enviadosHoje(db, campaignId),
-          ultimoEnvioAt: await ultimoEnvioAt(db, campaignId),
-          now: Date.now(),
-        });
-        if (!decisao.enviar) continue;
-
-        const item = await reservarProximoItem(db, campaignId);
+        const item = await reservarProximoItemRotacao(db, campaignId);
         if (!item) continue;
 
         let runFlowIniciado = false;
@@ -1504,19 +1509,20 @@ function startCampaignQueueLoop() {
           // A decisão inicial evita reservar quando já sabemos que é cedo. Revalidamos
           // depois da reserva e do preflight: outra réplica pode ter concluído um envio
           // enquanto este worker aguardava chamadas externas.
-          const [enviadosRecentes, ultimoEnvioRecente] = await Promise.all([
-            enviadosHoje(db, campaignId),
-            ultimoEnvioAt(db, campaignId),
-          ]);
+          const freshSnapshots = await Promise.all(ROTATION_CAMPAIGNS.map(async (id) => {
+            const source = rotationSnapshots.find((snapshot) => snapshot.campaignId === id)!;
+            const [pending, sentToday, lastSentAt] = await Promise.all([
+              pendentesElegiveis(db, id), enviadosHoje(db, id), ultimoEnvioAt(db, id),
+            ]);
+            return {
+              ...source,
+              pending: pending + (id === campaignId ? 1 : 0),
+              sentToday, lastSentAt,
+            };
+          }));
           const checkedAt = Date.now();
-          const decisaoAtual = podeEnviarAgora({
-            cfg,
-            inicioCampanha: Date.parse(camp.paceStartAt ?? camp.createdAt),
-            enviadosHoje: enviadosRecentes,
-            ultimoEnvioAt: ultimoEnvioRecente,
-            now: checkedAt,
-          });
-          if (!decisaoAtual.enviar) {
+          const decisionNow = chooseCampaignRotation(freshSnapshots, checkedAt);
+          if (decisionNow?.campaignId !== campaignId) {
             await devolverReserva(db, item.id);
             continue;
           }
@@ -1578,7 +1584,7 @@ function startCampaignQueueLoop() {
   };
   setTimeout(run, 120_000);
   setInterval(run, CAMPAIGN_QUEUE_INTERVAL_MS);
-  console.log("campaign-queue loop ON (1min, ritmo por campanha)");
+  console.log("campaign-queue loop ON (1min, rotação por número)");
 }
 
 const DECLINE_GUARD_INTERVAL_MS = 5 * 60_000;
