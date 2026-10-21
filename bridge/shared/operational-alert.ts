@@ -42,6 +42,7 @@ const ENTREGAVEIS = new Set([
   // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
   // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
   "uazapi_instance_disconnected",
+  "uazapi_webhook_missing",
   // Arquivo do funil sumido do storage: a peça sai sem imagem e só repondo o arquivo resolve.
   "midia_indisponivel",
   // Mensagem de cliente que só apareceu na varredura (não veio pelo webhook): entrou sem
@@ -60,6 +61,7 @@ const TITULOS: Record<string, string> = {
   catchup_degradado: "Varredura de entrada da uazapi degradada (mensagem perdida pode não ser recuperada)",
   inbound_recovered: "Mensagem de cliente recuperada fora do webhook (responder no Chatwoot)",
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
+  uazapi_webhook_missing: "Número WhatsApp sem webhook ativo para este Hub (respostas dos clientes não chegam)",
   midia_indisponivel: "Mídia do funil sumiu do storage (peça saindo sem imagem)",
   channel_disconnected: "Canal desconectado",
   social_token_invalid: "Token de canal social inválido",
@@ -85,6 +87,28 @@ const TITULOS: Record<string, string> = {
 // - híbrido (5895, 6836): canal oficial cujo número é o `owner` de uma instância. Se o
 //   `owner` vier vazio, vale a instância com o mesmo nome do canal.
 export type InstanciaUazapi = { name: string; number: string | null; status: string };
+
+export function temWebhookUazapiDoHub(
+  webhooks: unknown,
+  basePublica: string,
+): boolean {
+  let destino: URL;
+  try {
+    destino = new URL("/uazapi-webhook", basePublica);
+  } catch {
+    return false;
+  }
+  return Array.isArray(webhooks) && webhooks.some((hook) => {
+    if (!hook || typeof hook !== "object" || hook.enabled !== true) return false;
+    if (!Array.isArray(hook.events) || !hook.events.includes("messages")) return false;
+    try {
+      const url = new URL(String(hook.url ?? ""));
+      return url.origin === destino.origin && url.pathname === destino.pathname;
+    } catch {
+      return false;
+    }
+  });
+}
 
 // Igualdade, nunca substring: "disconnected" contém "connected".
 export function instanciaConectada(status: string | null | undefined): boolean {

@@ -39,6 +39,12 @@ export function cliqueRespondeEspera(
     clicouEm >= aguardandoDesde;
 }
 
+export function respostaInterativaRecuperada(m: Json): string {
+  const content = m.content && typeof m.content === "object" ? m.content as Json : {};
+  const id = m.buttonOrListid ?? content.selectedButtonID ?? content.selectedRowID;
+  return typeof id === "string" ? id.trim() : "";
+}
+
 const MIN = 60_000;
 const H = 60 * MIN;
 /**
@@ -113,6 +119,7 @@ export function candidatasARecuperar(
     // /message/find também devolve sinalização de chamadas. Isso não é mensagem
     // de cliente e não deve virar conversa nem alerta de recuperação.
     if (m.id.startsWith("call_") || /call/i.test(String(m.messageType ?? ""))) return false;
+    if (/^ReactionMessage$/i.test(String(m.messageType ?? ""))) return false;
     const t = msDoTimestamp(m.messageTimestamp);
     return t >= desde && t <= ate;
   });
@@ -478,9 +485,7 @@ export async function recuperarEntradaUazapi(
         const anexos = isMedia(tipo)
           ? await baixarMidia(token, String(m.messageid ?? id), tipo)
           : undefined;
-        const respostaInterativa = /buttonsresponse|listresponse/i.test(tipo)
-          ? String(m.buttonOrListid ?? (m.content as Json | undefined)?.selectedButtonID ?? "")
-          : "";
+        const respostaInterativa = respostaInterativaRecuperada(m);
         // O webhook pode nunca ter recebido o clique. A reserva atômica do passo
         // impede que uma rodada de recuperação e um webhook tardio enviem duas vezes.
         if (respostaInterativa) {

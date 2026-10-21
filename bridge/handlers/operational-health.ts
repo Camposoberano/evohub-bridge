@@ -3,11 +3,12 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { getMeta } from "../shared/hub.ts";
 import {
   avaliarInstanciasUazapi,
+  temWebhookUazapiDoHub,
   avaliarSilencio,
   entregarAlertas,
   type OperationalIssue,
 } from "../shared/operational-alert.ts";
-import { listInstances, uazapiConfigured } from "../shared/uazapi.ts";
+import { instGet, listInstances, uazapiConfigured } from "../shared/uazapi.ts";
 import {
   admin,
   claimDeliveryWithTtl,
@@ -428,12 +429,35 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   // 3c) instância uazapi caída com o canal `active` no banco (6836, 10/09). Uma consulta
   //     por rodada; uazapi inacessível não é instância caída — não vira alarme.
   let instanciasCaidas: string[] = [];
+  let webhooksAusentes: string[] = [];
   if (uazapiConfigured()) {
     try {
-      instanciasCaidas = avaliarInstanciasUazapi(
-        activeChannels,
-        await listInstances(),
-      );
+      const instancias = await listInstances();
+      instanciasCaidas = avaliarInstanciasUazapi(activeChannels, instancias);
+      const basePublica = optionalEnv("BRIDGE_PUBLIC_BASE");
+      if (basePublica) {
+        const digitos = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+        const checks = await Promise.all(activeChannels
+          .filter((c) => c.type === "whatsapp")
+          .map(async (canal): Promise<string | null> => {
+            const numero = digitos(canal.phone_number);
+            const instancia = instancias.find((i) =>
+              i.name === canal.external_id || i.name === canal.name ||
+              (numero.length >= 10 && digitos(i.number) === numero)
+            );
+            if (!instancia?.token || !/^(connected|open)$/i.test(instancia.status)) return null;
+            try {
+              const hook = await instGet("/webhook", instancia.token);
+              if (!hook.ok) return null;
+              return temWebhookUazapiDoHub(hook.data, basePublica)
+                ? null
+                : `${String(canal.name)}: webhook do Hub ausente`;
+            } catch {
+              return null;
+            }
+          }));
+        webhooksAusentes = checks.filter((x): x is string => x !== null);
+      }
     } catch {
       // erro de rede na uazapi não é instância desconectada
     }
@@ -535,6 +559,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: instanciasCaidas.length,
       detail: instanciasCaidas.join("; ") || undefined,
+    },
+    {
+      key: "uazapi_webhook_missing",
+      severity: "critical",
+      count: webhooksAusentes.length,
+      detail: webhooksAusentes.join("; ") || undefined,
     },
     {
       key: "canal_nao_cadastrado",
