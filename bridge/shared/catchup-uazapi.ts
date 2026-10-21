@@ -15,8 +15,8 @@
 // 2. Só entra o que tem mais de 30 minutos (ver MARGEM_WEBHOOK_MS). Se a varredura
 //    gravasse antes do webhook, ele bateria no claim, veria "duplicate" e pularia a
 //    automação — o bot deixaria de responder uma mensagem que chegou normalmente.
-// 3. Grava pelo `ingestInbound` direto, sem automação: resposta automática para quem escreveu
-//    há horas é pior que nenhuma. Quem responde é o atendente — por isso o monitor avisa.
+// 3. Mensagens comuns são gravadas sem automação e avisadas ao atendente. Um clique
+//    explícito em fluxo ainda aguardando deve avançar esse fluxo uma única vez.
 import type { DbClient } from "./supabase.ts";
 import { releaseDeliveryIfOlderThan } from "./supabase.ts";
 import { accountForChannel } from "./accounts.ts";
@@ -24,8 +24,20 @@ import { ingestInbound, type InboundAttachment } from "./inbound.ts";
 import { adminGet, instPost, uazapiConfigured } from "./uazapi.ts";
 import { consultaEmLotes } from "./lotes.ts";
 import { descreveErro } from "./erros.ts";
+import { continueFlowOnReply } from "./flow-inbound.ts";
+import { findWaitingFlow } from "./flow-state.ts";
 
 type Json = Record<string, unknown>;
+
+export function cliqueRespondeEspera(
+  espera: { channel_id: unknown; waiting_since: unknown } | null,
+  canalId: unknown,
+  clicouEm: number,
+): boolean {
+  const aguardandoDesde = Date.parse(String(espera?.waiting_since ?? ""));
+  return espera?.channel_id === canalId && Number.isFinite(aguardandoDesde) &&
+    clicouEm >= aguardandoDesde;
+}
 
 const MIN = 60_000;
 const H = 60 * MIN;
@@ -206,10 +218,22 @@ async function baixarMidia(
 
 // Canal ATIVO da instância. Canal inativo fica de fora de propósito: o Mato Grosso continua
 // na nossa conta uazapi, mas desde 11/09 é de outro projeto.
-async function canalAtivoDaInstancia(db: DbClient, nome: string): Promise<Json | null> {
+async function canalAtivoDaInstancia(db: DbClient, nome: string, numero?: string): Promise<Json | null> {
   for (const coluna of ["external_id", "name"]) {
     const { data, error } = await db.from("channels").select("*")
       .eq(coluna, nome).eq("type", "whatsapp").maybeSingle();
+    if (error) throw error;
+    if (data) {
+      const status = String((data as Json).status ?? "");
+      return status === "active" || status === "connected" ? data as Json : null;
+    }
+  }
+  // A instância pode ter um apelido ("0595 cecape") diferente do nome do canal
+  // ("0595"). O número da própria instância é a identidade confiável aqui.
+  const digits = String(numero ?? "").replace(/\D/g, "");
+  if (digits.length >= 10) {
+    const { data, error } = await db.from("channels").select("*")
+      .eq("phone_number", digits).eq("type", "whatsapp").maybeSingle();
     if (error) throw error;
     if (data) {
       const status = String((data as Json).status ?? "");
@@ -353,7 +377,7 @@ export async function recuperarEntradaUazapi(
     // derrubar a varredura das outras — quem depende dela é justamente quem acabou de voltar.
     let canal: Json | null = null;
     try {
-      canal = await canalAtivoDaInstancia(db, nome);
+      canal = await canalAtivoDaInstancia(db, nome, String(inst.owner ?? inst.phone ?? inst.number ?? ""));
     } catch (e) {
       resumo.errosCanal++;
       resumo.degradado = true;
@@ -454,12 +478,26 @@ export async function recuperarEntradaUazapi(
         const anexos = isMedia(tipo)
           ? await baixarMidia(token, String(m.messageid ?? id), tipo)
           : undefined;
+        const respostaInterativa = /buttonsresponse|listresponse/i.test(tipo)
+          ? String(m.buttonOrListid ?? (m.content as Json | undefined)?.selectedButtonID ?? "")
+          : "";
+        // O webhook pode nunca ter recebido o clique. A reserva atômica do passo
+        // impede que uma rodada de recuperação e um webhook tardio enviem duas vezes.
+        if (respostaInterativa) {
+          const espera = await findWaitingFlow(db, de);
+          const clicouEm = msDoTimestamp(m.messageTimestamp);
+          // Uma resposta antiga jamais pode avançar a pergunta seguinte. Isso acontece
+          // quando o atendente já recuperou o vídeo antes da varredura chegar ao clique.
+          if (cliqueRespondeEspera(espera, canal.id, clicouEm)) {
+            await continueFlowOnReply(db, canal, de, respostaInterativa);
+          }
+        }
         const ingest = await ingerir(db, canal, {
           from: de,
           name: (m.senderName as string | undefined) ?? undefined,
           metaMessageId: id,
           msgType: tipo,
-          content: conteudoRecuperado(m),
+          content: conteudoRecuperado(m) || respostaInterativa,
           attachments: anexos,
           sentAt: new Date(msDoTimestamp(m.messageTimestamp)).toISOString(),
           acct,

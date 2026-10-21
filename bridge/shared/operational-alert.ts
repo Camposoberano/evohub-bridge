@@ -107,7 +107,11 @@ export function avaliarInstanciasUazapi(
     const externo = String(canal.external_id ?? "").trim();
 
     if (externo && !canal.phone_number_id) {
-      const inst = instancias.find((i) => i.name === externo);
+      const numero = digitos(canal.phone_number);
+      const inst = instancias.find((i) => i.name === externo) ??
+        (numero.length >= 10
+          ? instancias.find((i) => digitos(i.number) === numero)
+          : undefined);
       if (!inst) caidas.push(`${nome}: instância ${externo} não existe na uazapi`);
       else if (!instanciaConectada(inst.status)) {
         caidas.push(`${nome}: instância ${inst.name} ${inst.status}`);

@@ -190,6 +190,13 @@ Deno.test("instância sem canal (outro projeto) não alarma", () => {
   assertEquals(r.some((l) => l.includes("CECAPE")), false);
 });
 
+Deno.test("0595 conectado com apelido da instância não gera alerta falso", () => {
+  const comApelido = INSTANCIAS.map((i) =>
+    i.name === "0595" ? { ...i, name: "0595 cecape" } : i
+  );
+  assertEquals(avaliarInstanciasUazapi([CANAIS[3]], comApelido), []);
+});
+
 Deno.test("uazapi puro com instância caída ou sumida alarma", () => {
   const caida = INSTANCIAS.map((i) =>
     i.name === "0595" ? { ...i, status: "disconnected" } : i
