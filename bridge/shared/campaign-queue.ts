@@ -219,7 +219,24 @@ export async function campanhasComFila(db: DbClient): Promise<string[]> {
     .lt("attempts", MAX_TENTATIVAS)
     .limit(1000);
   if (error) throw error;
-  return [...new Set(((data ?? []) as Json[]).map((r) => String(r.campaign_id)))];
+  const ids = new Set(((data ?? []) as Json[]).map((r) => String(r.campaign_id)));
+
+  // A API limita a resposta a 1.000 linhas. A campanha oficial 5895 tem mais
+  // pendentes que isso e ocupa a página inteira, ocultando a fila de botões.
+  // Incluímos apenas a fila 5895 que ficou invisível; não alteramos o despacho
+  // de outras campanhas/canais.
+  const buttons5895 = "reativacao-5895-uz";
+  if (!ids.has(buttons5895)) {
+    const { count, error: countError } = await publicTable(db, "campaign_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", buttons5895)
+      .eq("status", "pending")
+      .lt("attempts", MAX_TENTATIVAS);
+    if (countError) throw countError;
+    if ((count ?? 0) > 0) ids.add(buttons5895);
+  }
+
+  return [...ids];
 }
 
 /**
