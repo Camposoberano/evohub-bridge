@@ -25,13 +25,13 @@ const CFG = {
   templateName: process.env.REATIVACAO_TEMPLATE ?? "reativacao_video_2026",
   templateLanguage: "pt_BR",
   headerSlot: "reativacao_header", // slot dedicado (cand_10 limpa); não mexe no producao_img do funil
-  videoSlot: "video_3", // vídeo entregue no clique (resultados reais)
+  videoSlot: "video_reativacao", // anúncio HD 9x16 (22s) entregue no clique
   funnel: "mega-sorgo",
   // Qualificação pós-vídeo (texto livre, dentro da janela já aberta). Sem preço automático:
   // escolher a área registra o pacote e chama o Cícero, igual ao funil ramificado.
-  // abridor uazapi (não-oficial, sem template): cartão imagem + botão. Corpo = copy C.
-  aberturaUazapiTexto: "Tem produtor colhendo silagem de qualidade o ano todo com o Mega Sorgo Santa Elisa. Gravei um vídeo com os resultados — quer dar uma olhada?",
-  videoLegenda: "🎥 Dá uma olhada no resultado real no campo 👇",
+  // abridor uazapi (não-oficial, sem template): cartão imagem + botão. Corpo = copy B (queixo caído).
+  aberturaUazapiTexto: "Separei um vídeo curto do que o Mega Sorgo faz na lavoura — tem produtor de queixo caído com o tamanho da planta. Quer ver? 🎥",
+  videoLegenda: "🎥 Olha o que o Mega Sorgo faz na lavoura 👇",
   areaPergunta: "📐 Pra eu já separar o volume certo: *qual área você pretende plantar?*",
   // 1 ha → 4 kg, 2 ha → 10 kg, 4 ha → 20 kg; acima disso vai pra cotação com o Cícero.
   pacotes: {
