@@ -3,6 +3,7 @@ import {
   candidatasARecuperar,
   conteudoRecuperado,
   cliqueRespondeEspera,
+  respostaInterativaRecuperada,
   dataDaQueda,
   JANELA_PADRAO_MS,
   janelaDeBusca,
@@ -63,6 +64,7 @@ Deno.test("só entra mensagem de cliente, fora de grupo, dentro da janela", () =
     { id: "recente", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 2 * 60_000) },
     { id: "call_123", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
     { id: "x_call", fromMe: false, isGroup: false, messageType: "CallLogMessage", chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
+    { id: "reacao", fromMe: false, isGroup: false, messageType: "ReactionMessage", chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
     { fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
   ];
   assertEquals(candidatasARecuperar(lista, desde, ate).map((m) => m.id), ["a"]);
@@ -79,6 +81,15 @@ Deno.test("clique recuperado não avança etapa iniciada depois do clique", () =
   assertEquals(cliqueRespondeEspera({ channel_id: canal, waiting_since: "2026-10-21T16:16:43Z" }, canal, clique), true);
   assertEquals(cliqueRespondeEspera({ channel_id: canal, waiting_since: "2026-10-21T17:18:37Z" }, canal, clique), false);
   assertEquals(cliqueRespondeEspera({ channel_id: "5895", waiting_since: "2026-10-21T16:16:43Z" }, canal, clique), false);
+});
+
+Deno.test("recuperação reconhece resposta de botão template da Uazapi", () => {
+  assertEquals(respostaInterativaRecuperada({
+    messageType: "TemplateButtonReplyMessage",
+    buttonOrListid: "Quero ver o vídeo",
+    text: "",
+  }), "Quero ver o vídeo");
+  assertEquals(respostaInterativaRecuperada({ messageType: "TextMessage", text: "Quero ver o vídeo" }), "");
 });
 
 // --- paginação e margem -------------------------------------------------------------------

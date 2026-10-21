@@ -5,6 +5,7 @@ import {
   formatarAlerta,
   avaliarSilencio,
   instanciaConectada,
+  temWebhookUazapiDoHub,
 } from "../shared/operational-alert.ts";
 import { DESLIGAMENTO_INTENCIONAL } from "../handlers/operational-health.ts";
 
@@ -195,6 +196,16 @@ Deno.test("0595 conectado com apelido da instância não gera alerta falso", () 
     i.name === "0595" ? { ...i, name: "0595 cecape" } : i
   );
   assertEquals(avaliarInstanciasUazapi([CANAIS[3]], comApelido), []);
+});
+
+Deno.test("webhook do Hub precisa estar ativo no destino correto e receber mensagens", () => {
+  const base = "https://cofre.camposoberano.com.br";
+  const antigo = { url: "https://bridge.cecape.cloud/uazapi-webhook?token=antigo", enabled: true, events: ["messages"] };
+  const correto = { url: `${base}/uazapi-webhook?token=valido`, enabled: true, events: ["messages"] };
+  assertEquals(temWebhookUazapiDoHub([antigo], base), false);
+  assertEquals(temWebhookUazapiDoHub([{ ...correto, enabled: false }], base), false);
+  assertEquals(temWebhookUazapiDoHub([{ ...correto, events: ["connection"] }], base), false);
+  assertEquals(temWebhookUazapiDoHub([antigo, correto], base), true);
 });
 
 Deno.test("uazapi puro com instância caída ou sumida alarma", () => {
