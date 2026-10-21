@@ -50,9 +50,18 @@
 - **Imagem de template/anúncio oficial: sem "140 t/ha", sem preço.** O acervo é quase todo IA e
   muitas artes trazem esse claim/preço — risco de reprovação na Meta e claim sem laudo. Usar só as
   limpas (D:\sementes\SORGO\Imagens\selecao-header). `video_3` é reportagem SBT SD, ruim pra still.
-- **Deploy do SERVIDOR:** código entra via PR → merge no `master` → `git push origin master:main`
-  (Coolify observa `main`) → o push NÃO dispara deploy sozinho, precisa `POST /deploy` (ou restart)
-  no Coolify. Em worktree, sincronizar o master antes do PR.
+- **Produção deploya do `main`, NÃO do master — e os dois divergiram.** Os 2 apps Coolify buildam
+  de `main` (SERVIDOR bridge; PAINEL base `/web`). `master`↔`main` divergiram feio (PRs #18–26 foram
+  direto no main; PR #27 foi no master) — `push master:main` rejeita non-ff e force perderia fixes
+  do main. Deploy = **cherry-pick** dos commits novos pro `main` + **`POST {COOLIFY}/deploy?uuid=`**
+  (push não auto-deploya). Confirmar: deployment `finished` + uptime_s baixo no `/version` (o build
+  label é constante hardcoded, não reflete o commit). (21/10, [[deploy-main-divergencia]]) Pendência: alinhar master↔main.
+- **Multi-disparador = N campanhas, não motor novo.** O pump já roda várias campanhas em paralelo,
+  cada uma com canal + `pace` próprios; `campaign-pace.intervaloMs` já espalha o cap do dia na
+  janela (sem intervalo fixo). Abridor por sender: `template` (oficial) ou `buttons` (uazapi).
+- **Não testar disparo ao vivo com número da empresa.** Preflight pula a saída pros próprios números
+  e o webhook ignora o clique deles (eco) — o fluxo não avança. Em produção lead real funciona; pra
+  testar ponta a ponta usar número de fora. (21/10, [[numero-empresa-nao-testa]])
 
 ---
 
