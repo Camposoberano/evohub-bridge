@@ -33,6 +33,30 @@ export async function reservarProximoItem(
   return (row as FilaItem | null) ?? null;
 }
 
+/** Reserva sem permitir outro processamento simultâneo nas quatro filas da rotação. */
+export async function reservarProximoItemRotacao(
+  db: DbClient,
+  campaignId: string,
+): Promise<FilaItem | null> {
+  const { data, error } = await publicRpc(db, "claim_rotating_campaign_queue_item", {
+    p_campaign_id: campaignId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row as FilaItem | null) ?? null;
+}
+
+/** Pendências realmente elegíveis, contadas no servidor para evitar o limite de 1.000. */
+export async function pendentesElegiveis(db: DbClient, campaignId: string): Promise<number> {
+  const { count, error } = await publicTable(db, "campaign_queue")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .lt("attempts", MAX_TENTATIVAS);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 /**
  * Põe a lista na fila. Ignora repetido pelo unique (campaign_id, contact_key): disparar a
  * mesma campanha duas vezes para a mesma lista não duplica ninguém.
