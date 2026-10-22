@@ -93,7 +93,6 @@ import {
   marcarPulado,
   marcarProcessamentosAbandonados,
   marcarResultadoIncerto,
-  pausarCampanha,
   reservarProximoItem,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
@@ -1389,18 +1388,13 @@ function startCampaignQueueLoop() {
             const motivo = error instanceof Error
               ? error.message
               : String(error);
-            await pausarCampanha(db, campaignId);
-            const { error: holdError } = await publicTable(db, "campaign_queue")
-              .update({
-                status: "paused",
-                last_error: `revalidação indisponível: ${motivo}`.slice(0, 300),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", item.id)
-              .eq("status", "processing");
-            if (holdError) throw holdError;
+            // Falha TRANSITÓRIA de revalidação (ex.: rota uazapi piscou por um tick, instância
+            // flapou) devolve só este item pra fila e tenta no próximo tick — NÃO pausa a campanha
+            // inteira. Pausar tudo por um hiccup deixou 1.183 contatos do 0595 parados até retomar
+            // na mão (21/10), mesmo com a instância "connected". A rampa/janela já limitam o ritmo.
+            await devolverReserva(db, item.id);
             console.warn(
-              "campaign-preflight: fila pausada por falha na validação",
+              "campaign-preflight: revalidação indisponível, item devolvido à fila",
               campaignId,
               item.contact_key.slice(-4),
               motivo,
