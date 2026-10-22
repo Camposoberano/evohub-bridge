@@ -62,6 +62,12 @@
 - **Não testar disparo ao vivo com número da empresa.** Preflight pula a saída pros próprios números
   e o webhook ignora o clique deles (eco) — o fluxo não avança. Em produção lead real funciona; pra
   testar ponta a ponta usar número de fora. (21/10, [[numero-empresa-nao-testa]])
+- **Hiccup transitório de preflight NÃO pausa a campanha inteira.** Uma falha de revalidação (rota
+  uazapi piscou por 1 tick, instância flapou) devolvia a campanha toda pra `paused` — 1.183 contatos
+  do 0595 pararam até retomar na mão, com a instância "connected" (22/10). Agora o catch do preflight
+  (server.ts) faz `devolverReserva` (item volta pra fila, tenta no próximo tick), não `pausarCampanha`.
+  Obs: fallback `getDirectUazapiRoute` resolve instância pelo NOME do canal; canal uazapi-only com
+  instância de nome diferente (0595 ↔ "0595 cecape") só casa por número no `getHybridRoute`.
 
 ---
 
