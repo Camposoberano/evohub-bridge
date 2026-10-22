@@ -39,6 +39,8 @@ export default function Reativacao() {
   const [estados, setEstados] = useState([]);
   const [eventos, setEventos] = useState([]);
   const [atualizado, setAtualizado] = useState(null);
+  const [aba, setAba] = useState("naoRespondeu");
+  const [filtro, setFiltro] = useState("");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -50,8 +52,8 @@ export default function Reativacao() {
   const carregar = useCallback(async () => {
     const desde = new Date(Date.now() - DIA_MS).toISOString();
     const [q, f, e] = await Promise.all([
-      supabase.schema("public").from("campaign_queue").select("campaign_id,status,sent_at").in("campaign_id", IDS).limit(20000),
-      supabase.schema("public").from("campaign_flow_state").select("campaign_id,step_id,status").in("campaign_id", IDS).limit(20000),
+      supabase.schema("public").from("campaign_queue").select("campaign_id,contact_key,status,sent_at").in("campaign_id", IDS).limit(20000),
+      supabase.schema("public").from("campaign_flow_state").select("campaign_id,contact_key,step_id,status").in("campaign_id", IDS).limit(20000),
       supabase.schema("public").from("events").select("event_type,occurred_at").gte("occurred_at", desde)
         .in("event_type", ["pediu_humano", "envio_bloqueado_etiqueta", "message_failed", "message_held_window"]).limit(5000),
     ]);
@@ -89,6 +91,18 @@ export default function Reativacao() {
   for (const e of eventos) evCount[e.event_type] = (evCount[e.event_type] || 0) + 1;
 
   const janela = (() => { const h = new Date(Date.now() - 3 * 3600e3).getUTCHours(); return h >= 8 && h < 18; })();
+
+  // listas por contato (abas): recebeu = enviado; respondeu = clicou (saiu do abridor);
+  // não respondeu = recebeu mas segue na abertura (não clicou).
+  const inSel = (cid) => !filtro || cid === filtro;
+  const flowBy = {};
+  for (const r of estados) if (inSel(r.campaign_id)) flowBy[r.contact_key] = r;
+  const recebeuList = fila.filter((r) => r.status === "sent" && inSel(r.campaign_id)).map((r) => r.contact_key);
+  const respondeuList = recebeuList.filter((ck) => { const f = flowBy[ck]; return f && f.step_id !== "abertura"; });
+  const naoRespList = recebeuList.filter((ck) => { const f = flowBy[ck]; return !f || f.step_id === "abertura"; });
+  const listas = { recebeu: recebeuList, respondeu: respondeuList, naoRespondeu: naoRespList };
+  const abaAtual = listas[aba] || [];
+  const fmtTel = (ck) => { const d = String(ck).replace(/\D/g, ""); const n = d.startsWith("55") ? d.slice(2) : d; return n.length >= 10 ? `(${n.slice(0, 2)}) ${n.slice(2, -4)}-${n.slice(-4)}` : ck; };
 
   return (
     <>
@@ -164,6 +178,30 @@ export default function Reativacao() {
           <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 12 }}>
             Funil: "clicou" = abriu o vídeo (saiu do abridor); "na área" = respondeu a pergunta de área; "fechou" = escolheu pacote → handoff pro Cícero.
           </div>
+        </div>
+
+        <div className="card" style={{ padding: 16, marginTop: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {[["naoRespondeu", "Não respondeu", naoRespList.length], ["respondeu", "Respondeu", respondeuList.length], ["recebeu", "Recebeu", recebeuList.length]].map(([k, lab, n]) => (
+                <button key={k} onClick={() => setAba(k)} style={{ padding: "6px 14px", borderRadius: 999, border: "1px solid var(--border)", background: aba === k ? "var(--text)" : "transparent", color: aba === k ? "var(--bg)" : "var(--text-dim)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  {lab} <span style={{ opacity: .7 }}>{n}</span>
+                </button>
+              ))}
+            </div>
+            <select value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--bg-deep)", color: "var(--text)", fontSize: 13 }}>
+              <option value="">Todas campanhas</option>
+              {CAMPANHAS.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 6, maxHeight: 340, overflowY: "auto" }}>
+            {abaAtual.length === 0
+              ? <div style={{ color: "var(--text-faint)", fontSize: 13 }}>— nenhum ainda —</div>
+              : abaAtual.slice(0, 500).map((ck, i) => (
+                <div key={ck + i} style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", padding: "4px 8px", background: "var(--bg-deep)", borderRadius: 6 }}>{fmtTel(ck)}</div>
+              ))}
+          </div>
+          {abaAtual.length > 500 && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 8 }}>mostrando 500 de {abaAtual.length}</div>}
         </div>
       </main>
     </>
