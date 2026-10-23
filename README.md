@@ -1,5 +1,7 @@
 # Evo Hub ↔ Chatwoot Bridge + Dashboard
 
+> **Comece pelo [guia atualizado da documentação](docs/README.md).** Este README conserva a visão inicial do projeto; o guia contém a arquitetura, as rotas, os comandos, a linha do tempo e o status das fontes até 22/10/2026.
+
 Ponte entre o **EVO Hub** (gateway proxy da Meta Graph API — WhatsApp/Facebook/Instagram) e o **Chatwoot** (camada de conversa), com um **dashboard próprio** que é o system of record + analisador (operacional e comercial).
 
 Plano completo: `C:\Users\User\.claude\plans\analise-esta-documenta-o-api-peppy-token.md`

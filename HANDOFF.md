@@ -1,5 +1,7 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+> **Arquivo histórico.** O “estado atual” abaixo foi escrito em 06/10/2026. Para o mapa e a linha do tempo até 22/10/2026, comece por [docs/README.md](docs/README.md). Confirme deploy e configuração antes de interpretar uma nota antiga como operação vigente.
+
 ## Publicação verificada — 17/10/2026, 18h21 BRT
 
 - A [PR #24](https://github.com/Camposoberano/evohub-bridge/pull/24) foi incorporada à `main` no commit `c074a419afca3bab289099c2de4dcbe480d5d1a8`. Coolify concluiu o deploy do bridge `irxjcc7no7ebrhfdrsfemsha` às 18h17 BRT e do painel `31f0pkvppiparhapv6qz6uzy` às 18h20 BRT, ambos no mesmo commit.
