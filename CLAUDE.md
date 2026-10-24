@@ -59,9 +59,11 @@
   `POST /applications/{uuid}/restart`. Env nova = `POST /applications/{uuid}/envs` com corpo
   **só `{key, value}`** (`is_build_time` → `422 not allowed`). Ver [[coolify-dois-servicos]].
 - **Migration/psql roda NO VPS, não daqui** (24/10/2026): a porta do Postgres do Supabase
-  self-host (`bancortovital.soberano.pro`) não abre pra fora (connect timeout). `CREATE INDEX
-  CONCURRENTLY` por `docker exec <db> psql` ou `psql "$SUPABASE_DB_URL"` dentro da rede do VPS —
-  nunca pelo SQL editor do Studio (envelopa em transação; CONCURRENTLY falha).
+  self-host (`bancortovital.soberano.pro`) não abre pra fora (connect timeout). Rodar pelo
+  **terminal do Coolify** no container `supabase-db-<uuid>` (service `supabase-ORTOVITAL-migrado`),
+  nunca pelo SQL editor do Studio (envelopa em transação; CONCURRENTLY falha). **DDL exige o role
+  `supabase_admin`** (dono das tabelas): `psql -U postgres` dá `ERROR: must be owner of table`.
+  Usar `psql -U supabase_admin -d postgres -c "..."`.
 - **Entrada uazapi casa pelo `owner`, não pelo nome da instância** (24/10/2026): `owner` (chat/data)
   é o NOSSO número e bate com `channels.phone`; os campos phone/wa_chatid do chat são do CLIENTE.
   Instância "0595 cecape" ≠ canal "0595" → o match caía no número do cliente e a entrada do 0595
