@@ -76,8 +76,18 @@
 - **macro-poll tem trava anti-loop** (24/10/2026): resposta não-terminal (ex.: n8n respondendo
   HTTP 200 fora do contrato) mantinha a `cmd-*` e retentava a cada 15s pra sempre (conv 3509, paga).
   Agora pula+limpa `cmd-*` em conversa `won`/`lost` e para após `MACRO_MAX_ATTEMPTS` (evento
-  `macro_command_stuck`, não alerta). Causa-raiz (workflow n8n `soberano-5895-*` fora do contrato)
-  segue ABERTA — frente separada no n8n.
+  `macro_command_stuck`, não alerta).
+- **n8n `soberano-5895-*` devolve 200 VAZIO — DIAGNOSTICADO** (24/10/2026): teste ao vivo
+  `POST https://automacao.soberano.pro/webhook/soberano-5895-plantio` (base/secret em
+  `SOBERANO_N8N_BASE_URL`/`SOBERANO_N8N_WEBHOOK_SECRET` no Coolify) → HTTP 200, corpo vazio. O
+  bridge (`dispatchSoberanoAction`) exige `{ok:true,accepted:N}` → vira falha → comando trava.
+  **Fix é NO n8n:** Webhook node → Respond "Using Respond to Webhook Node" + nó "Respond to Webhook"
+  no fim de CADA caminho (inclusive conversa-não-encontrada) devolvendo o contrato. Afeta só as
+  MACROS; sem urgência (trava segura, sem backlog).
+- **`5895_media_blocked` / `video_receipt_overdue` NÃO são do n8n** (24/10/2026): são da **uazapi**
+  (`shared/async-video-receipt.ts` — "Receipt check for async Uazapi video sends"; confirmação =
+  status `Delivered/Read/Played` buscado na uazapi; vídeo grande do funil 5895). Arrumar o n8n NÃO
+  limpa esses. Não confundir as duas frentes.
 - **`events` limpa EM LOTES** (24/10/2026): o DELETE único de ~1,1M linhas estourava o
   `statement_timeout` (57014), `events` não drenava e o operational-monitor também estourava.
   `startDataCleanupLoop` agora apaga em lotes de 300. Migration `0018` adiciona índice
