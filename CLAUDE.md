@@ -53,6 +53,33 @@
 - **Deploy do SERVIDOR:** código entra via PR → merge no `master` → `git push origin master:main`
   (Coolify observa `main`) → o push NÃO dispara deploy sozinho, precisa `POST /deploy` (ou restart)
   no Coolify. Em worktree, sincronizar o master antes do PR.
+- **Coolify API é POST p/ deploy e restart** (24/10/2026): `GET /deploy` e `GET /restart`
+  respondem `405 · This endpoint has changed to a POST request`. Usar `POST /deploy?uuid={uuid}&force=false`
+  (devolve `deployment_uuid`; acompanhar em `GET /deployments/{uuid}` até `status=finished`) e
+  `POST /applications/{uuid}/restart`. Env nova = `POST /applications/{uuid}/envs` com corpo
+  **só `{key, value}`** (`is_build_time` → `422 not allowed`). Ver [[coolify-dois-servicos]].
+- **Migration/psql roda NO VPS, não daqui** (24/10/2026): a porta do Postgres do Supabase
+  self-host (`bancortovital.soberano.pro`) não abre pra fora (connect timeout). `CREATE INDEX
+  CONCURRENTLY` por `docker exec <db> psql` ou `psql "$SUPABASE_DB_URL"` dentro da rede do VPS —
+  nunca pelo SQL editor do Studio (envelopa em transação; CONCURRENTLY falha).
+- **Entrada uazapi casa pelo `owner`, não pelo nome da instância** (24/10/2026): `owner` (chat/data)
+  é o NOSSO número e bate com `channels.phone`; os campos phone/wa_chatid do chat são do CLIENTE.
+  Instância "0595 cecape" ≠ canal "0595" → o match caía no número do cliente e a entrada do 0595
+  era DESCARTADA como `canal_nao_cadastrado` (29 eventos 23/10). `findChannelForInstance` agora
+  tenta `owner` primeiro. Corrigido em `ca85ea2`.
+- **`canal_nao_cadastrado` é falso positivo sem allowlist** (24/10/2026): a uazapi é multi-tenant
+  (vê instância de outro cliente: INSTITUTO BELEM etc.). `inbound_sem_canal` só alerta instância
+  listada em **`EVO_UAZAPI_INSTANCES`** (setada: `5895,6836,0595 cecape,11910,mato grosso`).
+  NUNCA cadastrar canal pros números de fora. Ver [[canal-nao-cadastrado-falso-positivo]].
+- **macro-poll tem trava anti-loop** (24/10/2026): resposta não-terminal (ex.: n8n respondendo
+  HTTP 200 fora do contrato) mantinha a `cmd-*` e retentava a cada 15s pra sempre (conv 3509, paga).
+  Agora pula+limpa `cmd-*` em conversa `won`/`lost` e para após `MACRO_MAX_ATTEMPTS` (evento
+  `macro_command_stuck`, não alerta). Causa-raiz (workflow n8n `soberano-5895-*` fora do contrato)
+  segue ABERTA — frente separada no n8n.
+- **`events` limpa EM LOTES** (24/10/2026): o DELETE único de ~1,1M linhas estourava o
+  `statement_timeout` (57014), `events` não drenava e o operational-monitor também estourava.
+  `startDataCleanupLoop` agora apaga em lotes de 300. Migration `0018` adiciona índice
+  `(event_type, received_at)` pras consultas do monitor sem `source`.
 
 ---
 
