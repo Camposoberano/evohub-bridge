@@ -87,6 +87,7 @@ import { agendarLoop } from "./shared/loop-guard.ts";
 import {
   admin,
   claimDelivery,
+  claimDeliveryWithTtl,
   publicTable,
   releaseDelivery,
 } from "./shared/supabase.ts";
@@ -754,18 +755,45 @@ function startAvatarLoop() {
 }
 
 // Limpeza de events e deliveries antigos (>30 dias). Roda 1x/dia, 3min após subir.
+// Apaga `events` antigos EM LOTES. Um único DELETE do passivo (1,1M linhas medidas em
+// 29/08, ver migration 0013) estoura o statement_timeout (57014): o delete nunca completa,
+// a limpeza registrava `events=null`, a tabela só crescia e as consultas do monitor
+// passaram a estourar também (o 57014 do operational-monitor). Lote pequeno porque `.in()`
+// com muitos ids estoura a URL (414/502, ver memória `in-sem-lote-url-estoura`). Teto de
+// tempo por rodada pra não segurar o loop; o resto drena na rodada seguinte.
+async function purgeOldEventsInBatches(
+  db: ReturnType<typeof admin>,
+  cutoff: string,
+): Promise<number> {
+  const BATCH = 300;
+  const DEADLINE = Date.now() + 120_000;
+  let total = 0;
+  while (Date.now() < DEADLINE) {
+    const { data: rows, error } = await db.from("events")
+      .select("id").lt("received_at", cutoff)
+      .order("received_at", { ascending: true }).limit(BATCH);
+    if (error) throw error;
+    const ids = ((rows ?? []) as Array<{ id: unknown }>).map((r) => r.id);
+    if (ids.length === 0) break;
+    const { error: delErr } = await db.from("events").delete().in("id", ids);
+    if (delErr) throw delErr;
+    total += ids.length;
+    if (ids.length < BATCH) break;
+  }
+  return total;
+}
+
 function startDataCleanupLoop() {
   const run = async () => {
     const db = admin();
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
     try {
-      const { count: evDel } = await db.from("events").delete({
-        count: "exact",
-      }).lt("received_at", cutoff);
+      const evDel = await purgeOldEventsInBatches(db, cutoff);
+      // deliveries é pequena (um dia ~1,7k linhas) e o delete único não estoura.
       const { count: dlDel } = await db.from("deliveries").delete({
         count: "exact",
       }).lt("received_at", cutoff);
-      if ((evDel ?? 0) > 0 || (dlDel ?? 0) > 0) {
+      if (evDel > 0 || (dlDel ?? 0) > 0) {
         console.log(
           `data-cleanup: events=${evDel} deliveries=${dlDel} (antes de ${
             cutoff.slice(0, 10)
@@ -788,6 +816,15 @@ function startDataCleanupLoop() {
 // qualquer cmd-* label, executa funil-control e remove a label.
 // Kill-switch: MACRO_POLL_ENABLED=false.
 const MACRO_POLL_INTERVAL_MS = 15_000;
+// Trava do laço: quando o destino responde "não-terminal" (ex.: n8n devolve HTTP 200 fora
+// do contrato), a etiqueta ficava e o loop retentava a cada 15s PARA SEMPRE — em 23/10 a
+// conv 3509 (já paga) ficou presa em `cmd-enviar-plantio`, 4 chamadas por tick sem fim,
+// martelando n8n e Chatwoot. Agora conta as falhas por (conversa+etiqueta) no processo e,
+// passado o teto, para de retentar essa combinação (registra evento 1x; etiqueta fica para
+// revisão humana). O contador zera em sucesso/terminal e some no redeploy.
+const MACRO_MAX_ATTEMPTS = 6;
+const macroFailstreak = new Map<string, number>();
+const macroGivenUp = new Set<string>();
 const CMD_LABELS: Record<string, string> = {
   "cmd-funil-pause": "pause",
   "cmd-funil-stop": "stop",
@@ -853,10 +890,46 @@ function startMacroCommandLoop() {
         if (!cmdLabel) continue;
         const cwConvId = conv.id as number;
         const action = CMD_LABELS[cmdLabel];
+        const macroKey = `${cwConvId}:${cmdLabel}`;
         console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
+
+        // Combinação que já esgotou as tentativas neste processo: não martela mais.
+        if (macroGivenUp.has(macroKey)) continue;
 
         try {
           const macroDb = admin();
+
+          // Conversa já encerrada (paga/perdida) não roda comando de funil — só limpa a
+          // etiqueta presa (caso 3509, que estava `won`). Mata o loop na origem, sem
+          // depender do teto de tentativas.
+          const { data: convRow } = await macroDb.from("conversations")
+            .select("outcome").eq("chatwoot_conversation_id", cwConvId)
+            .maybeSingle();
+          if (
+            convRow && (convRow.outcome === "won" || convRow.outcome === "lost")
+          ) {
+            console.warn(
+              "macro-poll: conversa",
+              cwConvId,
+              "já",
+              convRow.outcome,
+              "- limpando etiqueta",
+              cmdLabel,
+            );
+            try {
+              const fresh = await getConversationLabels(cwConvId, acct);
+              const cleaned = fresh.filter((l) => l !== cmdLabel);
+              if (cleaned.length !== fresh.length) {
+                await setConversationLabels(cwConvId, cleaned, acct);
+              }
+              await clearMacroRequestId(macroDb, cwConvId, cmdLabel);
+            } catch (e) {
+              console.warn("macro-poll cleanup(won):", String(e).slice(0, 120));
+            }
+            macroFailstreak.delete(macroKey);
+            continue;
+          }
+
           const requestId = await currentMacroRequestId(
             macroDb,
             cwConvId,
@@ -889,13 +962,57 @@ function startMacroCommandLoop() {
                 "conv",
                 cwConvId,
               );
+              macroFailstreak.delete(macroKey);
             } else {
-              console.warn(
-                "macro-poll: comando mantido para nova tentativa",
-                cmdLabel,
-                "conv",
-                cwConvId,
-              );
+              const streak = (macroFailstreak.get(macroKey) ?? 0) + 1;
+              macroFailstreak.set(macroKey, streak);
+              if (streak >= MACRO_MAX_ATTEMPTS) {
+                // Teto estourado: o destino nunca confirma (provável n8n fora do contrato,
+                // "n8n HTTP 200"). Para de retentar esta combinação neste processo e deixa
+                // a etiqueta para revisão humana. Um evento (NÃO alerta de WhatsApp),
+                // deduplicado por 6h, avisa quem investiga.
+                macroGivenUp.add(macroKey);
+                macroFailstreak.delete(macroKey);
+                console.error(
+                  "macro-poll: comando travado após",
+                  streak,
+                  "tentativas — parando de retentar",
+                  cmdLabel,
+                  "conv",
+                  cwConvId,
+                );
+                try {
+                  const marca = `macro-stuck-${cwConvId}-${cmdLabel}`;
+                  if (
+                    await claimDeliveryWithTtl(
+                      macroDb,
+                      marca,
+                      "macro-stuck",
+                      6 * 60 * 60_000,
+                    )
+                  ) {
+                    await macroDb.from("events").insert({
+                      source: "macro-command-poll",
+                      event_type: "macro_command_stuck",
+                      payload: {
+                        chatwoot_conversation_id: cwConvId,
+                        label: cmdLabel,
+                        action,
+                        attempts: streak,
+                        last_error: String(result.error ?? "").slice(0, 160),
+                      },
+                    }).then(() => {}, () => {});
+                  }
+                } catch { /* best effort */ }
+              } else {
+                console.warn(
+                  "macro-poll: comando mantido para nova tentativa",
+                  cmdLabel,
+                  "conv",
+                  cwConvId,
+                  `(tentativa ${streak}/${MACRO_MAX_ATTEMPTS})`,
+                );
+              }
               continue;
             }
           }
@@ -912,6 +1029,7 @@ function startMacroCommandLoop() {
           } catch (e) {
             console.warn("macro-poll cleanup:", String(e).slice(0, 120));
           }
+          macroFailstreak.delete(macroKey);
         } catch (e) {
           console.error("macro-poll exec erro:", e);
         }

@@ -190,6 +190,25 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json, rawEventId =
 
   const channel = await findChannelForInstance(db, instanceName, data);
   if (!channel) {
+    // A uazapi é COMPARTILHADA (multi-tenant): tanto o webhook quanto o catch-up (que usa o
+    // admintoken e varre `/instance/all`) enxergam instâncias de OUTROS clientes — ex.:
+    // INSTITUTO BELEM. Sem este filtro, a entrada de um terceiro sem canal nosso virava
+    // alerta `canal_nao_cadastrado` no nosso WhatsApp (falso positivo). EVO_UAZAPI_INSTANCES
+    // lista, por nome e separado por vírgula, as instâncias que SÃO nossas; fora dela, não é
+    // problema do EvoHub e não alertamos. Sem a env, mantém o comportamento antigo (alerta).
+    const allowRaw = optionalEnv("EVO_UAZAPI_INSTANCES");
+    if (allowRaw) {
+      const allow = new Set(
+        allowRaw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+      );
+      if (!allow.has(instanceName.trim().toLowerCase())) {
+        console.warn(
+          "uazapi-webhook sem canal p/ instancia de outro tenant (ignorada):",
+          instanceName,
+        );
+        return;
+      }
+    }
     // Número novo conectado na uazapi sem linha em `channels`: a mensagem do cliente chega
     // aqui e não tem onde ser gravada. Antes isso morria num console.warn que some do log
     // em horas -- mesma forma de perda silenciosa que engoliu 73 mensagens em 29/08.
@@ -743,7 +762,17 @@ async function findChannelForInstance(
   const waFastId = getString(chat, "wa_fastid") ?? getString(data, "wa_fastid");
   const waChatId = getString(chat, "wa_chatid") ?? getString(data, "wa_chatid");
 
+  // `owner` é o NOSSO número (a conta que recebeu) — casa com `channels`. Já os campos
+  // phone/wa_chatid/jid do chat são do CLIENTE. Precisa vir PRIMEIRO: quando o nome da
+  // instância não bate com o canal (ex.: instância "0595 cecape" x canal "0595"), o match
+  // caía no número do cliente, nenhuma linha de `channels` batia e a entrada do cliente era
+  // descartada como "sem canal" (29 eventos do 0595 em 23/10). Ver findChannelForInstance.
+  const ownerNumber = firstString(
+    getString(chat, "owner"),
+    getString(data, "owner"),
+  );
   const instanceNumber = firstString(
+    ownerNumber,
     getString(data, "number"),
     getString(data, "phone"),
     getString(chat, "phone"),
@@ -754,7 +783,6 @@ async function findChannelForInstance(
     getString(sender, "jid"),
     getString(sender, "lid"),
     getString(sender, "sender_pn"),
-    getString(data, "owner"),
     waChatId,
     waFastId,
   );
