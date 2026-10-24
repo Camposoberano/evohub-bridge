@@ -56,6 +56,7 @@ export async function dispatchSoberanoAction(
       signal: AbortSignal.timeout(15_000),
     });
     const result = await response.json().catch(() => ({})) as Record<string, unknown>;
+    // Resposta no contrato: usa a contagem que o n8n reportou.
     if (response.ok && result.ok === true &&
       (typeof result.accepted === "number" || result.duplicate === true ||
         typeof result.state === "string" || result.action === request.action)) {
@@ -64,6 +65,18 @@ export async function dispatchSoberanoAction(
         accepted: Number(result.accepted ?? 0),
         duplicate: result.duplicate === true,
       };
+    }
+    // Falha explícita, mesmo com 2xx: o n8n DISSE que não foi.
+    const sinalizaFalha = result.ok === false ||
+      typeof result.error === "string" || result.terminal === true;
+    // 2xx sem sinal de falha = aceito. O webhook do n8n é fire-and-forget: responde logo
+    // (muitas vezes 200 com corpo vazio, quando o workflow não tem nó "Respond to Webhook")
+    // e processa async, com dedupe por `request_id` — por isso retentar não duplica envio.
+    // A ENTREGA é confirmada à parte (reconcile-5895 / recibo uazapi), então exigir
+    // `{ok:true,accepted:N}` aqui só travava a macro sem ganhar garantia. `accepted:0`
+    // porque o n8n não reportou a contagem (a nota "N peças na fila" só sai quando reporta).
+    if (response.ok && !sinalizaFalha) {
+      return { ok: true, accepted: 0, duplicate: false };
     }
     return {
       ok: false,
