@@ -36,8 +36,10 @@ import {
   handleNutricaoClick,
   handlePlantioClick,
   handlePrecoClick,
+  recordInboundCommercialIntent,
   resumeCampaign,
 } from "./hub-webhook.ts";
+import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 import {
   handleCatalogClick,
   handleQualificationReply,
@@ -554,6 +556,14 @@ async function handleUazapiClick(
   }
 
   if (id.startsWith("menu_") || isRestoredFunnelButton(id)) {
+    // Espelha o caminho Meta (hub-webhook handleWhatsApp): clique no menu de preço/uso é
+    // intenção comercial do lead. Sem isto o funil 5895 (uazapi) não registrava
+    // `intencao_identificada` e o relatório via o topo do funil quase zerado.
+    if (id === "menu_preco") {
+      await recordInboundCommercialIntent(db, channel, from, "preco", inboundMessageId);
+    } else if (id === "menu_uso") {
+      await recordInboundCommercialIntent(db, channel, from, "interesse_geral", inboundMessageId);
+    }
     await handleMenuClick(db, channel, from, id, acct, inboundMessageId);
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
@@ -601,6 +611,21 @@ async function handleUazapiIntent(
         JSON.stringify(transcription.slice(0, 160)),
       );
     }
+  }
+
+  // Intenção comercial do lead por TEXTO/ÁUDIO (preco | uso | interesse_geral | duvida_tecnica),
+  // mesma classificação do caminho Meta (hub-webhook:589). O detector estreito abaixo só cobre
+  // preco/video/plantio/nutricao e decide a RESPOSTA do bot; aqui registramos a intenção comercial
+  // pro funil independentemente disso. Dedup por messageId é feito dentro de recordInboundCommercialIntent.
+  const commercialIntent = classificarIntencaoComercial(intentText);
+  if (commercialIntent) {
+    await recordInboundCommercialIntent(
+      db,
+      channel,
+      from,
+      commercialIntent,
+      msg.metaMessageId ?? null,
+    );
   }
 
   const intent = isPrecoIntent(intentText)
