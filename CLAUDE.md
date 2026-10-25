@@ -30,6 +30,28 @@
 - Canal não-oficial (uazapi) = sem janela Meta
 - Lógica de negócio SEMPRE no bridge (n8n é só cron de despacho)
 
+## Decisões travadas (correções que NÃO se repetem)
+
+- **Telemetria/funil que só cobre o caminho Meta mente sobre o negócio (2026-10-25).**
+  Os eventos comerciais `sales-funnel` (`intencao_identificada` etc.) eram gravados SÓ em
+  `handlers/hub-webhook.ts` (Meta) e `handlers/sync-facebook.ts` (FB/IG). O caminho **uazapi**
+  (`handlers/uazapi-webhook.ts`) — que é o tráfego dominante do funil 5895 (~4:1 out:in) — nunca
+  chamava `recordInboundCommercialIntent`, então o relatório via o topo do funil quase zerado
+  (22 eventos p/ 500+ conversas) e `won`/receita não mediam venda real. Corrigido chamando o
+  `recordInboundCommercialIntent` já exportado nos cliques `menu_preco`/`menu_uso` e na intenção
+  por texto/áudio (`classificarIntencaoComercial`). **Regra:** ao instrumentar/medir o funil,
+  cobrir uazapi + Meta + FB/IG; nunca assumir que o caminho oficial representa o volume real.
+- **Fingerprint por texto exato em `/relatorio` apodrece a cada campanha (2026-10-25).**
+  A detecção "bot entregou preço" era `content.includes("imagem preco_"|"Tabela de preços")` e
+  casava ZERO (preço real sai como card de mídia com step de funil `:preco` e como texto `R$`/
+  "preço de *"). Corrigido com regex + o elo `messages.funnel` (migration 0012). **Regra:** métrica
+  de etapa do funil deve preferir o dado estruturado (`messages.funnel`/`funnel_step`,
+  eventos `sales-funnel`) ao match de string; se usar string, validar contra o banco antes de
+  confiar no número. Um "0" numa métrica de funil ativo é suspeito — conferir no banco.
+- **Deploy é do `main`, não `master` (ver memória [[deploy-main-divergencia]]).** Os 2 apps Coolify
+  buildam do `main`; `master` divergiu. Deploy = cherry-pick pro `main` + `POST /deploy?uuid=<app>`
+  (a seção Deploy acima ainda diz "master" — está desatualizada).
+
 ---
 
 ## Decisões travadas (correções que NÃO se repetem)
