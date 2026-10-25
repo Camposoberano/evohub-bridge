@@ -23,6 +23,16 @@ const FUNIL_FINGERPRINT = /mega sorgo|santa elisa|campo soberano|c[ií]cero sobr
 const NEGATIVA_RE =
   /(n[ãa]o)\s+(quero|tenho\s+interesse|gostei|me\s+interessa)|\b(par[ae]\s+de|chega\s+de|spam|remover|me\s+tir[ae]|sair\s+da\s+lista|denunciar)\b/i;
 
+// Entrega de preço pelo bot. O fingerprint antigo ("imagem preco_"/"Tabela de preços") não casava
+// com NADA do funil real: o card de preço sai como MÍDIA (step de funil ":preco", migration 0012) e
+// o preço em texto vem como "R$ <valor>" ou "O preço de *<produto>*". Checa conteúdo E o elo de
+// funil. Não casa "valor exato"/"consultar o preço" (condição/pergunta, não entrega).
+const PRECO_OUT_RE = /R\$\s?\d|tabela\s+de\s+pre[çc]os?|pre[çc]o\s+de\s+\*|imagem\s+preco_/i;
+function botEntregouPrecoMsg(content: string, funnel: unknown): boolean {
+  return PRECO_OUT_RE.test(content) ||
+    /(^|[:_-])preco([:_-]|$)/i.test(String(funnel ?? ""));
+}
+
 function isSystemJunk(content: string): boolean {
   return content.includes("_WaSeller:_") ||
     content.includes("Backup realizado pelo sistema");
@@ -212,7 +222,7 @@ export async function handle(req: Request): Promise<Response> {
         if (content.includes("Preparei 5 vídeos") || content.includes("Separei 5 vídeos")) { botTeveVideo = true; etapasSet.add("video"); }
         if (content.includes("Lista de temas de plantio")) { botTevePlantio = true; etapasSet.add("plantio"); }
         if (content.includes("Lista de info nutricional") || content.includes("Análise Bromatológica")) { botTeveNutricao = true; etapasSet.add("nutricao"); }
-        if (content.includes("imagem preco_") || content.includes("Tabela de preços")) { botTevePreco = true; etapasSet.add("preco"); }
+        if (botEntregouPrecoMsg(content, m.funnel)) { botTevePreco = true; etapasSet.add("preco"); }
         if (content.includes("Cícero Sobreira") || content.includes("Campo Soberano")) { teveFunil = true; etapasSet.add("funil"); }
         if (isPagamentoMsg(content)) { tevePagamento = true; etapasSet.add("pagamento"); }
       }
