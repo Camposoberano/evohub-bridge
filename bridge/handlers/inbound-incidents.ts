@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { env } from "../shared/env.ts";
+import { env, optionalEnv } from "../shared/env.ts";
 import {
   admin,
   claimDeliveryWithTtl,
@@ -132,8 +132,18 @@ export async function runInboundWatchdog(
   if (fullAudit) lastFullAuditAt = now.getTime();
   const unresolved = after.incidents;
   if (!unresolved.length) return;
+  // Alerta só o que ficou parado ALÉM da janela normal de processamento. A detecção (90s) e
+  // o replay (2min) seguem iguais; só o ALERTA no WhatsApp espera mais, pra não pingar por
+  // atraso transitório (webhook lento, Chatwoot 502/503, varredura/catch-up a cada 15min)
+  // que se resolve sozinho. Em 24-25/10: 51/51 entradas do 5895 processaram, mas o limiar de
+  // 90s alertava ~11 por noite. Ajustável por INBOUND_ALERT_MIN_AGE_MS.
+  const alertAgeMs = Number(optionalEnv("INBOUND_ALERT_MIN_AGE_MS")) || 8 * 60_000;
+  const alertaveis = unresolved.filter((incident) =>
+    now.getTime() - Date.parse(incident.received_at) >= alertAgeMs
+  );
+  if (!alertaveis.length) return;
   const manual = new Set<string>();
-  if (unresolved.some((incident) => incident.channel === "5895")) {
+  if (alertaveis.some((incident) => incident.channel === "5895")) {
     const { data, error } = await db.from("events").select("payload")
       .eq("source", "inbound-watchdog")
       .eq("event_type", "inbound_incident_manual")
@@ -145,7 +155,7 @@ export async function runInboundWatchdog(
       if (id) manual.add(id);
     }
   }
-  for (const incident of inbound5895AlertCandidates(unresolved, manual)) {
+  for (const incident of inbound5895AlertCandidates(alertaveis, manual)) {
     await entregarAlertas(db, [{
       key: "inbound_unprocessed",
       severity: "critical",
@@ -156,7 +166,7 @@ export async function runInboundWatchdog(
       ttlMs: 72 * 60 * 60_000,
     });
   }
-  const others = unresolved.filter((incident) => incident.channel !== "5895");
+  const others = alertaveis.filter((incident) => incident.channel !== "5895");
   if (!others.length) return;
   const detail = others.slice(0, 4).map((incident) =>
     `${incident.channel} ${incident.contact_suffix}: ${incident.state}`
