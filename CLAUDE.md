@@ -81,9 +81,11 @@
   `POST https://automacao.soberano.pro/webhook/soberano-5895-plantio` (base/secret em
   `SOBERANO_N8N_BASE_URL`/`SOBERANO_N8N_WEBHOOK_SECRET` no Coolify) → HTTP 200, corpo vazio. O
   bridge (`dispatchSoberanoAction`) exige `{ok:true,accepted:N}` → vira falha → comando trava.
-  **Fix é NO n8n:** Webhook node → Respond "Using Respond to Webhook Node" + nó "Respond to Webhook"
-  no fim de CADA caminho (inclusive conversa-não-encontrada) devolvendo o contrato. Afeta só as
-  MACROS; sem urgência (trava segura, sem backlog).
+  **RESOLVIDO no bridge (`f2ed2af`):** `dispatchSoberanoAction` agora aceita **2xx sem sinal de
+  falha como despachado** (`accepted:0`) — webhook é fire-and-forget com dedupe por `request_id` e a
+  entrega é confirmada à parte (reconcile-5895/recibo uazapi). Falha explícita (`ok:false`/`error`/
+  `terminal`) e não-2xx seguem falha. Fix no workflow n8n virou **OPCIONAL** (só traria a contagem
+  `accepted:N` de volta: Webhook → Respond "Using Respond to Webhook Node" + nó Respond em cada caminho).
 - **`5895_media_blocked` / `video_receipt_overdue` NÃO são do n8n** (24/10/2026): são da **uazapi**
   (`shared/async-video-receipt.ts` — "Receipt check for async Uazapi video sends"; confirmação =
   status `Delivered/Read/Played` buscado na uazapi; vídeo grande do funil 5895). Arrumar o n8n NÃO
@@ -92,6 +94,17 @@
   `statement_timeout` (57014), `events` não drenava e o operational-monitor também estourava.
   `startDataCleanupLoop` agora apaga em lotes de 300. Migration `0018` adiciona índice
   `(event_type, received_at)` pras consultas do monitor sem `source`.
+- **`inbound_unprocessed` alerta só após janela (anti-ping)** (25/10/2026): o audit detecta
+  incidente em 90s, mas o `runInboundWatchdog` alertava no WhatsApp QUALQUER coisa >90s → ~11
+  pings/noite por atraso transitório (Chatwoot 502/503, catch-up a cada 15min) que resolvia sozinho
+  (em 24-25/10, 51/51 entradas do 5895 processaram, 0 `inbound_processing_failed`). Agora só ALERTA
+  incidente mais velho que **`INBOUND_ALERT_MIN_AGE_MS`** (default 8min); detecção (90s) e replay
+  (2min) inalterados. `4000d77`.
+- **`reconcile-5895` NÃO avança com recibo presente — ABERTO** (24/10/2026, não corrigido): 30 peças
+  de vídeo presas em `transport_stage`=`await_receipt`/`await_response` desde Out 11-18; 29 com
+  `provider_status`=`Delivered`/`Read` (ENTREGUE) mas `followups_released_at`=null → `reconcile-5895.ts`
+  só trata `receipt_missing`, não o caso recibo-já-presente. Trava follow-ups em ~20 conversas +
+  alertas `5895_media_blocked`/`video_receipt_overdue`. #971 é falha real de envio (sem provider_id).
 
 ---
 
