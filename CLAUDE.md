@@ -57,6 +57,13 @@
   é código MORTO (não ligado em lugar nenhum) — não religar achando que é o fluxo de abertura.
   **Regra:** lead que insiste no preço (2º pedido/dia) = fast-track pro humano em `handleMenuClick`
   (pausa funil + `handleHumanRequest` cotação), NUNCA dead-air. Ver [[preco-sem-numero-fast-track]].
+- **Pump do funil não pode SEGURAR peça sem mover o `send_at` (head-of-line, 2026-10-26).**
+  `pumpFunnelQueue` seleciona `pending AND send_at<=now ORDER send_at ASC LIMIT N`. Se um ramo de hold
+  (bot travado, `not_due`, `deferred_business_window`, `deferred_intent`) deixa a peça `pending` com o
+  `send_at` antigo, o ciclo seguinte re-pega as MESMAS N na cabeça e a fila inteira para (aconteceu:
+  travou em 6 conversas velhas não-mutadas). **Regra:** todo ramo que não envia/cancela/pausa DEVE
+  empurrar o `send_at` pra frente (deferir) pra peça sair da cabeça da fila. E log de hold diz o motivo
+  real — NUNCA rotular tudo como "bot travado". Ver [[pump-head-of-line-defer]].
 
 ---
 
