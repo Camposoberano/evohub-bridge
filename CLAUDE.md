@@ -51,6 +51,12 @@
 - **Deploy é do `main`, não `master` (ver memória [[deploy-main-divergencia]]).** Os 2 apps Coolify
   buildam do `main`; `master` divergiu. Deploy = cherry-pick pro `main` + `POST /deploy?uuid=<app>`
   (a seção Deploy acima ainda diz "master" — está desatualizada).
+- **Preço NÃO tem número no automático — é por volume, o Cícero cota (2026-10-26).** O bot nunca manda
+  R$; responde "escolha o pacote, o Cícero confirma o valor". NÃO reintroduzir tabela de preço no bot
+  sem decisão explícita (histórico de número errado: "30%" que não existe). `shared/ancoragem-preco.ts`
+  é código MORTO (não ligado em lugar nenhum) — não religar achando que é o fluxo de abertura.
+  **Regra:** lead que insiste no preço (2º pedido/dia) = fast-track pro humano em `handleMenuClick`
+  (pausa funil + `handleHumanRequest` cotação), NUNCA dead-air. Ver [[preco-sem-numero-fast-track]].
 
 ---
 
