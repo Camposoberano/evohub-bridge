@@ -39,6 +39,12 @@ let running = false;
 // re-pega as mesmas N todo ciclo, nunca avançando — head-of-line blocking que, em 26/10, prendeu
 // a fila em 6 conversas velhas (11–17/out): o log repetia found:N held:N sent:0.
 const HOLD_DEFER_MS = 15 * 60_000;
+// Peça pendente MUITO atrasada (send_at há dias) não vai mais ser enviada: a janela Meta fechou,
+// o lead esfriou, ou travou num resultado "uncertain" (provider_transport) que não resolve nem
+// retenta. Em vez de segurar pra sempre na cabeça da fila — foi o que prendeu 2 conversas de
+// 17/out por 9 dias —, cancela acima desta idade. Só mexe em peça VENCIDA; futura (campanha
+// agendada) nunca é tocada.
+const STALE_MAX_MS = 3 * 24 * 60 * 60_000; // 3 dias
 
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
@@ -228,10 +234,22 @@ export async function pumpFunnelQueue(
     let cancelled = 0;
     let held = 0;
     let heldMuted = 0;
+    let staleCancelled = 0;
     const motivosCancelamento = new Map<string, number>();
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
       if (!id) continue;
+
+      // Age-out: peça vencida há mais de STALE_MAX_MS é morta — cancela em vez de segurar pra
+      // sempre na cabeça da fila (head-of-line). Antes do envio, pra não tentar entregar lixo.
+      const sendAtMs = Date.parse(String(row.send_at ?? ""));
+      if (Number.isFinite(sendAtMs) && sendAtMs < Date.now() - STALE_MAX_MS) {
+        const { error: staleError } = await db.from("scheduled_messages")
+          .update({ status: "cancelled" }).eq("id", id).eq("status", "pending");
+        if (staleError) throw staleError;
+        staleCancelled++;
+        continue;
+      }
 
       const conversationId = String(row.conversation_id ?? "");
       const funnel = String(row.funnel ?? "mega-sorgo");
@@ -549,6 +567,13 @@ export async function pumpFunnelQueue(
         "funnel-queue: seguradas",
         held,
         `msg(s) [bot-travado=${heldMuted} janela/horario/nao-due=${held - heldMuted}]`,
+      );
+    }
+    if (staleCancelled > 0) {
+      console.log(
+        "funnel-queue: canceladas",
+        staleCancelled,
+        "msg(s) velhas (send_at > 3 dias, mortas)",
       );
     }
     return { found: data?.length ?? 0, sent, failed, held };
