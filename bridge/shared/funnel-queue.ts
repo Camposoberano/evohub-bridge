@@ -34,6 +34,11 @@ async function releaseQueueClaim(
 }
 
 let running = false;
+// Peça que o pump ENCONTRA mas não envia neste ciclo (bot travado, não-due, janela) é empurrada
+// pra frente. Sem isso fica na cabeça da fila (SELECT ... ORDER send_at ASC LIMIT N) e o pump
+// re-pega as mesmas N todo ciclo, nunca avançando — head-of-line blocking que, em 26/10, prendeu
+// a fila em 6 conversas velhas (11–17/out): o log repetia found:N held:N sent:0.
+const HOLD_DEFER_MS = 15 * 60_000;
 
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
@@ -222,6 +227,7 @@ export async function pumpFunnelQueue(
     let failed = 0;
     let cancelled = 0;
     let held = 0;
+    let heldMuted = 0;
     const motivosCancelamento = new Map<string, number>();
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
@@ -331,7 +337,13 @@ export async function pumpFunnelQueue(
       }
 
       if (muted.has(String(row.conversation_id ?? ""))) {
+        // Bot travado: espera o atendente destravar (resumeSequenceRebased reprograma). Empurra
+        // o send_at pra SAIR da cabeça da fila e não travar o resto.
+        await db.from("scheduled_messages")
+          .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+          .eq("id", id).eq("status", "pending");
         held++;
+        heldMuted++;
         continue;
       }
 
@@ -351,6 +363,9 @@ export async function pumpFunnelQueue(
       if (String(row.type ?? "") === "deferred_intent") {
         if (!dispatchDeferredIntent) {
           await releaseQueueClaim(db, claimKey);
+          await db.from("scheduled_messages")
+            .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+            .eq("id", id).eq("status", "pending");
           held++;
           continue;
         }
@@ -465,13 +480,24 @@ export async function pumpFunnelQueue(
         body.not_due === true
       ) {
         await releaseQueueClaim(db, claimKey);
+        await db.from("scheduled_messages")
+          .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+          .eq("id", id).eq("status", "pending");
         held++;
       } else if (
         body.deferred_business_window === true
       ) {
         // send-outbound também é chamado pelo n8n. O endpoint persiste o novo horário;
-        // liberamos o claim para a fila poder tentar novamente na próxima abertura.
+        // liberamos o claim para a fila poder tentar novamente na próxima abertura. Empurra o
+        // send_at (usa next_send_at se veio) pra peça não ficar presa na cabeça da fila.
         await releaseQueueClaim(db, claimKey);
+        await db.from("scheduled_messages")
+          .update({
+            send_at: typeof body.next_send_at === "string"
+              ? body.next_send_at
+              : new Date(Date.now() + HOLD_DEFER_MS).toISOString(),
+          })
+          .eq("id", id).eq("status", "pending");
         held++;
       } else if (
         body.awaiting_window === true ||
@@ -517,7 +543,13 @@ export async function pumpFunnelQueue(
       );
     }
     if (held > 0) {
-      console.log("funnel-queue: seguradas", held, "msg(s) com bot travado");
+      // Antes dizia "com bot travado" pra TODO hold — mentira: a maioria é janela/horário/não-due.
+      // Agora separa o mute real do resto.
+      console.log(
+        "funnel-queue: seguradas",
+        held,
+        `msg(s) [bot-travado=${heldMuted} janela/horario/nao-due=${held - heldMuted}]`,
+      );
     }
     return { found: data?.length ?? 0, sent, failed, held };
   } finally {
