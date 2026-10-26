@@ -3753,7 +3753,28 @@ export async function handleMenuClick(
   const intent = intentByMenu[menuId];
   if (intent) {
     const daily = await claimDailyIntent(db, String(channel.id), from, intent);
-    if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
+    if (!daily.claimed) {
+      // Lead que INSISTE no preço: já recebeu a resposta de preço hoje e pede de novo. Antes o
+      // bot ficava MUDO (dead-air) — e o cliente que já conhece o produto e só quer o número
+      // ficava "ouvindo funil". Como o valor é por volume (não há número no automático; o Cícero
+      // cota), o fast-track para o funil e leva pro humano AGORA, em vez do silêncio. Só preço:
+      // video/plantio/nutrição seguem com o "já enviei hoje". Ponto único → vale uazapi + Meta.
+      if (menuId === "menu_preco") {
+        const conv = await resolveSocialConversation(db, channel, from);
+        if (conv?.id) {
+          await autoPauseFunil(conv.id as string, "preco-insistido");
+        }
+        const origem = channel.type === "facebook" || channel.type === "instagram"
+          ? "social"
+          : "whatsapp";
+        const sent = await handleHumanRequest(db, channel, from, origem, acct, {
+          tipo_pedido: "cotacao",
+          ...(inboundMessageId ? { message_id: inboundMessageId } : {}),
+        });
+        return { sent };
+      }
+      return { sent: false, reason: "already-sent-today" };
+    }
     try {
       // No 5895, texto e botão usam o mesmo conteúdo editável da macro no n8n.
       // O bridge continua responsável pela fila, deduplicação e entrega final.
