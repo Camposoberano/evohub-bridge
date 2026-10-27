@@ -64,6 +64,14 @@
   travou em 6 conversas velhas não-mutadas). **Regra:** todo ramo que não envia/cancela/pausa DEVE
   empurrar o `send_at` pra frente (deferir) pra peça sair da cabeça da fila. E log de hold diz o motivo
   real — NUNCA rotular tudo como "bot travado". Ver [[pump-head-of-line-defer]].
+- **Campanha auto-pausa a INSTÂNCIA INTEIRA a cada envio incerto (2026-10-26).** `marcarResultadoIncerto`
+  → RPC `pause_campaign_after_uncertain_send` pausa TODA a campanha da instância (centenas/milhares de
+  contatos) quando 1 envio fica "incerto" (provedor não confirma / erro de rede no oficial EVO Hub /
+  **worker interrompido por restart do container**) e NÃO retoma sozinha (precisa `reabrirCampanha`:
+  paused→pending). Travou `reativacao-6836-uz` (24/10) e `reativacao-5895-of`. **Regra operacional:
+  NÃO deployar/reiniciar o SERVIDOR entre 8–20h BRT (horário de disparo)** — restart no meio do envio
+  vira incerto e re-pausa. Retomar = flip paused→pending no `campaign_queue` das campanhas afetadas.
+  Follow-up de código: pausar só o item, não a campanha. Ver [[campanha-auto-pause-incerto]].
 
 ---
 
