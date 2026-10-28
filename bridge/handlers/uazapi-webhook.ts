@@ -10,6 +10,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { aiLaneEnabled, routeContactToAiLane } from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
@@ -697,6 +698,15 @@ async function handleUazapiIntent(
           await releaseDelivery(db, handoffClaimId);
           throw error;
         }
+      }
+    }
+    // Texto livre sem porta determinística → lane de IA (quando ligada). Mesmo boundary
+    // do webhook oficial; não entra se o lead já pediu humano no fluxo de anúncio.
+    if (!enrollment?.humanHandoff && aiLaneEnabled()) {
+      try {
+        await routeContactToAiLane(db, String(channel.id), from, acct);
+      } catch (e) {
+        console.error("uazapi ai-lane enter erro:", e);
       }
     }
     return;
