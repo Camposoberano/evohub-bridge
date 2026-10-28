@@ -73,6 +73,7 @@ import { handle as hybridOps } from "./handlers/hybrid-ops.ts";
 import { handle as funnelOps } from "./handlers/funnel-ops.ts";
 import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
 import { handle as funnelQueuePump } from "./handlers/funil-queue-pump.ts";
+import { handle as aiGate } from "./handlers/ai-gate.ts";
 import {
   handle as operationalHealth,
   runOperationalAudit,
@@ -187,6 +188,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/repair-official-5895": repairOfficial5895,
   "/funil-queue-pump": funnelQueuePump,
   "/operational-health": operationalHealth,
+  "/ai-gate": aiGate,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
@@ -376,6 +378,7 @@ const version = {
     "pediu-humano-pausa-e-alerta",
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
+    "ai-lane-contact-auth-gate",
     "funil-anuncios-5895-cinco-momentos",
     "funil-completo-5895-30-09",
     "funil-botoes-historicos-roteados",
