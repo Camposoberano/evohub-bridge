@@ -35,6 +35,11 @@ import {
   usoPorResposta,
 } from "../shared/funil-comercial.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import {
+  aiLaneEnabled,
+  exitAiLane,
+  routeContactToAiLane,
+} from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
@@ -569,6 +574,8 @@ async function handleWhatsApp(db: Db, p: Json) {
                   // vira fila de "confirmar se virou venda". Sem ela, 26 conversas com sinal
                   // de fechamento ficaram 'open' sem ninguém revisar (medido em 11/08).
                   if (cwId) await marcarRevisarVenda(cwId, acct);
+                  // fechamento tira da lane de IA: daqui é humano (Cícero).
+                  if (cwId && aiLaneEnabled()) await exitAiLane(cwId, acct);
                   if (assignee > 0 && cwId) {
                     await assignConversation(cwId, assignee, acct);
                     await createConversationMessage(cwId, {
@@ -629,6 +636,17 @@ async function handleWhatsApp(db: Db, p: Json) {
                     comPrazo: false,
                   });
                 }
+              }
+            }
+            // Texto livre que NÃO casou com nenhuma porta determinística (preço, vídeo,
+            // plantio, nutrição) — é aqui que o funil fixo não converte. Entrega pra lane
+            // de IA (label ai-vendas) quando ligada: o agente fazer.ai assume via /ai-gate.
+            // O determinístico (botão/fluxo/campanha) acima continua intacto.
+            if (!detectedIntent && aiLaneEnabled()) {
+              try {
+                await routeContactToAiLane(db, String(channel.id), from, acct);
+              } catch (e) {
+                console.error("ai-lane enter erro:", e);
               }
             }
             if (isPrecoIntent(intentText)) {
