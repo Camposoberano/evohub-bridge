@@ -10,6 +10,7 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { aiLaneEnabled, routeContactToAiLane } from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
@@ -475,7 +476,18 @@ async function handleUazapiIntent(
     : isNutricaoIntent(intentText)
     ? { name: "nutricao", menu: "menu_nutricao" }
     : null;
-  if (!intent) return;
+  if (!intent) {
+    // Texto livre sem porta determinística → lane de IA (quando ligada). Mesmo boundary
+    // do webhook oficial: o agente fazer.ai assume via /ai-gate; o resto do funil não muda.
+    if (aiLaneEnabled()) {
+      try {
+        await routeContactToAiLane(db, String(channel.id), from, acct);
+      } catch (e) {
+        console.error("uazapi ai-lane enter erro:", e);
+      }
+    }
+    return;
+  }
 
   const intentKey = msg.metaMessageId ?? new Date().toISOString();
   const claimed = await claimDelivery(
