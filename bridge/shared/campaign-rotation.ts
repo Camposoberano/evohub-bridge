@@ -38,20 +38,31 @@ export function chooseCampaignRotation(
       c !== undefined
     );
     if (campaigns.length !== group.campaigns.length) return [];
-    const primary = campaigns[0];
-    if (!dentroDaJanela(primary.pace, now)) return [];
-    const cap = capDoDia(primary.pace, primary.createdAt, now);
+    const eligible = campaigns.map((campaign) => {
+      const cap = capDoDia(campaign.pace, campaign.createdAt, now);
+      return {
+        campaign,
+        cap,
+        remaining: dentroDaJanela(campaign.pace, now)
+          ? Math.min(Math.max(0, cap - campaign.sentToday), campaign.pending)
+          : 0,
+      };
+    });
+    const cap = eligible.reduce((sum, item) => sum + item.cap, 0);
     const sentToday = campaigns.reduce((sum, c) => sum + c.sentToday, 0);
-    const pending = campaigns.reduce((sum, c) => sum + c.pending, 0);
-    const remaining = Math.min(Math.max(0, cap - sentToday), pending);
+    const remaining = eligible.reduce((sum, item) => sum + item.remaining, 0);
     if (!remaining) return [];
     return [{
       number: group.number,
-      campaigns,
+      campaigns: eligible.filter((item) => item.remaining > 0),
       cap,
       sentToday,
       remaining,
-      endHour: primary.pace.horaFim,
+      endHour: Math.min(
+        ...eligible.filter((item) => item.remaining > 0).map((item) =>
+          item.campaign.pace.horaFim
+        ),
+      ),
     }];
   });
   if (!groups.length) return null;
@@ -75,16 +86,17 @@ export function chooseCampaignRotation(
 
   groups.sort((a, b) =>
     a.sentToday / a.cap - b.sentToday / b.cap ||
-    Math.max(0, ...a.campaigns.map((c) => c.lastSentAt ?? 0)) -
-      Math.max(0, ...b.campaigns.map((c) => c.lastSentAt ?? 0))
+    Math.max(0, ...a.campaigns.map((item) => item.campaign.lastSentAt ?? 0)) -
+      Math.max(0, ...b.campaigns.map((item) => item.campaign.lastSentAt ?? 0))
   );
   const selected = groups[0];
-  const campaigns = selected.campaigns.filter((c) => c.pending > 0);
+  const campaigns = selected.campaigns;
   campaigns.sort((a, b) =>
-    a.sentToday - b.sentToday || (a.lastSentAt ?? 0) - (b.lastSentAt ?? 0)
+    a.campaign.sentToday / a.cap - b.campaign.sentToday / b.cap ||
+    (a.campaign.lastSentAt ?? 0) - (b.campaign.lastSentAt ?? 0)
   );
   return {
-    campaignId: campaigns[0].campaignId,
+    campaignId: campaigns[0].campaign.campaignId,
     number: selected.number,
     cap: selected.cap,
     sentToday: selected.sentToday,
