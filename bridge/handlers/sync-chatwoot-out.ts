@@ -10,6 +10,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { handleOutgoing } from "./chatwoot-webhook.ts";
+import { isProviderEchoOutgoing } from "../shared/chatwoot-provider-echo.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -171,6 +172,7 @@ export function recentOutgoingCandidates(
   for (const message of messages) {
     const attributes = (message.content_attributes ?? {}) as Json;
     if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") continue;
+    if (isProviderEchoOutgoing(message)) continue;
     if (!isOutgoing(message) || message.private === true) continue;
     const created = createdAtMs(message.created_at);
     if (created && created < cutoffMs) continue;
