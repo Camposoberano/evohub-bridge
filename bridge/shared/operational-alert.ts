@@ -348,4 +348,50 @@ export async function entregarAlertas(
   }
 }
 
+// Envia um texto de alerta pronto por WhatsApp pro ALERT_WHATSAPP_TO, reusando o canal de
+// alerta operacional (rota híbrida uazapi quando dá, fallback oficial). Usado pelo endpoint
+// /grafana-alert, que recebe o webhook do Alertmanager/Grafana e manda o resumo pro WhatsApp.
+// NÃO aplica throttle nem claim: o Alertmanager já agrupa/repete no ritmo dele.
+export async function enviarTextoAlerta(
+  db: DbClient,
+  texto: string,
+): Promise<{ enviado: boolean; motivo?: string }> {
+  const destino = (optionalEnv("ALERT_WHATSAPP_TO") ?? "").replace(/\D/g, "");
+  if (!destino) return { enviado: false, motivo: "ALERT_WHATSAPP_TO ausente" };
+
+  const nomeCanal = optionalEnv("ALERT_CHANNEL_NAME") ?? "5895";
+  const { data: canal } = await db.from("channels")
+    .select("id,name,phone_number,phone_number_id")
+    .eq("name", nomeCanal).eq("type", "whatsapp").maybeSingle();
+  if (!canal?.phone_number_id) {
+    return { enviado: false, motivo: `canal ${nomeCanal} sem phone_number_id` };
+  }
+
+  const rota = isHybridRecipient(destino)
+    ? await getHybridRoute(
+      canal.id as string,
+      canal.phone_number_id as string,
+      canal.phone_number as string,
+    )
+    : null;
+
+  let ok = false;
+  if (rota) {
+    const r = await hybridSendText(rota, destino, texto);
+    ok = Boolean(r?.ok);
+  }
+  if (!ok) {
+    const token = (await db.from("channel_secrets").select("channel_token")
+      .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string;
+    const r = await sendMeta(token, `${canal.phone_number_id}/messages`, {
+      messaging_product: "whatsapp",
+      to: destino,
+      type: "text",
+      text: { body: texto },
+    });
+    ok = r.ok;
+  }
+  return { enviado: ok, motivo: ok ? undefined : "envio-falhou" };
+}
+
 export type { Json };
