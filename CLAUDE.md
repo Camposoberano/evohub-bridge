@@ -148,6 +148,19 @@
   `provider_status`=`Delivered`/`Read` (ENTREGUE) mas `followups_released_at`=null → `reconcile-5895.ts`
   só trata `receipt_missing`, não o caso recibo-já-presente. Trava follow-ups em ~20 conversas +
   alertas `5895_media_blocked`/`video_receipt_overdue`. #971 é falha real de envio (sem provider_id).
+- **Bot agro (fazer.ai) GO-LIVE 2026-10-29 em install PRÓPRIO no soberano.pro** (`agents.soberano.pro`,
+  tenant 2 `campo-soberano-agro`, agente "Vendedor Agro" na inbox 46). NUNCA criar material do agro no
+  tenant 1 (= Instituto Belém). Lane via `AI_LANE_ENABLED=1` + contactAuth `/ai-gate`. Detalhe +
+  anti-repetir-erro em [[fazer-ai-selfhost-soberano]] e [[decisoes-deploy-soberano]].
+- **VPS Oracle (136.248.116.231): proxy é NGINX NO HOST, não o Traefik do Coolify.** Expor serviço =
+  vhost nginx + certbot apontando pro IP do container (não basta `service_applications.fqdn`). IP muda
+  ao recriar ([[nginx-ip-container-quebra]]).
+- **`minio/minio` saiu do Docker Hub** → usar `ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z`.
+  **API Coolify `/deploy` e `/restart` são POST** (não GET). **MCP fazer.ai no app desktop não faz OAuth**
+  (`/mcp` não é comando) → API key no header (`claude mcp add --header`); key = token de tenant (sem arg `tenant`).
+- **NÃO reiniciar/deployar o bridge 8-20h BRT com disparo ativo** — restart no meio relê histórico e
+  repete envio (incidente 2026-10-29 "disparando/repetindo"; NÃO era o agente novo, era o bridge).
+  Ver [[campanha-auto-pause-incerto]].
 
 ---
 
