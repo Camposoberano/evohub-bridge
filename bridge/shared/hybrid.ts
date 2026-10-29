@@ -237,7 +237,7 @@ export async function hybridSendMedia(
     caption?: string;
     fileName?: string;
     isVoice?: boolean;
-    asyncReceipt?: { trackId: string; startedAt: number; maxWaitMs?: number };
+    asyncReceipt?: { trackId: string; startedAt: number; maxWaitMs?: number; trackSource?: string };
   },
 ): Promise<SendResult | null> {
   const startedAt = Date.now();
@@ -250,7 +250,7 @@ export async function hybridSendMedia(
     };
     if (opts.asyncReceipt) {
       body.async = true;
-      body.track_source = "evohub-5895-funnel";
+      body.track_source = opts.asyncReceipt.trackSource ?? "evohub-5895-funnel";
       body.track_id = opts.asyncReceipt.trackId;
     }
     // `docName`, não `fileName`: é o nome do campo na uazapi (openapi-bundled.json,
