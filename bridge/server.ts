@@ -113,6 +113,7 @@ import {
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
 import { flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { pumpCampaignAutoVideos } from "./shared/campaign-auto-video.ts";
 import { PACE_PADRAO } from "./shared/campaign-pace.ts";
 import {
   chooseCampaignRotation,
@@ -1771,9 +1772,17 @@ function startFlowTimeoutLoop() {
     if (rodando) return;
     rodando = true;
     try {
-      const r = await pumpFlowTimeouts(admin());
-      if (r.seguiram > 0) {
-        console.log("flow-timeout:", JSON.stringify(r));
+      try {
+        const r = await pumpFlowTimeouts(admin());
+        if (r.seguiram > 0) {
+          console.log("flow-timeout:", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("flow-timeout loop erro:", e);
+      }
+      const videos = await pumpCampaignAutoVideos(admin());
+      if (videos.sent || videos.failed) {
+        console.log("campaign-auto-video:", JSON.stringify(videos));
       }
     } catch (e) {
       console.error("flow-timeout loop erro:", e);
