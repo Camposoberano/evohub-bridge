@@ -32,6 +32,29 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Eco de deleção/edição/reação do aparelho NÃO se reenvia — vira loop (2026-10-30).**
+  Deletar/editar/reagir a uma msg no WhatsApp → a uazapi espelha no Chatwoot como texto de SAÍDA
+  ("🗑️ [ Mensagem deletada ]", "👍🏻 [ reação ]") SEM `source_id`, escapando do `isProviderEchoOutgoing`.
+  O `handleOutgoing` (webhook) e o `sync-chatwoot-out` reenviavam ao cliente; cada volta vira msg nova
+  no Chatwoot (id novo) → o claim `cw-out-<id>` nunca deduplica → loop (103x "Mensagem deletada" em
+  29/10, 383 extras). Fix: `isUazapiSystemNotice` (em `shared/chatwoot-provider-echo.ts`) chamado nos
+  dois caminhos. **Regra:** aviso de ação do aparelho nunca se reenvia. E atenção: `handleOutgoing` é
+  webhook (tempo-real), `AUTO_LOOPS_ENABLED=false` NÃO para — só o guard no código resolve.
+- **Filtro de labels no Chatwoot: 1 condição IN, nunca N equal_to com OR (2026-10-30).**
+  `macro-poll`/`bot-mute`/`outcome` mandavam 16 condições `equal_to` OR'd no `conversations/filter` →
+  ~15s e timeout/500 em 100% na VPS sem CPU (controle do bot por etiqueta morreu). Trocar por UMA
+  condição `equal_to` com todos os valores (o Chatwoot traduz pra `tags.name IN (...)`): mesma
+  semântica, ~2x mais barato. **Regra:** filtrar por "tem qualquer destes labels" = 1 condição com o
+  array completo.
+- **events precisa de `idx_events_received_at`; DDL = `supabase_admin` (2026-10-30).**
+  Sem o índice, a limpeza (`DELETE ... received_at < cutoff`) faz seq-scan, estoura `statement_timeout`
+  (57014) e a tabela cresce sem fim (mediu 1,26M, 866k >30d). Criar `create index concurrently ... on
+  events (received_at)` como **`supabase_admin`** (o role `postgres` do Supabase self-host NÃO é dono
+  nem superuser) no terminal web do Coolify. Drenar passivo em lotes de 20k (ctid), nunca DELETE único.
+  Ver `supabase/manual/0014`.
+- **A VPS é UMA caixa de 2 vCPU rodando tudo (2026-10-30).** Supabase+Chatwoot+bridge+agents+Langfuse+
+  Grafana no mesmo 136.248.116.231. CPU é gargalo estrutural → ops pesadas daqui (drain/scan) a ≤3
+  workers + pausa (16 workers derrubaram a VPS). Fix real = subir cores. Langfuse foi desligado p/ aliviar.
 - **Telemetria/funil que só cobre o caminho Meta mente sobre o negócio (2026-10-25).**
   Os eventos comerciais `sales-funnel` (`intencao_identificada` etc.) eram gravados SÓ em
   `handlers/hub-webhook.ts` (Meta) e `handlers/sync-facebook.ts` (FB/IG). O caminho **uazapi**
