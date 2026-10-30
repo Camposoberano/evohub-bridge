@@ -10,7 +10,10 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { handleOutgoing } from "./chatwoot-webhook.ts";
-import { isProviderEchoOutgoing } from "../shared/chatwoot-provider-echo.ts";
+import {
+  isProviderEchoOutgoing,
+  isUazapiSystemNotice,
+} from "../shared/chatwoot-provider-echo.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -179,6 +182,8 @@ export function recentOutgoingCandidates(
     const chatwootMessageId = Number(message.id);
     const content = (message.content as string | undefined) ?? "";
     const attachments = (message.attachments as Json[] | undefined) ?? [];
+    // Notícia do aparelho (deleção/edição/reação espelhada pela uazapi): nunca reenviar.
+    if (attachments.length === 0 && isUazapiSystemNotice(content)) continue;
     if (
       !Number.isFinite(chatwootMessageId) ||
       (!content && attachments.length === 0)

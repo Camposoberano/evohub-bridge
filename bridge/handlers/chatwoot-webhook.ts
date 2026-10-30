@@ -35,7 +35,10 @@ import {
   metaDeliveryStatus,
 } from "../shared/meta-errors.ts";
 import { readConversationAssigneeUpdate } from "../shared/chatwoot-assignee.ts";
-import { isProviderEchoOutgoing } from "../shared/chatwoot-provider-echo.ts";
+import {
+  isProviderEchoOutgoing,
+  isUazapiSystemNotice,
+} from "../shared/chatwoot-provider-echo.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -149,6 +152,13 @@ export async function handleOutgoing(db: Db, p: Json) {
   if (
     attachments.length === 0 && /\s\[[^\]]+\s\/\s[^\]]+\]\s*$/.test(content)
   ) {
+    return;
+  }
+
+  // Anti-LOOP de notícia do aparelho (deleção/edição/reação espelhada pela uazapi como texto
+  // de saída SEM source_id). Reenviar é sempre errado e gera loop. Ver isUazapiSystemNotice.
+  if (attachments.length === 0 && isUazapiSystemNotice(content)) {
+    console.log("notícia do aparelho (deleção/reação/edição) — não reenvia", cwMsgId);
     return;
   }
 
