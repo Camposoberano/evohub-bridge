@@ -853,14 +853,21 @@ const CMD_LABELS: Record<string, string> = {
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
 
-// Payload do filter API — OR de todos os cmd labels.
+// Payload do filter API — conversas com QUALQUER cmd label.
+//
+// Uma única condição `equal_to` com todos os valores (o Chatwoot traduz values[]
+// de equal_to pra `tags.name IN (...)`), em vez de 16 condições `equal_to` OR'd.
+// Mesma semântica, fração do custo: o OR de 16 condições fazia o Chatwoot levar
+// ~15s e estourar o timeout (500) nesta VPS sobrecarregada — 100% das chamadas
+// falhavam e o controle por etiqueta ficava morto. Medido no container:
+// 16-OR = 15s/500 (10/10); 1-cond-IN = 143ms-1,3s e 200 (10/10).
 const CMD_FILTER_PAYLOAD = JSON.stringify({
-  payload: CMD_LABEL_KEYS.map((label, i) => ({
+  payload: [{
     attribute_key: "labels",
     filter_operator: "equal_to",
-    values: [label],
-    query_operator: i < CMD_LABEL_KEYS.length - 1 ? "OR" : null,
-  })),
+    values: CMD_LABEL_KEYS,
+    query_operator: null,
+  }],
 });
 
 function startMacroCommandLoop() {
@@ -1147,13 +1154,14 @@ const OUTCOME_LABELS: Record<string, string> = {
   "nao-compra": "marcar-nao-compra",
 };
 const OUTCOME_LABEL_KEYS = Object.keys(OUTCOME_LABELS);
+// Uma condição `labels IN (...)` (ver CMD_FILTER_PAYLOAD): mesma semântica, mais barato.
 const OUTCOME_FILTER_PAYLOAD = JSON.stringify({
-  payload: OUTCOME_LABEL_KEYS.map((label, i) => ({
+  payload: [{
     attribute_key: "labels",
     filter_operator: "equal_to",
-    values: [label],
-    query_operator: i < OUTCOME_LABEL_KEYS.length - 1 ? "OR" : null,
-  })),
+    values: OUTCOME_LABEL_KEYS,
+    query_operator: null,
+  }],
 });
 
 function startOutcomeLabelLoop() {
