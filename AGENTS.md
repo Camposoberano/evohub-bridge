@@ -28,6 +28,28 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
 - **Lane de IA (fazer.ai): flag `AI_LANE_ENABLED` default OFF; o estado é a label `ai-vendas`;
   o `/ai-gate` é fail-closed.** Ligar a flag sem o wiring externo (agente bindado + `AI_GATE_SECRET`
   + contactAuth apontando pro `/ai-gate`) = lead no vácuo. Ver `docs/ai-lane-funil-agro.md`.
+- **O campo `build:` em `bridge/server.ts` é uma label MANUAL e está travada** (ficou em
+  `2026-10-10` por 126+ commits). O `build` em `/version` **MENTE** — NUNCA diagnosticar
+  "deploy não subiu" por ele. Confirmar deploy por `version.features` (flags novas, ex.
+  `ai-lane-contact-auth-gate`) ou `uptime_s`. **Bumpar o `build:` a cada deploy.**
+- **Instância uazapi desconectada trava a fila de campanha INTEIRA.** Um item cuja instância
+  está offline é repescado pelo loop (reserva → preflight "sem verificador WhatsApp conectado"
+  → devolve → repete) e **starva as campanhas das instâncias conectadas** (elas nem são tocadas).
+  Fix: pausar a campanha da instância morta (`pending`→`paused`) libera as outras. Conferir
+  `/instance/all` no uazapi (admintoken do `.env`) antes de culpar env/deploy/kill-switch.
+- **Coolify restart/deploy = POST, não GET** (GET devolve 405). Restart (recarrega env, sem
+  rebuild): `POST /applications/{uuid}/restart`. Deploy/rebuild: `POST /deploy?uuid={uuid}&force=true`.
+- **`AUTO_LOOPS_ENABLED=false` = kill-switch de TODOS os loops de fundo** (funnel-pump,
+  reativação, sync, recovery, catch-up…). No Coolify há uma entrada "false" `is_preview=true`
+  (só preview) e a de produção `is_preview=false` — editar a de produção. **O webhook de
+  entrada NÃO para com isso:** lead que manda msg ainda recebe resposta (intent/menu/IA).
+- **Pausar no banco (`pending`→`paused`) só congela o BACKLOG.** Conversas ao vivo continuam
+  enrolando/disparando. Pra parar o funil ao vivo: `AUTO_LOOPS_ENABLED=false` (+ `AI_LANE_ENABLED=0`
+  pra IA) + restart. Não há flag que impeça o webhook de responder quem manda mensagem.
+- **Consultar o self-host direto (análise read-only):** PostgREST em `$SUPABASE_URL/rest/v1`,
+  schema `evohub` via header `Accept-Profile` (leitura) / `Content-Profile` (escrita), Bearer =
+  `SUPABASE_SERVICE_ROLE_KEY`. Cap de 1000 linhas/req → paginar com header `Range`. Rodar dentro
+  do `ctx_execute` (segredo lido do `.env`, nunca impresso).
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
 

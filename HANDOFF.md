@@ -19,6 +19,21 @@
 - `AI_LANE_ENABLED` default OFF → funil determinístico intacto. **Wiring externo pendente** antes de ligar.
 - Docs: [`docs/ai-lane-funil-agro.md`](docs/ai-lane-funil-agro.md), [`docs/contact-auth.md`](docs/contact-auth.md).
 
+### Disparos / operação — 31/10 (TUDO PAUSADO — troca de estratégia)
+Decisão do usuário em 31/10: parar todo disparo pra redesenhar a estratégia (baixa resposta, sem resultado).
+- **Disparo frio:** 4 campanhas de reativação pausadas no banco (`campaign_queue` pending→paused): reativacao-5895-of (1.359), -5895-uz (1.060), -6836-uz (1.039), -0595-uz (925).
+- **Funil agendado:** parado via **`AUTO_LOOPS_ENABLED=false`** (prod) + restart 31/10 17:55 BRT — boot log "background loops OFF" confirmado; mega-sorgo `scheduled_messages` também pending→paused.
+- **Lane de IA:** LIGADA por escolha do usuário (`AI_LANE_ENABLED=1`) — único responder automático ativo (via webhook); `AI_GATE_SECRET` definido + agente wired.
+- **Resíduo:** o webhook de entrada ainda responde quem manda msg/clica anúncio (intent/menu/IA) — não há flag; só para 100% desconectando o webhook (perde inbound).
+- **Causa real do travamento das reativações (antes da pausa):** instância uazapi **`0595 cecape` DESCONECTADA** → preflight "sem verificador" → item repescado em loop → **starvava** as campanhas conectadas (5895/6836). Pausar a 0595 liberou as outras. Ver [[instancia-uazapi-trava-fila]].
+- **Duplicação:** era o loop de eco deleção/reação, burst de **29/10** (103x "Mensagem deletada") **antes** do guard `a31803d`. O guard JÁ estava no ar desde 30/10 16:28 — **não está recorrendo** (0 loops em 448 msgs). O `build:` travado em `2026-10-10` enganou o diagnóstico; o código no ar já é o main atual. Ver [[build-label-travada]].
+
+Pra RETOMAR (quando definir a nova estratégia):
+- [ ] `AUTO_LOOPS_ENABLED`→`true` (prod) + restart (POST) pra religar os loops de fundo.
+- [ ] Campanhas: flip `paused`→`pending` uma a uma (seguem pausadas no banco).
+- [ ] Reconectar instância **`0595 cecape`** no uazapi se for usá-la.
+- [ ] **Bumpar o `build:`** em `bridge/server.ts` (travado em `2026-10-10`; `/version` mente).
+
 ### Pendente / próximo passo
 - [ ] **Rotacionar o token admin do Chatwoot exposto** (user "cicero sobreira", conta 1 — valor na memória não-versionada, NÃO versionar aqui: repo público) — revogar (Profile→Access Token) e pôr o novo no env do bridge no Coolify.
 - [ ] **Renovar token Meta do canal "sorgo brasileiro"** (expirou 28/10, code 190) — `sync-instagram-inbound` em loop de 401 a cada 10s.
