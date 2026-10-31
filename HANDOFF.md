@@ -8,6 +8,7 @@
 - Deploy builda do **`main`** (os 2 apps Coolify); `master`↔`main` seguem divergidos. Trabalho recente foi direto no `main`.
 - Bridge (SERVIDOR) no ar em `cofre.camposoberano.com.br`.
 - **VPS = uma caixa só** (`136.248.116.231`, 2 vCPU): Supabase (`bancortovital`), Chatwoot (`gerenciador`), bridge (`cofre`), fazer-ai, Grafana — todos no mesmo IP. **CPU é o gargalo.** Langfuse desligado em 30/10 pra liberar CPU/RAM.
+- **nginx do HOST serve os `.soberano.pro`** (502 = `nginx/1.24.0`, não Coolify/Traefik). 31/10: Grafana caiu com 502 porque o `proxy_pass` apontava pra IP de container que drifou no reboot. **Corrigido durável** (porta de host fixa `127.0.0.1:3001` + `proxy_pass localhost:3001`). **Chatwoot tem o mesmo risco, pendente.** Ver `AGENTS.md` / [[nginx-ip-container-quebra]].
 
 ### Troubleshooting VPS — 30/10 (3 incêndios resolvidos, commits no `main`)
 - **Filter 500 do controle de bot** → trocado 16 condições `equal_to` OR por 1 condição IN (commit `095c415`). Era ~15s/500; agora 143ms–1,3s/200.

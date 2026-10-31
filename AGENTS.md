@@ -50,6 +50,14 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   schema `evohub` via header `Accept-Profile` (leitura) / `Content-Profile` (escrita), Bearer =
   `SUPABASE_SERVICE_ROLE_KEY`. Cap de 1000 linhas/req → paginar com header `Range`. Rodar dentro
   do `ctx_execute` (segredo lido do `.env`, nunca impresso).
+- **Serviços servidos pelo nginx do HOST (página de 502 = `nginx/1.24.0 (Ubuntu)`, NÃO
+  Coolify/Traefik): nunca `proxy_pass` pra IP de container** — o IP drifta a cada recriação/reboot
+  → 502. Publicar porta de host fixa no compose (`127.0.0.1:PORT:containerPort`) + `proxy_pass
+  http://127.0.0.1:PORT`. Feito em Supabase e **Grafana** (31/10); **Chatwoot ainda pendente**.
+  E **não rebootar a VPS crua** (reboot drifta IPs) — usar Restart/Redeploy do Coolify.
+  SSH funciona com `~/.ssh/oracle_ubuntu_2026`; escrita no host o classifier bloqueia (passar o
+  comando pro usuário). Ao editar compose no Coolify, **casar o nome exato das volumes** (`docker
+  volume ls`) — renomear hífen↔underscore cria volume vazio e perde dados. Ver [[nginx-ip-container-quebra]].
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
 
