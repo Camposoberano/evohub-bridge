@@ -1,5 +1,8 @@
 # EVO Hub Bridge
 
+> **Leia e siga `AGENTS.md` deste repositório** — regras cross-LLM, decisões travadas,
+> comando "salva tudo" e persistência. Estado vivo em `HANDOFF.md`.
+
 ## Stack
 - **Bridge**: Deno HTTP server em `bridge/server.ts`, deploy via Coolify em `cofre.camposoberano.com.br`
 - **DB**: Supabase self-host (`bancortovital.soberano.pro`)
@@ -29,6 +32,11 @@
 - Toda mensagem registrada no Chatwoot DEVE capturar `chatwoot_message_id` do response e gravar na tabela `messages` (previne duplicação pelo pull-loop)
 - Canal não-oficial (uazapi) = sem janela Meta
 - Lógica de negócio SEMPRE no bridge (n8n é só cron de despacho)
+
+## Decisões travadas
+Correções que NÃO se repetem → ver **`AGENTS.md`**, seção "Decisões travadas". É a fonte
+única versionada (filter IN, índice `events`, deploy no `main` + `POST /deploy`, não
+reiniciar 8-20h, VPS single-box, lane de IA flag OFF).
 
 ---
 

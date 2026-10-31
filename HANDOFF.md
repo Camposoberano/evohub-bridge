@@ -1,8 +1,49 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Documento de estado do projeto — atualizado em 06/10/2026 (America/Fortaleza).** Leia esta seção antes de retomar. As notas abaixo de “Contexto histórico” são registros antigos e podem estar desatualizadas.
+> **Documento de estado do projeto — atualizado em 2026-10-31 (America/Fortaleza).** Fonte canônica versionada; regras duras em [`AGENTS.md`](AGENTS.md). As seções abaixo de "Histórico" são registros antigos e podem estar desatualizadas.
 
-## Estado atual — 06/10/2026
+## Estado atual — 2026-10-31
+
+### Infra / deploy
+- Deploy builda do **`main`** (os 2 apps Coolify); `master`↔`main` seguem divergidos. Trabalho recente foi direto no `main`.
+- Bridge (SERVIDOR) no ar em `cofre.camposoberano.com.br`.
+- **VPS = uma caixa só** (`136.248.116.231`, 2 vCPU): Supabase (`bancortovital`), Chatwoot (`gerenciador`), bridge (`cofre`), fazer-ai, Grafana — todos no mesmo IP. **CPU é o gargalo.** Langfuse desligado em 30/10 pra liberar CPU/RAM.
+
+### Troubleshooting VPS — 30/10 (3 incêndios resolvidos, commits no `main`)
+- **Filter 500 do controle de bot** → trocado 16 condições `equal_to` OR por 1 condição IN (commit `095c415`). Era ~15s/500; agora 143ms–1,3s/200.
+- **Espiral Postgres 57014** → recriado índice `idx_events_received_at` via `supabase_admin` (o `postgres` não é dono) + drenou backlog em lotes.
+- **Duplicação "mensagem deletada/reação" em loop** → guard `isUazapiSystemNotice` no `handleOutgoing` + `sync-chatwoot-out` (commit `a31803d`). O reenvio era via webhook, não loop — `AUTO_LOOPS_ENABLED=false` não parava.
+
+### Lane de IA fazer.ai — 31/10 (feature nova, commit `1d3d103`, **flag OFF**)
+- Texto livre do lead sem porta determinística → agente fazer.ai "Vendedor Agro". **Estado = label `ai-vendas`** no Chatwoot; gate `/ai-gate` (contactAuth) **fail-closed**.
+- `AI_LANE_ENABLED` default OFF → funil determinístico intacto. **Wiring externo pendente** antes de ligar.
+- Docs: [`docs/ai-lane-funil-agro.md`](docs/ai-lane-funil-agro.md), [`docs/contact-auth.md`](docs/contact-auth.md).
+
+### Pendente / próximo passo
+- [ ] **Rotacionar o token admin do Chatwoot exposto** (user "cicero sobreira", conta 1 — valor na memória não-versionada, NÃO versionar aqui: repo público) — revogar (Profile→Access Token) e pôr o novo no env do bridge no Coolify.
+- [ ] **Renovar token Meta do canal "sorgo brasileiro"** (expirou 28/10, code 190) — `sync-instagram-inbound` em loop de 401 a cada 10s.
+- [ ] **Conferir CPU no Grafana** (`grafana.soberano.pro`) — o fix do filter tirou o maior consumidor; se ainda alto, é infra (box faz tudo sozinho).
+- [ ] **Housekeeping:** commit `16f95c2` (cleanup keyset index-free) não foi pro `main` (o main já batcheia); redundante — descartar ou guardar como alternativa.
+- [ ] **Wiring da lane de IA** antes de `AI_LANE_ENABLED=1` — bindar "Vendedor Agro" na inbox + `AI_GATE_SECRET` + contactAuth → `/ai-gate` (ver `docs/ai-lane-funil-agro.md` §wiring).
+
+### Bloqueios / avisos
+- **NÃO deployar/reiniciar o bridge 8-20h BRT** (disparo ativo → pausa campanha).
+- VPS single-box: operações pesadas (drain, scans) a **≤3 workers** + pausa, senão 100% CPU derruba as queries de todo mundo.
+
+---
+
+## Mapa da documentação
+- [`AGENTS.md`](AGENTS.md) — regras cross-LLM, decisões travadas, "salva tudo", persistência.
+- [`CLAUDE.md`](CLAUDE.md) — stack + Coolify API + Protocolo Handoff.
+- [`docs/ai-lane-funil-agro.md`](docs/ai-lane-funil-agro.md) — lane de IA fazer.ai.
+- [`docs/contact-auth.md`](docs/contact-auth.md) — contrato do `/ai-gate`.
+- [`docs/motor-de-fluxo.md`](docs/motor-de-fluxo.md) — motor de fluxo conversacional.
+- `docs/superpowers/specs/` e `docs/superpowers/plans/` — specs e planos de features.
+- Snapshots datados (histórico): `docs/HANDOFF-OPERACAO-2026-07-21.md`, `docs/HANDOFF-SOCIAL-2026-07-21.md`.
+
+---
+
+## Histórico — 06/10/2026
 
 ### Análise comercial salva — 05/10/2026
 
@@ -37,7 +78,7 @@
 - Container ativo após o último deploy: `eb7d6fcfdca2`; imagem `m8qf6ru2x75gukzozpsrssrm:6f4fcd7c3b8b831465ae7e24fb8adca8a6550160`. `/health` retornou `ok`; `/version` identificou `2026-10-02-provider-echo-canonical-dedup` e o recurso `provider-echo-canonical-dedup`.
 - Na correção de eco, `deno check bridge/server.ts` e `git diff --check` passaram. Não foi executada a suíte de testes nesta etapa.
 - 16 testes locais passaram; `deno check bridge/server.ts` e `git diff --check` passaram. Os testes usaram `--no-check` devido à dependência `npm:@types/node` ausente no cache local; o bridge foi verificado separadamente.
-- Estado da publicação registrado em [docs/HANDOFF-OPERACAO-EMBRAPA-E-FUNIL-2026-10-02.md](docs/HANDOFF-OPERACAO-EMBRAPA-E-FUNIL-2026-10-02.md); evidência visual em [docs/deploy-duplicacao-3219-2026-10-02.png](docs/deploy-duplicacao-3219-2026-10-02.png). Os arquivos sob `docs/` são ignorados pelo `.gitignore`, mas permanecem salvos localmente.
+- Estado da publicação registrado em `docs/HANDOFF-OPERACAO-EMBRAPA-E-FUNIL-2026-10-02.md`; evidência visual em `docs/deploy-duplicacao-3219-2026-10-02.png`. **Esses arquivos não foram versionados** (ver nota sobre `.gitignore` abaixo) e não estão neste worktree — o resumo acima permanece como registro.
 
 ### Repetição de vídeos — conversa 3219
 
@@ -82,7 +123,7 @@
 - Conversa **3225**: evidência de repetição em cascata. A fila tinha um envio do vídeo fase 01 (`scheduled_message_id` `48c68d10-8847-4d57-bdb6-526abe933f98`) e uma lista. Depois o Chatwoot recebeu **sete anexos de vídeo idênticos** de 15.650.923 bytes entre 08h43 e 08h50 BRT, sem `funnel_step` ou `scheduled_message_id` nas linhas adicionais. O mesmo Chatwoot message ID era salvo com outro ID do provedor cerca de 45 s depois; o próximo anexo aparecia ~60 s após o anterior. Não eram sete itens agendados: era eco acionando reenvio, timeout UAZAPI e fallback oficial, que criava novo eco.
 - Busca retrospectiva de 14 dias por mesma conversa + mesmo `chatwoot_message_id` + URL: **181 grupos excedentes em 102 conversas**; 29 grupos com intervalos de 40–50 s. É assinatura de registros duplicados, não prova de 181 envios físicos a mais. Exemplos incluem 3208, 3219, 3220, 3221 e 3225.
 - Depois da publicação `ba0b19e` (12h18 BRT), não apareceu grupo da mesma mídia/conversa/mensagem na consulta pós-deploy. Foram registrados **5 eventos `send_uncertain`** sem `fallback_requested`: a nova proteção reteve os casos sem confirmação, sem tentar pela segunda rota.
-- Auditoria detalhada: [docs/AUDITORIA-REPETICOES-FUNIL-2026-10-02.md](docs/AUDITORIA-REPETICOES-FUNIL-2026-10-02.md). O diretório `docs/` é ignorado pelo `.gitignore`; o resumo acima permanece neste HANDOFF versionado.
+- Auditoria detalhada: `docs/AUDITORIA-REPETICOES-FUNIL-2026-10-02.md` (não versionado, ausente neste worktree). **Nota sobre `.gitignore`:** `docs/` é ignorado **por padrão, com allowlist** — só os arquivos com linha `!docs/<nome>` são rastreados. Docs novos precisam ser allowlistados; o resumo acima permanece neste HANDOFF versionado.
 
 ## Conciliação de ecos por identidade do provedor — 02/10/2026, 14h52 BRT
 
