@@ -58,6 +58,15 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   SSH funciona com `~/.ssh/oracle_ubuntu_2026`; escrita no host o classifier bloqueia (passar o
   comando pro usuário). Ao editar compose no Coolify, **casar o nome exato das volumes** (`docker
   volume ls`) — renomear hífen↔underscore cria volume vazio e perde dados. Ver [[nginx-ip-container-quebra]].
+- **Migração "tudo pro n8n" (decidida 31/10) — recorte travado.** Reverte de propósito a regra
+  "lógica sempre no bridge". A LÓGICA e o CONTEÚDO editável vão pro n8n; o **bridge vira biblioteca
+  de primitivas burras** e FICA: `send-outbound`, Meta Graph/HMAC, dedup (`deliveries`), download
+  de mídia — não reimplementar protocolo em nós n8n. **Intent** = n8n chama `intent.ts` do bridge
+  (não nó de IA). **Estado longo** = `scheduled_messages` + cron (não Wait node). **Lane IA
+  fazer.ai** fica como está (webhook → `/ai-gate` fail-closed). **CPU** 2-vCPU é o risco: medir e
+  subir núcleos/isolar o n8n antes da Fase 4 (conversa reativa). Faseado + dual-run (o claim de
+  `deliveries` deixa n8n e o loop do bridge lerem a fila sem duplicar). Plano completo:
+  `docs/plano-migracao-n8n.md`.
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
 

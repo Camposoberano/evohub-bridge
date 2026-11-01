@@ -50,9 +50,7 @@ reimplementar isto em nós n8n é risco puro, sem ganho de controle:
 - Ramificação reativa: intent → resposta (preço, dúvida técnica, uso, pedido-humano).
 - Regras de campanha (reativações), pacing, horário, retomada.
 
-> Confirmar este recorte antes de começar. Se o dono quiser **também** as primitivas no n8n
-> (Meta Graph, HMAC, dedup em nós), somam-se semanas e o risco de regressão dispara — não
-> recomendado.
+> **Recorte CONFIRMADO (31/10):** primitivas ficam no bridge; o n8n chama. Decisão #1 abaixo.
 
 ---
 
@@ -159,11 +157,16 @@ justifica "tudo" — e é onde o custo/risco vive.
 
 ---
 
-## 7. Decisões em aberto (resolver antes da fase respectiva)
+## 7. Decisões (resolvidas 31/10)
 
-1. **Primitivas no bridge** (seção 2) — confirmar que send-outbound/Meta/dedup ficam, ou vão
-   também pro n8n (não recomendado).
-2. **Intent na Fase 4** — nó IA do n8n vs. chamar `intent.ts` do bridge.
-3. **Estado longo** — `scheduled_messages` + cron (recomendado) vs. Wait node.
-4. **Lane de IA (fazer.ai)** — fica como está (webhook → ai-gate) ou o n8n passa a rotear pra ela.
-5. **CPU** — medir e decidir subir núcleos/isolar n8n antes da Fase 4.
+1. **Primitivas no bridge — SIM.** `send-outbound`, Meta Graph, dedup (`deliveries`), download de
+   mídia ficam no bridge como API burra; o n8n chama. Preserva o hardening; não reimplementar
+   protocolo em nós n8n.
+2. **Intent na Fase 4 — n8n chama `intent.ts` do bridge.** Reusa a classificação endurecida; sem
+   custo de token, baixa latência. Nada de nó de IA pra classificar ramo.
+3. **Estado longo — `scheduled_messages` + cron.** Fila em tabela; n8n cron 1x/min lê o vencido.
+   Escala pra milhares de leads/dias. **Não** usar Wait node por lead.
+4. **Lane de IA (fazer.ai) — fica como está.** webhook → `/ai-gate` (fail-closed) intacto; o n8n
+   não roteia pra ela. Menos superfície de risco.
+5. **CPU — medir na Fase 0 e decidir antes da Fase 4.** n8n em escala numa VPS 2-vCPU é o maior
+   risco operacional; subir núcleos ou isolar o n8n antes do hot path reativo.
