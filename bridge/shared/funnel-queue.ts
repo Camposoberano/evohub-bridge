@@ -242,12 +242,21 @@ export async function pumpFunnelQueue(
 
       // Age-out: peça vencida há mais de STALE_MAX_MS é morta — cancela em vez de segurar pra
       // sempre na cabeça da fila (head-of-line). Antes do envio, pra não tentar entregar lixo.
+      // O filtro de status cobre `pending` E `paused`: os candidatos vêm de dois sets (pending
+      // vencido e paused+deferred_intent vencido). Com `.eq("status","pending")` as peças
+      // `paused` vencidas NÃO eram canceladas, mas `staleCancelled++` incrementava assim mesmo
+      // — o log dizia "canceladas N velhas" a cada tick enquanto as mesmas N voltavam à cabeça
+      // da fila para sempre (31/10: 10 peças, found:10/sent:0 em loop). Agora conta só o que de
+      // fato mudou de status.
       const sendAtMs = Date.parse(String(row.send_at ?? ""));
       if (Number.isFinite(sendAtMs) && sendAtMs < Date.now() - STALE_MAX_MS) {
-        const { error: staleError } = await db.from("scheduled_messages")
-          .update({ status: "cancelled" }).eq("id", id).eq("status", "pending");
+        const { data: staleRows, error: staleError } = await db.from(
+          "scheduled_messages",
+        )
+          .update({ status: "cancelled" }).eq("id", id)
+          .in("status", ["pending", "paused"]).select("id");
         if (staleError) throw staleError;
-        staleCancelled++;
+        if (staleRows && staleRows.length) staleCancelled++;
         continue;
       }
 
@@ -289,7 +298,28 @@ export async function pumpFunnelQueue(
           continue;
         }
         if (row.type === "deferred_intent" && sequence.status !== "running") {
-          held++;
+          // Sequência não-running e a peça não é ≥3d (já tratada no age-out). Antes isto só
+          // fazia `held++` SEM mexer no send_at — e, como a fila é ORDER send_at ASC LIMIT N,
+          // a mesma peça voltava à cabeça todo tick e starvava o resto (head-of-line,
+          // [[pump-head-of-line-defer]]). Agora:
+          //  - sequência encerrada (cancelled/completed/…): a rota adiada nunca mais sai →
+          //    cancela, como faz o resto do funil quando a sequência morreu.
+          //  - `paused` (pode retomar): empurra o send_at pra SAIR da cabeça da fila; ao
+          //    destravar, resumeSequenceRebased reprograma o que ficou parado.
+          if (sequence.status === "paused") {
+            await db.from("scheduled_messages")
+              .update({
+                send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString(),
+              })
+              .eq("id", id).in("status", ["pending", "paused"]);
+            held++;
+          } else {
+            const { error: deadSeqError } = await db.from("scheduled_messages")
+              .update({ status: "cancelled" }).eq("id", id)
+              .in("status", ["pending", "paused"]);
+            if (deadSeqError) throw deadSeqError;
+            cancelled++;
+          }
           continue;
         }
       } else if (funnel === "mega-sorgo-followup") {
