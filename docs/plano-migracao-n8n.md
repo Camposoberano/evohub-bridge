@@ -64,6 +64,14 @@ do bridge lerem a mesma fila (`funnel-queue.ts`). Então cada fase roda em paral
 - n8n com fila durável (execução em modo `queue` + Postgres próprio, já existe `soberano-n8n-postgresql`).
 - **CPU:** n8n executando milhares de execuções/dia numa VPS 2 vCPU é o maior risco operacional.
   Medir antes; considerar mover n8n ou subir núcleos (ver memória VPS single-box).
+  - **Baseline medido (31/10, bridge PAUSADO):** `nproc`=2; load avg **1.33 / 1.37 / 1.40** (~70%
+    de 2 cores) **sem o funil rodando**. RAM **11Gi** total, 6.8Gi disponível, swap 15Gi (1.5Gi em
+    uso) — **memória NÃO é o gargalo**. n8n hoje ocioso (0.06% CPU, 358MB — só cron). Maiores
+    consumidores: coolify+db+redis ~14%, supabase-minio/supavisor ~2.5% cada.
+  - **Leitura:** baseline já em ~70% com o funil DESLIGADO. Religar funil + n8n orquestrando em
+    escala empurra pro teto. O custo real do n8n só aparece sob carga (snapshot ocioso não diz
+    nada). **Antes da Fase 4: fazer load-test (rodar lote real pelo n8n, vigiar load/iowait) OU
+    já subir núcleos / isolar o n8n em outra box.** Recomendo subir cores antes do hot path.
 - Versionar os workflows (export JSON no git) — senão perde edição igual o session store do VS Code.
 - Credenciais no n8n: token send-outbound, service-role Supabase, admintoken uazapi, Meta.
 
