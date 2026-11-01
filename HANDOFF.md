@@ -1,6 +1,45 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Arquivo histórico.** O “estado atual” abaixo foi escrito em 06/10/2026. Para o mapa e a linha do tempo até 22/10/2026, comece por [docs/README.md](docs/README.md). Confirme deploy e configuração antes de interpretar uma nota antiga como operação vigente.
+> **Leia primeiro o bloco de 2026-11-01 abaixo.** O resto do arquivo é histórico
+> (estado escrito em 06/10 e atualizações de 17/10).
+
+## ESTADO ATUAL — 2026-11-01 (noite, ~20:50 BRT)
+
+**Deploy de hoje (bridge):** build `2026-11-01-funnel-queue-stale-head-of-line-fix`
+no `main` via Coolify (`POST /deploy?uuid=<SERVIDOR>` → 200). `/version` confirmou
+build + feature flag + 0 erro pós-boot.
+
+**Feito nesta sessão:**
+- **funnel-queue — churn eliminado (fix deployado).** O pump repetia
+  `found:10 / sent:0` + "canceladas 10 velhas" a cada ~30s sem nunca limpar. Causa:
+  (1) age-out cancelava com `.eq("status","pending")`, mas os candidatos também vêm
+  do set `paused + deferred_intent` → `staleCancelled++` logava sem cancelar de fato;
+  (2) branch `deferred_intent && sequence!=running` fazia `held++` sem mover `send_at`
+  (head-of-line). 10 zumbis starvavam **16 leads reais** com vídeo adiado legítimo.
+  Fix: age-out `.in(["pending","paused"])` + contagem real; sequence morta→cancela,
+  paused→defere `send_at`. Commits `24979db`+`758bb8d`, merge PR #42 `cd37396`.
+  Mitigação one-shot no banco: 13 peças zumbis canceladas → 16 leads receberam o vídeo.
+- **0595 cecape:** reconectado pelo dono; cancelei os **925 itens frios** pausados do
+  canal (campaign_queue paused→cancelled). Funil já 0. Inbound intacto.
+- **build label** bumpado (estava travado em 2026-10-10).
+
+**Pendente (ordem de risco):**
+1. **Divergência `main`↔`master`** (PIOR): `main` +2 commits à frente (fix de hoje),
+   `master` 152 atrás. `AGENTS.md` só existe no `master`; `HANDOFF.md` duplicado nos dois.
+   Precisa de decisão de reconciliação — é o maior risco e PIORA a cada deploy no main.
+2. Resíduo do #42: ramos de defer `muted`/fora-de-hora/`dispatchDeferredIntent` null
+   ainda usam `.eq("status","pending")` (latente p/ `paused`).
+3. macro-poll convs 4094/4744 presas em `cmd-enviar-video` (limpar etiqueta mata de vez).
+4. Mega Sorgo Santa Elisa page_id/token (#10); token admin Chatwoot exposto;
+   `startOperationalMonitorLoop` fora do kill-switch.
+
+**Decisão travada (anti-repetir-erro):** num worker `ORDER <tempo> ASC LIMIT N`,
+nenhum caminho pode deixar o item na cabeça sem avançá-lo; e quando o set de
+candidatos inclui `paused`, todo UPDATE de defer/cancel deve casar `pending|paused`,
+nunca só `pending` (senão o log mente e a peça volta pra sempre). (AGENTS.md mora no
+`master` — gravar lá quando a divergência for reconciliada.)
+
+---
 
 ## Publicação verificada — 17/10/2026, 18h21 BRT
 
