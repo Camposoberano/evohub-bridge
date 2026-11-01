@@ -67,6 +67,14 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   subir núcleos/isolar o n8n antes da Fase 4 (conversa reativa). Faseado + dual-run (o claim de
   `deliveries` deixa n8n e o loop do bridge lerem a fila sem duplicar). Plano completo:
   `docs/plano-migracao-n8n.md`.
+- **Eco de mídia da uazapi NÃO re-sobe bytes no Chatwoot.** A uazapi espelha toda saída; o
+  `ingestInbound` (`bridge/shared/inbound.ts`, ramo `msg.outgoing`) subia os bytes no Chatwoot a
+  cada eco → cópia nova por lead. O mesmo vídeo do funil virou **272 cópias (21G, medido 01/11** no
+  bucket `chatwoot-media`). Fix: eco outgoing registra só **rótulo/legenda**, `media_url` vem da URL
+  de origem; a saída do bridge já é registrada por `send-outbound`. **Entrada do cliente inalterada**
+  (ainda sobe o anexo). Trade-off: mídia de saída digitada à mão no aparelho aparece como rótulo
+  (`[vídeo]`), não inline. Backlog separado: dedup das 21G já acumuladas (precisa repontar
+  referências do Chatwoot). Ver [[disco-vps-limpeza]].
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
 

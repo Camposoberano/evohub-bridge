@@ -399,12 +399,18 @@ async function ingestInboundClaimed(
     cwMsg = null;
   } else if (msg.outgoing) {
     // echo do aparelho -> mensagem de SAIDA na conversa do cliente.
+    // NÃO re-subir a mídia do eco: a uazapi espelha toda saída e, subindo os bytes a cada
+    // envio, o Chatwoot guardava uma cópia nova por lead -- o mesmo vídeo do funil virou 272
+    // cópias (21G medido 01/11). A saída do bridge já foi registrada por send-outbound; aqui
+    // basta o rótulo/legenda. Mídia digitada à mão no aparelho passa a aparecer como rótulo
+    // ("[vídeo]") em vez de inline -- trade-off aceito para estancar o acúmulo. media_url segue
+    // preservado pela URL de origem (ver chatwootMediaUrl abaixo).
+    const echoContent = msg.content.trim() || rotuloDoTipo(msg.msgType);
     cwMsg = await createConversationMessage(
       conv.chatwoot_conversation_id as number,
       {
-        content: conteudoParaChatwoot,
+        content: echoContent,
         messageType: "outgoing",
-        attachments,
         alreadySent: true,
       },
       acct,
@@ -450,9 +456,8 @@ async function ingestInboundClaimed(
     }).then(() => {}, () => {});
     cwMsg = null;
   }
-  const chatwootMediaUrl = cwMsg
-    ? firstAttachmentUrl(cwMsg)
-    : (msg.attachments?.[0]?.sourceUrl ?? null);
+  const chatwootMediaUrl = (cwMsg ? firstAttachmentUrl(cwMsg) : null) ??
+    (msg.attachments?.[0]?.sourceUrl ?? null);
 
   if (providerEchoMatch) {
     const patch: Json = {};
