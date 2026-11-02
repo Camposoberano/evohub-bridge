@@ -52,6 +52,50 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   do `ctx_execute` (segredo lido do `.env`, nunca impresso).
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
+- **Divergência `master` ↔ `main`: RESOLVIDA em 02/11/2026** (`main` == `master`, e o
+  `AGENTS.md` passou a viver no `main`). O que fica como regra: **publicar é cherry-pick
+  pontual pro `main`, nunca merge de uma branch velha** — em 01/11 o `master` estava 149
+  commits atrás e **sem** os dois fixes de 30-31/10 (`095c415` filtro IN, `a31803d` guard de
+  eco), então um merge os reverteria. E **compare CONTEÚDO (diff two-dot) antes de concluir
+  que algo "só existe" numa branch**: em 01/11 o código já estava cherry-pickado e só 7 docs
+  estavam presos de fato.
+  ⚠️ Branch de trabalho não é lugar de guardar documentação: 5 commits de doc + 1 migration da
+  sessão de 01/11 ficaram **fora do `main`** porque a divergência foi resolvida por outra
+  sessão, pelo outro lado. Levar doc pro `main` no mesmo dia em que é escrita.
+- **Canal `0595` está SUSPENSO por decisão do dono (02/11/2026): não enviar nada por ele.**
+  `channels.status = inactive` + `last_error` explicando. A instância está **conectada** na
+  uazapi — não foi queda, foi decisão, para não arriscar travar a fila
+  ([[instancia-uazapi-trava-fila]]). A fila dele já está zerada: 0 `pending`, 0 `paused`, 925
+  `cancelled`, e nenhuma `sales_sequences`/`scheduled_messages` nas 269 conversas.
+  ⚠️ **Alcance real do `inactive`:** é suspensão documental e tira o canal de seletores que
+  filtram `status = active` — **não** é bloqueio técnico de envio. O envio uazapi resolve a
+  rota por **nome da instância** (`getDirectUazapiRoute` → `tokenForInstance`,
+  `bridge/shared/hybrid.ts:174`), sem consultar `channels.status`. Quem de fato impede envio é
+  a fila vazia + não criar campanha nova nele. A **entrada continua funcionando** (a entrada
+  acha o canal por `external_id`/`name`, sem filtrar status), então lead do 0595 ainda chega no
+  Chatwoot — e se escrever, o reativo responde. Reverter = `status active` + limpar
+  `last_error`. O `channel-sync` **não** reverte sozinho: ele só varre canais com
+  `hub_channel_id` não nulo, e o 0595 (uazapi) tem `hub_channel_id` nulo.
+- **DDL no self-host: o SQL Editor do Studio NÃO aceita `CREATE INDEX CONCURRENTLY`** — ele
+  envolve tudo num bloco de transação e devolve `25001: cannot run inside a transaction
+  block`. E o `postgres` **não é dono** das tabelas: sem `set role supabase_admin` vem
+  `must be owner of table`. Caminhos que funcionam: `psql -c` (não abre transação) ou criar
+  sem `CONCURRENTLY` quando o lock couber (medir quantas linhas o índice cobre antes).
+  O bridge **não serve** para DDL — só fala PostgREST — e `SUPABASE_DB_URL` está vazio no
+  `.env`, então não há caminho automatizado: DDL é sempre ação manual do dono.
+- **Antes de culpar índice ausente, MEÇA.** Em 01/11 diagnostiquei `events/raw: 57014` como
+  falta do `idx_events_received_at` — errado, ele existe e funciona (`order received_at` em
+  524ms sobre 426k linhas, retenção drenando: a tabela caiu de 1,7M para 426k). A causa real
+  era o filtro `payload->'message'->>'fromMe'` **sem índice de expressão**: cada candidato
+  precisava ter o payload desserializado. Decompor a consulta por partes achou o culpado em
+  minutos — sem filtro JSONB 278-414ms estável, com filtro 277ms até TIMEOUT. Fix em
+  `supabase/migrations/0019_events_fromme_expression_index.sql`; nenhuma linha de código
+  mudou.
+- **Token de canal social (FB/IG) se testa no proxy, não no Graph.**
+  `GET $EVOLUTION_HUB_URL/meta/me?fields=id,name` com `Authorization: Bearer <channel_token>`.
+  O `channel_token` é credencial do **EVO Hub**, não access token do Graph: batendo em
+  `graph.facebook.com` os 5 canais devolvem o mesmo `400 Cannot parse access token` e parecem
+  todos expirados. Em 01/11 isso gerou um falso "5 canais quebrados" — pelo caminho certo era 1.
 
 ---
 
