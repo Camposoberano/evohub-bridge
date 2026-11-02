@@ -86,6 +86,7 @@ import {
 } from "./shared/macro-command-id.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
 import { agendarLoop } from "./shared/loop-guard.ts";
+import { describeError } from "./shared/error-detail.ts";
 import {
   admin,
   claimDelivery,
@@ -779,11 +780,13 @@ async function purgeOldEventsInBatches(
     const { data: rows, error } = await db.from("events")
       .select("id").lt("received_at", cutoff)
       .order("received_at", { ascending: true }).limit(BATCH);
-    if (error) throw error;
+    // Erro do PostgREST é objeto plano; embrulha em Error com a causa legível (senão o catch
+    // do loop logava "[object Object]" e o 57014/timeout ficava invisível).
+    if (error) throw new Error(`purge events select: ${describeError(error)}`);
     const ids = ((rows ?? []) as Array<{ id: unknown }>).map((r) => r.id);
     if (ids.length === 0) break;
     const { error: delErr } = await db.from("events").delete().in("id", ids);
-    if (delErr) throw delErr;
+    if (delErr) throw new Error(`purge events delete: ${describeError(delErr)}`);
     total += ids.length;
     if (ids.length < BATCH) break;
   }
@@ -808,7 +811,7 @@ function startDataCleanupLoop() {
         );
       }
     } catch (e) {
-      console.error("data-cleanup erro:", e);
+      console.error("data-cleanup erro:", describeError(e));
     }
   };
   agendarLoop("data-cleanup", run, {
