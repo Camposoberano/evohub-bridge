@@ -290,9 +290,12 @@ export async function pumpFunnelQueue(
           .maybeSingle();
         if (sequenceError) throw sequenceError;
         if (!sequence || sequence.status === "replied") {
+          // Candidatos incluem `paused deferred_intent`; `.eq("status","pending")` casava 0
+          // linhas numa peça paused (mas `cancelled++` incrementava do mesmo jeito) e a peça
+          // voltava vencida à cabeça da fila todo tick. Casa pending|paused.
           const { error: cancelError } = await db.from("scheduled_messages")
             .update({ status: "cancelled" }).eq("id", id)
-            .eq("status", "pending");
+            .in("status", ["pending", "paused"]);
           if (cancelError) throw cancelError;
           cancelled++;
           continue;
@@ -353,7 +356,7 @@ export async function pumpFunnelQueue(
         ) {
           const { error: cancelError } = await db.from("scheduled_messages")
             .update({ status: "cancelled" }).eq("id", id)
-            .eq("status", "pending");
+            .in("status", ["pending", "paused"]);
           if (cancelError) throw cancelError;
           cancelled++;
           continue;
@@ -366,7 +369,10 @@ export async function pumpFunnelQueue(
       if (!isWithinFunnelSendHours(dispatchAt)) {
         const nextSendAt = new Date(nextFunnelSendAt(dispatchAt)).toISOString();
         const { error: deferError } = await db.from("scheduled_messages")
-          .update({ send_at: nextSendAt }).eq("id", id).eq("status", "pending");
+          .update({ send_at: nextSendAt }).eq("id", id).in("status", [
+            "pending",
+            "paused",
+          ]);
         if (deferError) throw deferError;
         held++;
         continue;
@@ -389,7 +395,7 @@ export async function pumpFunnelQueue(
         // o send_at pra SAIR da cabeça da fila e não travar o resto.
         await db.from("scheduled_messages")
           .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
-          .eq("id", id).eq("status", "pending");
+          .eq("id", id).in("status", ["pending", "paused"]);
         held++;
         heldMuted++;
         continue;
@@ -413,7 +419,7 @@ export async function pumpFunnelQueue(
           await releaseQueueClaim(db, claimKey);
           await db.from("scheduled_messages")
             .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
-            .eq("id", id).eq("status", "pending");
+            .eq("id", id).in("status", ["pending", "paused"]);
           held++;
           continue;
         }
