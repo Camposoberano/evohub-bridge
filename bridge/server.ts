@@ -409,8 +409,13 @@ function startSyncLoop() {
   // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
   // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
   // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
+  // IG-inbound é o ÚNICO caminho de entrada do Instagram (sem webhook), então a latência de
+  // entrada = o intervalo. Ficava em 10s, mas numa VPS de 2 vCPU isso é ~6 ticks/min de chamada
+  // Graph + um evento `sync_completed` por tick (heartbeat lido por operational-health). 30s corta
+  // ~3x o volume e a latência de DM continua ok. TETO: operational-health alerta
+  // `instagramSyncStale` se o último sync_completed inbound tem >2min — manter o intervalo < 2min.
   for (const [channelType, mode, intervaloMs] of [
-    ["instagram", "inbound", 10_000],
+    ["instagram", "inbound", 30_000],
     ["instagram", "outgoing", 30_000],
     ["facebook", "both", 30_000],
   ] as const) {
