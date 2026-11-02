@@ -25,6 +25,19 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
 - **VPS é uma caixa só** (`136.248.116.231`, 2 vCPU): Supabase + Chatwoot + bridge + fazer-ai
   + Grafana no mesmo IP. CPU é o gargalo. Operações pesadas (drain, scans) a **≤3 workers** +
   pausa, senão 100% CPU derruba as queries de todo mundo.
+- **O n8n JÁ RODA nesta mesma VPS — a "Fase 0 (infra)" do plano de migração está FEITA.**
+  `https://automacao.soberano.pro` (`/healthz` → `{"status":"ok"}`, container `10.0.5.2`), com
+  **41 workflows, 20 ativos**, e o **funil Soberano 5895 já despacha por cron do n8n** — o n8n
+  está no caminho crítico HOJE, não é um futuro. Consequências para o planejamento:
+  1. Migrar **não** é somar uma carga nova à caixa: é **mover** carga do bridge pro n8n. O
+     delta pode ser **negativo** (pior), porque uma execução de workflow custa mais que um
+     laço Deno — medir os dois lados antes de afirmar ganho.
+  2. Antes da Fase 1, **inventariar o que já está no n8n**. Sem isso a migração duplica
+     lógica que já existe, e 21 dos 41 workflows são cópias/testes que dão para limpar.
+  3. Para um agente inspecionar: precisa de `N8N_API_KEY` no `.env` (não há nenhuma hoje);
+     `/api/v1/workflows` exige o header `X-N8N-API-KEY` e `/rest/login` responde 401. Criar
+     uma key **nova** resolve dois problemas de uma vez, porque a anterior foi colada em chat
+     e está na fila de rotação.
 - **Observabilidade — onde ver CPU (e por que um agente NÃO consegue ver hoje).**
   `https://grafana.soberano.pro` (Grafana 13.x, `/api/health` responde sem auth e serve de
   ping). Serviço Coolify `mbc0rqqk3kn47uxkw8mufuuu` = Grafana + Prometheus + Alertmanager +
