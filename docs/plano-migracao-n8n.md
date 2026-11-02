@@ -6,6 +6,28 @@
 > (CLAUDE.md) e desfaz, ao contrário, a migração Secretária v3 (n8n) → V4 (bridge).
 > Risco assumido pelo dono. Este plano existe pra fazer isso **sem apagão** numa VPS de 2 vCPU.
 
+> ### ⚠️ Atualização de status — 02/11/2026
+>
+> **A Fase 0 (infra) está FEITA — não gastar os 2-3 dias dela.** O n8n já roda **nesta mesma
+> VPS**: `https://automacao.soberano.pro` (`/healthz` → `{"status":"ok"}`, container
+> `10.0.5.2`), com **41 workflows, 20 ativos**, e o **funil Soberano 5895 já despacha por cron
+> do n8n**. O n8n está no caminho crítico HOJE.
+>
+> Isso corrige uma premissa deste plano: migrar **não** soma carga nova à caixa, **move** carga
+> do bridge pro n8n — e o delta pode ser **negativo**, porque uma execução de workflow custa
+> mais que um laço Deno. Logo a nota de CPU da Fase 0 continua válida, mas a pergunta mudou:
+> não é "dá pra instalar aqui?", é "quanto o n8n já consome, quanto o bridge consome, e sobra
+> quanto?".
+>
+> **Próximo passo real = inventariar o que já existe no n8n, ANTES da Fase 1.** Com 20
+> workflows ativos, começar a Fase 1 às cegas duplica lógica que já roda; e 21 dos 41 são
+> cópias/testes que dão para limpar. Falta `N8N_API_KEY` no `.env` para um agente conseguir
+> listar (`/api/v1/workflows` exige `X-N8N-API-KEY`; `/rest/login` responde 401) — e criar uma
+> key nova também rotaciona a anterior, que foi colada em chat.
+>
+> Pendência ainda aberta da Fase 0: **versionar os workflows (export JSON no git)**. Hoje a
+> edição do n8n não está no repositório — é a mesma exposição que já custou uma sessão perdida.
+
 ---
 
 ## 1. O que roda hoje (inventário real)
