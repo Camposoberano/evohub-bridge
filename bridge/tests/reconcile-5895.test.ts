@@ -1,5 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { matchingReceipt, reconcilable5895Type, uniqueConfirmedReceipt } from "../shared/reconcile-5895.ts";
+import {
+  expireStale5895Uncertain,
+  matchingReceipt,
+  reconcilable5895Type,
+  uniqueConfirmedReceipt,
+} from "../shared/reconcile-5895.ts";
 
 const at = Date.parse("2026-10-12T12:00:00Z");
 const row = { type: "video", payload: { media_url: "https://example.test/video.mp4" } };
@@ -60,4 +65,93 @@ Deno.test("áudio incerto não entra na conciliação de recibos suportados", ()
   assertEquals(reconcilable5895Type("video"), true);
   assertEquals(reconcilable5895Type("document"), true);
   assertEquals(reconcilable5895Type("interactive"), true);
+});
+
+// deno-lint-ignore no-explicit-any
+function fakeDb(rows: any[]) {
+  const store = new Map<string, any>(
+    rows.map((r) => [String(r.id), structuredClone(r)]),
+  );
+  const updated: string[] = [];
+  const db = {
+    from() {
+      // deno-lint-ignore no-explicit-any
+      const ctx: any = { mode: "select", filters: {}, payload: null };
+      // deno-lint-ignore no-explicit-any
+      const builder: any = {
+        select() {
+          if (ctx.mode !== "update") return builder;
+          const id = String(ctx.filters["id"]);
+          const row = store.get(id);
+          const d = row?.payload?.__funnel_delivery ?? {};
+          if (row && d.last_outcome === "uncertain" && !d.followups_released_at) {
+            store.set(id, { id, payload: ctx.payload });
+            updated.push(id);
+            return Promise.resolve({ data: [{ id }], error: null });
+          }
+          return Promise.resolve({ data: [], error: null });
+        },
+        // deno-lint-ignore no-explicit-any
+        update(value: any) {
+          ctx.mode = "update";
+          ctx.payload = value.payload;
+          return builder;
+        },
+        like() {
+          return builder;
+        },
+        eq(col: string, val: unknown) {
+          ctx.filters[col] = val;
+          return builder;
+        },
+        is() {
+          return builder;
+        },
+        limit() {
+          return Promise.resolve({
+            data: [...store.values()].map((r) => ({ id: r.id, payload: r.payload })),
+            error: null,
+          });
+        },
+      };
+      return builder;
+    },
+  };
+  return { db, store, updated };
+}
+
+Deno.test("age-out expira só peça 5895 incerta, não-liberada e com +72h", async () => {
+  const now = Date.parse("2026-11-02T00:00:00Z");
+  const h = (hours: number) => new Date(now - hours * 3_600_000).toISOString();
+  const delivery = (over: Record<string, unknown>) => ({
+    id: String(over.id),
+    payload: {
+      media_url: "https://x.test/v.mp4",
+      __funnel_delivery: {
+        last_outcome: "uncertain",
+        attempt_id: `att-${over.id}`,
+        last_attempt_at: over.last_attempt_at,
+        transport_stage: over.transport_stage ?? "await_receipt",
+        ...(over.followups_released_at
+          ? { followups_released_at: over.followups_released_at }
+          : {}),
+      },
+    },
+  });
+  const velha = delivery({ id: "a", last_attempt_at: h(100) });
+  const recente = delivery({ id: "b", last_attempt_at: h(10) });
+  const liberada = delivery({
+    id: "c",
+    last_attempt_at: h(200),
+    followups_released_at: h(190),
+  });
+  const { db, store, updated } = fakeDb([velha, recente, liberada]);
+  // deno-lint-ignore no-explicit-any
+  const expired = await expireStale5895Uncertain(db as any, now);
+  assertEquals(expired, 1);
+  assertEquals(updated, ["a"]);
+  assertEquals(store.get("a").payload.__funnel_delivery.last_outcome, "expired");
+  assertEquals(store.get("a").payload.__funnel_delivery.prior_last_outcome, "uncertain");
+  assertEquals(store.get("b").payload.__funnel_delivery.last_outcome, "uncertain");
+  assertEquals(store.get("c").payload.__funnel_delivery.last_outcome, "uncertain");
 });

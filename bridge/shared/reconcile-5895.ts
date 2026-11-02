@@ -19,6 +19,11 @@ const digits = (value: unknown) => String(value ?? "").replace(/\D/g, "");
 const HUB_5895_NUMBER = "5519999715895";
 const confirmedStatuses = new Set(["Delivered", "Read", "Played"]);
 const MAX_CANDIDATES = 3;
+// Depois disto a janela Meta (24-72h) fechou e o recibo já saiu do histórico que o
+// `/message/find` alcança: a peça nunca mais se confirma nem libera followup. Sem age-out ela
+// fica `failed+uncertain` para sempre e realimenta `5895_media_blocked`/`video_receipt_overdue`
+// (3 peças travadas de 11-16/out alertaram até 02/11). Expira (não finge entrega) p/ drenar.
+const STALE_EXPIRE_MS = 72 * 60 * 60_000;
 
 export function reconcilable5895Type(type: unknown): boolean {
   return type === "video" || type === "document" || type === "interactive";
@@ -28,9 +33,58 @@ export type ReconcileSummary = {
   checked: number;
   reconciled: number;
   released_unconfirmed: number;
+  expired: number;
   unresolved: number;
   errors: Record<string, number>;
 };
+
+/**
+ * Peça 5895 `failed+uncertain` sem followup liberado e com a última tentativa há mais de 72h:
+ * o recibo não é mais encontrável e a janela Meta fechou. Marca `last_outcome: "expired"`
+ * (NÃO "sent" — não afirmamos entrega), guardando o valor anterior, pra sair dos alertas e do
+ * loop do reconcile. Cobre TODOS os tipos (reconcile só trata video/document/interactive; áudio
+ * e text escapavam e alertavam para sempre). Nunca envia nada.
+ */
+export async function expireStale5895Uncertain(
+  db: DbClient = admin(),
+  now = Date.now(),
+): Promise<number> {
+  const { data, error } = await db.from("scheduled_messages")
+    .select("id,payload")
+    .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
+    .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+    .is("payload->__funnel_delivery->>followups_released_at", null)
+    .limit(200);
+  if (error) throw error;
+  let expired = 0;
+  for (const row of (data ?? []) as Pick<Row, "id" | "payload">[]) {
+    const meta = (row.payload?.__funnel_delivery ?? {}) as Json;
+    const attemptAt = Date.parse(String(meta.last_attempt_at ?? ""));
+    if (!Number.isFinite(attemptAt) || attemptAt > now - STALE_EXPIRE_MS) continue;
+    const attemptId = String(meta.attempt_id ?? "");
+    const nextPayload = {
+      ...row.payload,
+      __funnel_delivery: {
+        ...meta,
+        prior_last_outcome: meta.last_outcome ?? null,
+        last_outcome: "expired",
+        expired_at: new Date(now).toISOString(),
+        expired_reason: "aged_unconfirmable_72h",
+      },
+    };
+    let update = db.from("scheduled_messages").update({ payload: nextPayload })
+      .eq("id", row.id).eq("status", "failed")
+      .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+      .is("payload->__funnel_delivery->>followups_released_at", null);
+    if (attemptId) {
+      update = update.eq("payload->__funnel_delivery->>attempt_id", attemptId);
+    }
+    const { data: done, error: updateError } = await update.select("id");
+    if (updateError) throw updateError;
+    if (done?.length === 1) expired++;
+  }
+  return expired;
+}
 
 export function matchingReceipt(
   row: Pick<Row, "type" | "payload">,
@@ -90,7 +144,10 @@ export async function reconcile5895Uncertain(
   db: DbClient = admin(),
   now = Date.now(),
 ): Promise<ReconcileSummary> {
-  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, unresolved: 0, errors: {} };
+  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, expired: 0, unresolved: 0, errors: {} };
+  // Primeiro drena as peças velhas demais p/ confirmar (72h); cobre áudio/text que o laço abaixo
+  // não seleciona. Roda no mesmo cron do reconcile (/n8n-reconcile-5895).
+  summary.expired = await expireStale5895Uncertain(db, now);
   const { data, error } = await db.from("scheduled_messages")
     .select("id,conversation_id,funnel,step,type,status,payload")
     .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
@@ -271,7 +328,7 @@ export async function reconcile5895VideoNotice(
   notice: ConfirmedVideoNotice,
   db: DbClient = admin(),
 ): Promise<ReconcileSummary> {
-  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, unresolved: 0, errors: {} };
+  const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, expired: 0, unresolved: 0, errors: {} };
   const { data: contacts, error: contactsError } = await db.from("contacts")
     .select("id,channel_id").eq("external_contact_id", notice.recipient).limit(20);
   if (contactsError) throw contactsError;
