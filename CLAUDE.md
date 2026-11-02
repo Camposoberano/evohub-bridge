@@ -166,11 +166,17 @@
   (em 24-25/10, 51/51 entradas do 5895 processaram, 0 `inbound_processing_failed`). Agora só ALERTA
   incidente mais velho que **`INBOUND_ALERT_MIN_AGE_MS`** (default 8min); detecção (90s) e replay
   (2min) inalterados. `4000d77`.
-- **`reconcile-5895` NÃO avança com recibo presente — ABERTO** (24/10/2026, não corrigido): 30 peças
-  de vídeo presas em `transport_stage`=`await_receipt`/`await_response` desde Out 11-18; 29 com
-  `provider_status`=`Delivered`/`Read` (ENTREGUE) mas `followups_released_at`=null → `reconcile-5895.ts`
-  só trata `receipt_missing`, não o caso recibo-já-presente. Trava follow-ups em ~20 conversas +
-  alertas `5895_media_blocked`/`video_receipt_overdue`. #971 é falha real de envio (sem provider_id).
+- **Mídia 5895 incerta inconfirmável trava os alertas — age-out de 72h (02/11/2026, `dfc7b93`).**
+  Peça `scheduled_messages` `failed + __funnel_delivery.last_outcome=uncertain` sem `followups_released_at`
+  nunca saía desse estado quando o recibo envelhecia do `/message/find` (vídeo) ou o tipo não é
+  reconciliável (áudio/text) → `5895_media_blocked`/`5895_video_receipt_overdue` alertavam para sempre
+  (3 peças de 11-16/out: #3728, #971 vídeo; #3677 áudio — todas `provider_status=None`, NÃO era o caso
+  "recibo-já-presente" que se temia). Fix: `expireStale5895Uncertain` marca `last_outcome:"expired"`
+  (NÃO "sent" — não afirma entrega) em peça com `last_attempt_at > 72h`, todos os tipos, no cron do
+  reconcile. As 3 presas foram expiradas à parte no banco. **Regra:** `uncertain` ≠ não-entregue; e
+  monitor de "incidente pendente" sobre estado que o automático pode nunca resolver precisa de age-out.
+  Ver [[reconcile-5895-age-out]]. (Melhoria futura não feita: reconcile confirmar p/ `sent` quando o
+  recibo Delivered/Read já está no meta — não apareceu ao vivo.)
 - **Bot agro (fazer.ai) GO-LIVE 2026-10-29 em install PRÓPRIO no soberano.pro** (`agents.soberano.pro`,
   tenant 2 `campo-soberano-agro`, agente "Vendedor Agro" na inbox 46). NUNCA criar material do agro no
   tenant 1 (= Instituto Belém). Lane via `AI_LANE_ENABLED=1` + contactAuth `/ai-gate`. Detalhe +
