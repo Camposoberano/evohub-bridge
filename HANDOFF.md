@@ -1,7 +1,101 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Leia primeiro o bloco de 2026-11-02 abaixo.** Depois o de 2026-11-01. O resto é
-> histórico (06/10 e 17/10).
+> **Leia primeiro o bloco de 2026-11-02 (tarde) abaixo.** Depois o de 02/11 madrugada e o de
+> 2026-11-01. O resto é histórico (06/10 e 17/10).
+
+## ESTADO ATUAL — 2026-11-02 (tarde, ~15:35 BRT)
+
+**Branch de trabalho:** `publica/plano-n8n`. **Nenhum deploy nesta sessão** — tudo foi resolvido
+em dado e config, de propósito, para respeitar a regra de não reiniciar o bridge entre 8-20h BRT.
+
+### O problema: o 0595 estava disparando, depois de eu dizer que estava parado
+
+O dono avisou: *"0595 disparou e está disparando... pode haver bloqueio, ele caiu esses dias"*.
+Estava certo. Medi: **26 vídeos em 24h, a cada 10 minutos exatos**, para leads que receberam a
+abertura em 22-23/out e nunca responderam. Só 2 entradas no dia inteiro — não era reativo.
+
+**Eu errei duas vezes nesta frente, e as duas já estão travadas no `AGENTS.md`:**
+
+1. **"Fila vazia = canal parado" é falso.** Na sessão anterior marquei `channels.status=inactive`,
+   conferi as três filas (todas zeradas) e declarei parado. Quem disparava era
+   `pumpCampaignAutoVideos` (`bridge/shared/campaign-auto-video.ts`, `GAP_MS=10min`), que **não lê
+   fila**: varre `campaign_flow_state` (`step_id='abertura'`, `status='waiting'`). Não filtra
+   `channels.status`, não gera `funnel_delivery_attempt`, grava `messages` com `funnel=NULL` e a
+   campanha mora em `campaigns.json` **no bucket**, não em tabela. Invisível em toda auditoria.
+   Havia **188 represados** (~2,5 dias de disparo). O que entregou foi o log do bridge:
+   `campaign-auto-video: confirmado reativacao-0595-uz`.
+2. **`channels.status=inactive` quebrou o atendimento manual, em silêncio.**
+   `handlers/sync-chatwoot-out.ts:41` filtra `.eq("status","active")` — é o fallback de saída que
+   existe porque o webhook do Chatwoot vive dando 502/503. Com o canal `inactive`, o que o
+   atendente digita no Chatwoot **não era despachado por ninguém**: sem erro, sem `status failed`,
+   sem rastro. O dono percebeu por *"mandei preço, não foi, tentei vídeo, não foi"*. Pelo aparelho
+   ia (não passa pelo bridge, só ecoa), o que fazia o sintoma parecer aleatório.
+
+### Estado final, medido 18:34 UTC (não é promessa, é contagem)
+
+```
+canal status            active   <- de propósito: atendente envia na mão
+abertura/waiting             0   <- laço sem alvo
+abertura/paused            188   <- retidos
+autoVideoAfterMin            0   <- laço não pesca esta campanha (exige >= 5)
+scheduled_messages pending   0
+campaign_queue pending       0
+automático pelo 0595         0 envios desde 17:01 (~9 ticks em branco)
+```
+
+Demais canais intactos: 5895 e 6836 seguem com `autoVideoAfterMin=60` e rodando normal
+(22 envios no mesmo período). 36 campanhas preservadas no JSON.
+
+### Feito nesta sessão
+
+1. **Diagnóstico do disparo fantasma** — do sintoma ao laço, por eliminação: filas → `/n8n-queue`
+   (grava `funnel`, logo não era) → `events source=hybrid` (`payload.instance="0595 cecape"`) →
+   log do bridge. A cadência de 10min exatos foi a pista que descartou "lead respondendo".
+2. **Parada em 2 camadas, sem deploy:** estoque (188 `waiting`→`paused` em `campaign_flow_state`)
+   + torneira (`autoVideoAfterMin` 60→0 só na `reativacao-0595-uz`). `readCampaigns()` não
+   cacheia, então valeu na hora. Backup em
+   `soberano-config/backups/campaigns-antes-parada-0595-20261102.json`.
+3. **Atendimento manual devolvido:** `channels.status` de volta para `active`, com `last_error`
+   explicando que a suspensão mora em outra camada e por que não se usa `status` para isso.
+4. **Recorte dos leads:** dos 45 em `waiting`, **19 em `video` NÃO responderam** (receberam o
+   vídeo hoje, do próprio laço) e **26 em `area` responderam de verdade** (clicaram no vídeo e
+   pararam na pergunta de área). 7 pararam há ≤4 dias, 19 há 5-11 dias. ⚠️ A lista crua "quem
+   respondeu" vem contaminada: o 0595 recebe cobrança, operadora e tráfego do **CECAPE** (outro
+   projeto) — filtrar pelo estado do flow, nunca por "tem entrada".
+5. **`docs/kit-atendimento-manual.md`** — peças de `funnel_media` para atendimento na mão (cards
+   de preço por área, plantio imagem/PDF/vídeo 02, bromatológica, vídeo de reativação), todas
+   testadas por HTTP e **vivas**: a biblioteca apagada em 08/09 voltou ao bucket.
+6. **Decisões travadas** no `AGENTS.md` + memória `canal-0595-suspenso`.
+
+### Pendente / próximo passo
+
+- [ ] **Os outros 3 canais têm o mesmo mecanismo ligado.** `reativacao-5895-uz`, `5895-of` e
+      `6836-uz` estão com `autoVideoAfterMin=60` — mandam vídeo não solicitado pelo mesmo laço.
+      Não toquei (o pedido era o 0595), mas o risco de bloqueio é idêntico. **Decisão do dono.**
+- [ ] **Peça de preço furando a regra travada.** Em 02/11 17:11 o 5895 enviou automaticamente
+      *"preço-base R$ 89,95/kg"*. A regra é que o automático nunca manda `R$` (preço é por
+      volume, o Cícero cota — ver [[preco-sem-numero-fast-track]]). Ou a regra mudou, ou há peça
+      nova furando. **Não investiguei** — fora do escopo pedido.
+- [ ] **`SUPABASE_SERVICE_ROLE_KEY` em texto claro** no workflow n8n `Funil Mega Sorgo -
+      Apresentacao (cron)` (inativo, mas o valor está guardado lá), junto com
+      `CHATWOOT_WEBHOOK_SECRET`. É a chave que ignora RLS. **Mais urgente da lista.**
+- [ ] **`0bac613`** (inventário n8n: 17 JSONs sanitizados + `n8n/README.md`) segue **sem push** —
+      bloqueado pelo classificador como publicação fora de lugar. Só existe no worktree.
+- [ ] Rotações pendentes: token SuperAdmin do Chatwoot (`CHATWOOT_ADMIN_TOKEN` e
+      `CHATWOOT_API_ACCESS_TOKEN` juntos, Coolify + `.env`), `COOLIFY_TOKEN`, `TYPESAFE_API_KEY`,
+      e a key antiga do n8n. ⚠️ **Antes de revogar a key do n8n:** `N8N_API_KEY` também existe em
+      3 arquivos do **CECAPE** — se for a mesma instância, revogar derruba o outro projeto.
+      Conferir em Settings → API quantas keys existem e o último uso de cada.
+- [ ] `GRAFANA_TOKEN` (service account Viewer) para destravar a medição de CPU.
+- [ ] Cosmético: `cancelled` no retorno de `pumpFunnelQueue`; bumpar `build:` em `server.ts`.
+
+### Bloqueios / avisos
+
+- **Lista dos 26 mornos com telefone não pôde ser gravada em arquivo** (classificador barrou por
+  dados pessoais). Os links de conversa do Chatwoot foram entregues no chat. Se precisar do
+  arquivo com telefones, pedir autorização explícita.
+- **A instância uazapi do 0595 chama-se `0595 cecape`** e é compartilhada com outro projeto.
+  Nunca cadastrar canal para números de fora ([[canal-nao-cadastrado-falso-positivo]]).
 
 ## ESTADO ATUAL — 2026-11-02 (madrugada, ~01:30 BRT)
 

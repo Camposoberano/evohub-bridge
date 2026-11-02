@@ -93,10 +93,11 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   ⚠️ Branch de trabalho não é lugar de guardar documentação: 5 commits de doc + 1 migration da
   sessão de 01/11 ficaram **fora do `main`** porque a divergência foi resolvida por outra
   sessão, pelo outro lado. Levar doc pro `main` no mesmo dia em que é escrita.
-- **Canal `0595` está SUSPENSO por decisão do dono (02/11/2026): não enviar nada por ele.**
-  `channels.status = inactive` + `last_error` explicando. A instância está **conectada** na
-  uazapi — não foi queda, foi decisão, para não arriscar travar a fila
-  ([[instancia-uazapi-trava-fila]]).
+- **Canal `0595`: DISPARO AUTOMÁTICO suspenso por decisão do dono (02/11/2026); atendimento na
+  mão SEGUE LIBERADO.** A instância está **conectada** na uazapi — não foi queda, foi decisão,
+  por risco de bloqueio (o número já caiu dias antes). O canal fica
+  **`channels.status = active`** de propósito: a suspensão mora em `campaign_flow_state` +
+  `campaigns.json`, nunca no status ([[instancia-uazapi-trava-fila]]).
   🔴 **Suspender canal NÃO é só `channels.status` + filas: existe disparo que não vem de fila
   nenhuma.** Em 02/11, horas depois da suspensão, o 0595 continuou mandando vídeo a cada
   **10 minutos exatos**. Todas as filas estavam zeradas (`campaign_queue` 0 `pending`,
@@ -117,15 +118,23 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   `soberano-config/backups/campaigns-antes-parada-0595-20261102.json`.
   **Antes de dizer que um canal está parado, procure os disparadores que não são fila**:
   `grep -rn "status\", \"waiting\"" bridge/shared/`.
-  ⚠️ **Alcance real do `inactive`:** é suspensão documental e tira o canal de seletores que
-  filtram `status = active` — **não** é bloqueio técnico de envio. O envio uazapi resolve a
-  rota por **nome da instância** (`getDirectUazapiRoute` → `tokenForInstance`,
-  `bridge/shared/hybrid.ts:174`), sem consultar `channels.status`. Quem de fato impede envio é
-  a fila vazia + não criar campanha nova nele. A **entrada continua funcionando** (a entrada
-  acha o canal por `external_id`/`name`, sem filtrar status), então lead do 0595 ainda chega no
-  Chatwoot — e se escrever, o reativo responde. Reverter = `status active` + limpar
-  `last_error`. O `channel-sync` **não** reverte sozinho: ele só varre canais com
-  `hub_channel_id` não nulo, e o 0595 (uazapi) tem `hub_channel_id` nulo.
+  🔴 **NUNCA use `channels.status = inactive` para suspender campanha — isso MATA o envio
+  manual do atendente, em silêncio.** `handlers/sync-chatwoot-out.ts:41` seleciona
+  `.eq("type","whatsapp").eq("status","active")`. Esse laço é o **fallback de saída** que
+  existe porque o webhook do Chatwoot vive dando 502/503 ([[webhook-chatwoot-instavel]]):
+  com o canal `inactive` ele pula o canal, e a mensagem que o atendente digita no Chatwoot
+  **não é despachada por ninguém** — sem erro, sem `status failed`, sem rastro no banco.
+  Em 02/11 isso derrubou o atendimento do 0595 por horas; o dono percebeu porque "mandei
+  preço e vídeo e não foi". O envio pelo **aparelho** continuava funcionando (não passa pelo
+  bridge, só ecoa depois), o que faz o sintoma parecer aleatório.
+  `inactive` é suspensão **documental**: não bloqueia `/send` (o envio uazapi resolve a rota
+  por nome da instância — `getDirectUazapiRoute` → `tokenForInstance`,
+  `bridge/shared/hybrid.ts:174`, sem olhar `channels.status`) e não bloqueia a entrada (acha o
+  canal por `external_id`/`name`). Ou seja: **não impede o que você quer impedir e quebra o que
+  você quer preservar.** Para suspender campanha, use as duas camadas acima e deixe o
+  `status = active`. O `channel-sync` não reverte status sozinho (só varre canais com
+  `hub_channel_id` não nulo; o 0595 tem nulo), então um `inactive` posto na mão fica lá até
+  alguém tirar.
 - **DDL no self-host: o SQL Editor do Studio NÃO aceita `CREATE INDEX CONCURRENTLY`** — ele
   envolve tudo num bloco de transação e devolve `25001: cannot run inside a transaction
   block`. E o `postgres` **não é dono** das tabelas: sem `set role supabase_admin` vem
