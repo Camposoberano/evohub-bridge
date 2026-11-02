@@ -1932,8 +1932,15 @@ function startInboundWatchdogLoop() {
   console.log("inbound-watchdog loop ON (2min)");
 }
 
+// O monitor operacional roda SEMPRE, fora do kill-switch: ele só observa e ALERTA (canal
+// caído, fila presa, inbound perdido) — não dispara nem reprocessa. Pausar a operação
+// (AUTO_LOOPS_ENABLED=false) não pode deixar o sistema cego justo quando algo pode quebrar.
+// inbound-watchdog continua DENTRO do kill-switch: ele reprocessa entrada (efeito colateral).
+startOperationalMonitorLoop();
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
-  console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
+  console.log(
+    "background loops OFF (AUTO_LOOPS_ENABLED=false) — operational-monitor segue ON",
+  );
 } else {
   startSyncLoop();
   startCommentsLoop();
@@ -1958,7 +1965,6 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFlowTimeoutLoop();
   startDeferredEmbrapaPdfLoop();
   startCampaignQueueLoop();
-  startOperationalMonitorLoop();
   startInboundWatchdogLoop();
   startUazapiCatchupLoop();
 }
