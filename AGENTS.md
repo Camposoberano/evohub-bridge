@@ -96,8 +96,27 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
 - **Canal `0595` está SUSPENSO por decisão do dono (02/11/2026): não enviar nada por ele.**
   `channels.status = inactive` + `last_error` explicando. A instância está **conectada** na
   uazapi — não foi queda, foi decisão, para não arriscar travar a fila
-  ([[instancia-uazapi-trava-fila]]). A fila dele já está zerada: 0 `pending`, 0 `paused`, 925
-  `cancelled`, e nenhuma `sales_sequences`/`scheduled_messages` nas 269 conversas.
+  ([[instancia-uazapi-trava-fila]]).
+  🔴 **Suspender canal NÃO é só `channels.status` + filas: existe disparo que não vem de fila
+  nenhuma.** Em 02/11, horas depois da suspensão, o 0595 continuou mandando vídeo a cada
+  **10 minutos exatos**. Todas as filas estavam zeradas (`campaign_queue` 0 `pending`,
+  `scheduled_messages` 0, `sales_sequences` 0), e mesmo assim saía. O culpado era
+  `pumpCampaignAutoVideos` (`bridge/shared/campaign-auto-video.ts`, laço de `GAP_MS = 10min`):
+  ele **não lê fila** — varre `campaign_flow_state` com `step_id='abertura'` e
+  `status='waiting'` e manda o vídeo para quem não respondeu a abertura depois de
+  `autoVideoAfterMin`. Não filtra `channels.status`, não gera `funnel_delivery_attempt`, e
+  grava `messages` com `funnel = NULL` — por isso não aparece em nenhuma auditoria de funil.
+  Havia **188 contatos** represados aí, ~2,5 dias de disparo pela frente.
+  **Parar de verdade exige as duas camadas** (ambas em dado/config, sem deploy — dá para
+  aplicar dentro da janela 8-20h):
+  1. estoque → `campaign_flow_state` da campanha: `status` `waiting` → `paused`;
+  2. torneira → `campaigns.json` no bucket `soberano-config`: `autoVideoAfterMin` → `0`
+     (o laço só pesca com `>= 5`). `readCampaigns()` **não cacheia** — baixa do bucket a cada
+     tick, então vale na hora, sem restart.
+  Reverter = `autoVideoAfterMin = 60` + `paused` → `waiting`. Backup do JSON em
+  `soberano-config/backups/campaigns-antes-parada-0595-20261102.json`.
+  **Antes de dizer que um canal está parado, procure os disparadores que não são fila**:
+  `grep -rn "status\", \"waiting\"" bridge/shared/`.
   ⚠️ **Alcance real do `inactive`:** é suspensão documental e tira o canal de seletores que
   filtram `status = active` — **não** é bloqueio técnico de envio. O envio uazapi resolve a
   rota por **nome da instância** (`getDirectUazapiRoute` → `tokenForInstance`,
