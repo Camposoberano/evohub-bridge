@@ -184,6 +184,20 @@
   `startInboundWatchdogLoop()` continua DENTRO (reprocessa entrada = efeito colateral que a pausa
   quer parar). **Regra:** loop observe-only+alerta fora de qualquer kill-switch de operação; loop
   que envia/reprocessa fica gated. Ver [[monitor-fora-do-kill-switch]].
+- **`channel-sync` sincroniza `page_id`/`ig_id` na DIFERENÇA, não só quando vazio (02/11/2026,
+  `dcc50f1`).** O sync social só gravava o id de roteamento quando estava vazio (`!ch.page_id`) →
+  um canal com page_id ERRADO (reconexão a outra página, ou seed errado) nunca se corrigia. O
+  "Mega Sorgo Santa Elisa" ficou com `page_id=101431812463255` no DB enquanto o token/hub
+  apontavam `112114627195174`, e a entrada do FB caía em silêncio. Agora casa o id do Hub sempre
+  que difere (o `if (idSocial)` barra o null transitório). **Diagnóstico de canal social:** testar
+  o `channel_token` pelo proxy EVO Hub `GET {HUB}/meta/me?fields=id,name` (NÃO no graph direto, que
+  mente). Dado de prod já corrigido. Ver [[channel-sync-page-id-stale]].
+- **Erro do PostgREST é objeto, não `Error` — usar `describeError`, nunca `String(e)` (02/11/2026,
+  `a561dfa`).** `String(e)`/`${e}`/`e instanceof Error ? e.message : String(e)` renderizam um
+  PostgrestError como "[object Object]" e escondem a causa (ex.: `57014`/timeout da limpeza de
+  `events`). `bridge/shared/error-detail.ts` → `describeError(e)` extrai `message/code/details/hint`.
+  Aplicado no `data-cleanup`; ~40 call sites com o padrão antigo ainda latentes (migrar ao tocar).
+  Ver [[erro-objeto-esconde-causa]].
 - **Bot agro (fazer.ai) GO-LIVE 2026-10-29 em install PRÓPRIO no soberano.pro** (`agents.soberano.pro`,
   tenant 2 `campo-soberano-agro`, agente "Vendedor Agro" na inbox 46). NUNCA criar material do agro no
   tenant 1 (= Instituto Belém). Lane via `AI_LANE_ENABLED=1` + contactAuth `/ai-gate`. Detalhe +

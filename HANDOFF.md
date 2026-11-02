@@ -1,9 +1,54 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Leia primeiro o bloco de 2026-11-01 abaixo.** O resto do arquivo é histórico
-> (estado escrito em 06/10 e atualizações de 17/10).
+> **Leia primeiro o bloco de 2026-11-02 abaixo.** Depois o de 2026-11-01. O resto é
+> histórico (06/10 e 17/10).
 
-## ESTADO ATUAL — 2026-11-01 (noite, ~20:50 BRT)
+## ESTADO ATUAL — 2026-11-02 (madrugada, ~01:30 BRT)
+
+**Branches:** `main == master == a561dfa` — **divergência RESOLVIDA** (era o pior pending).
+`AGENTS.md` agora vive no `main`.
+
+**Deploys desta sessão (bridge/SERVIDOR, todos confirmados por `uptime_s` baixo):** 3 deploys —
+channel-sync (`dcc50f1`), resíduo funnel-queue (`ccf0bf9`), 5895 age-out (`dfc7b93`) e monitor
+kill-switch (`76bc190`) foram ao ar. **`a561dfa` (data-cleanup) NÃO foi deployado** (adiado a
+pedido do dono — vai no próximo deploy, já está no `main`). Build label do `/version` segue
+`2026-11-01-...` (cosmético, não bumpei; confirmar por uptime). Todos os deploys foram pós-20h/
+madrugada (fora da janela 8-20h).
+
+**Feito nesta sessão (tudo pushado main+master):**
+1. **Divergência main↔master zerada.** Diagnóstico por CONTEÚDO (two-dot) mostrou que só 7 docs
+   estavam presos no master (código já cherry-pickado); trouxe os 7 (incl. `AGENTS.md`) pro main
+   (`365bb81`) e resetei master=main. Ver [[deploy-main-divergencia]].
+2. **Mega Sorgo FB roteamento.** `channels.page_id` apontava pra página errada (101431... vs real
+   112114627195174 do token/hub) → entrada do FB cairia em silêncio. Corrigi o dado ao vivo + o
+   `channel-sync` pra casar id na diferença (`dcc50f1`). O "erro #10" era falso rastro (token OK).
+   Ver [[channel-sync-page-id-stale]].
+3. **Resíduo do fix #42.** 5 ramos de defer/cancel do funnel-queue passaram a casar `pending|paused`
+   (`ccf0bf9`). Ver [[pump-head-of-line-defer]].
+4. **5895 mídia.** 3 peças presas (#3728,#971,#3677) expiradas no banco (last_outcome→expired, NÃO
+   sent) + age-out de 72h no código p/ não reacumular (`dfc7b93`). Ver [[reconcile-5895-age-out]].
+5. **Monitor fora do kill-switch** (`76bc190`): operational-monitor roda sempre; pausar operação
+   não cega mais o alerta. Ver [[monitor-fora-do-kill-switch]].
+6. **data-cleanup erro-objeto** (`a561dfa`, não deployado): `describeError` em `shared/error-detail.ts`
+   loga a causa real do PostgrestError. Ver [[erro-objeto-esconde-causa]].
+
+**Pendente (ordem de risco):**
+1. **Token admin Chatwoot exposto** — responde 200 desde setembro; rotacionar (precisa do dono na UI).
+2. **Deploy do `a561dfa`** (data-cleanup) — vai no próximo deploy do SERVIDOR automaticamente.
+3. **~40 call sites com `instanceof Error ? ... : String(e)`** — latentes p/ PostgrestError; migrar
+   pra `describeError` ao tocar em cada um.
+4. 2 peças de texto presas failed+uncertain de OUTROS funis: **#4319** (mega-sorgo, seq *running* —
+   cuidado) e **#4333** (social, fria). Não entram no alerta 5895.
+5. Mega Sorgo: nome de página confirmado; nada mais pendente nesse canal.
+6. build label travado em `server.ts` (cosmético, `/version` mente — confirmar deploy por uptime).
+7. Melhoria futura: reconcile-5895 confirmar p/ `sent` quando recibo Delivered/Read já no meta
+   (não apareceu ao vivo; o age-out drena de qualquer forma).
+
+**Avisos:** não deployar/reiniciar 8-20h BRT com disparo ativo; disparo frio FICA PARADO (decisão
+do dono, vai pro n8n); VPS é caixa única de 2 vCPU; `.env` (tokens/keys) no checkout principal
+`E:\Projetos_Novos\evohub\.env`, nunca no worktree.
+
+## ESTADO ANTERIOR — 2026-11-01 (noite, ~20:50 BRT)
 
 **Deploy de hoje (bridge):** build `2026-11-01-funnel-queue-stale-head-of-line-fix`
 no `main` via Coolify (`POST /deploy?uuid=<SERVIDOR>` → 200). `/version` confirmou
