@@ -177,6 +177,13 @@
   monitor de "incidente pendente" sobre estado que o automático pode nunca resolver precisa de age-out.
   Ver [[reconcile-5895-age-out]]. (Melhoria futura não feita: reconcile confirmar p/ `sent` quando o
   recibo Delivered/Read já está no meta — não apareceu ao vivo.)
+- **O monitor de alertas roda FORA do kill-switch `AUTO_LOOPS_ENABLED` (02/11/2026, `76bc190`).**
+  O bootstrap do `server.ts` gateava todos os loops; com `AUTO_LOOPS_ENABLED=false` morria junto o
+  `operational-monitor`, que é quem ALERTA (canal caído, fila presa, inbound perdido) — pausar a
+  operação cegava o sistema. Agora `startOperationalMonitorLoop()` roda sempre, antes do gate.
+  `startInboundWatchdogLoop()` continua DENTRO (reprocessa entrada = efeito colateral que a pausa
+  quer parar). **Regra:** loop observe-only+alerta fora de qualquer kill-switch de operação; loop
+  que envia/reprocessa fica gated. Ver [[monitor-fora-do-kill-switch]].
 - **Bot agro (fazer.ai) GO-LIVE 2026-10-29 em install PRÓPRIO no soberano.pro** (`agents.soberano.pro`,
   tenant 2 `campo-soberano-agro`, agente "Vendedor Agro" na inbox 46). NUNCA criar material do agro no
   tenant 1 (= Instituto Belém). Lane via `AI_LANE_ENABLED=1` + contactAuth `/ai-gate`. Detalhe +
