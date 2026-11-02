@@ -57,14 +57,16 @@ export async function syncChannels(db: Db, type?: string): Promise<Json> {
 
       // Identificador de ROTEAMENTO do canal social. A entrada da Meta acha o canal por
       // `page_id` (FB) ou `ig_id` (IG) -- sem ele, a mensagem não casa com canal nenhum e é
-      // descartada em silêncio. Quem preenche é o evento `channel_connected`, UMA vez: se o
-      // detalhe no Hub ainda não trouxer a conexão naquele instante, o canal nasce mudo e
-      // nunca se conserta. Foi o que deixou `david face` e `david inst` três dias ativos e
-      // com zero conversa. Aqui a corrida se resolve sozinha na próxima rodada.
+      // descartada em silêncio. Quem preenche é o evento `channel_connected`, mas ele pode
+      // nascer vazio (detalhe do Hub ainda sem a conexão naquele instante -- deixou `david
+      // face`/`david inst` três dias mudos) OU com um id ERRADO que nunca se conserta: o
+      // "Mega Sorgo Santa Elisa" ficou com o page_id de outra página após reconexão, e a
+      // entrada caía em silêncio (02/11). Sincroniza sempre que o Hub reporta um id DIFERENTE
+      // -- o `if (idSocial)` já barra o null transitório, então nunca apaga um id bom.
       const idSocial = achaIdSocial(det, ch.type as string);
       if (idSocial) {
-        if (ch.type === "facebook" && !ch.page_id) patch.page_id = idSocial;
-        if (ch.type === "instagram" && !ch.ig_id) patch.ig_id = idSocial;
+        if (ch.type === "facebook" && idSocial !== ch.page_id) patch.page_id = idSocial;
+        if (ch.type === "instagram" && idSocial !== ch.ig_id) patch.ig_id = idSocial;
       }
       if (status === "active" && ch.status !== "active") patch.connected_at = new Date().toISOString();
       if (Object.keys(patch).length) {
