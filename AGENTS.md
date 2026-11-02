@@ -25,6 +25,24 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
 - **VPS é uma caixa só** (`136.248.116.231`, 2 vCPU): Supabase + Chatwoot + bridge + fazer-ai
   + Grafana no mesmo IP. CPU é o gargalo. Operações pesadas (drain, scans) a **≤3 workers** +
   pausa, senão 100% CPU derruba as queries de todo mundo.
+- **Observabilidade — onde ver CPU (e por que um agente NÃO consegue ver hoje).**
+  `https://grafana.soberano.pro` (Grafana 13.x, `/api/health` responde sem auth e serve de
+  ping). Serviço Coolify `mbc0rqqk3kn47uxkw8mufuuu` = Grafana + Prometheus + Alertmanager +
+  node-exporter + cAdvisor; configs em `/data/observ`; publicado em `127.0.0.1:3001:3000`
+  (porta de host fixa — correção durável de 31/10, ver `nginx-ip-container-quebra`).
+  Prometheus e Alertmanager **não têm vhost válido** (`prometheus.`/`alertas.soberano.pro`
+  dão erro de certificado), então só se chega às métricas **através do Grafana**, e
+  `/api/datasources` responde `401`. O login é `admin` com senha trocada no 1º acesso — o
+  agente **não tem** credencial.
+  **Para um agente poder medir CPU:** criar em Grafana → Administration → Service accounts um
+  token de papel **Viewer** e gravá-lo no `.env` como `GRAFANA_TOKEN` (nunca no chat). Com ele,
+  a leitura é pelo proxy de datasource:
+  `GET /api/datasources/proxy/<id>/api/v1/query?query=...` com `Authorization: Bearer`.
+  Queries úteis: `100-(avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))*100)` (CPU%),
+  `node_load1`, e por container `rate(container_cpu_usage_seconds_total[5m])`.
+  Alerta já fechado no sentido inverso: Prometheus → Alertmanager → `POST /grafana-alert` no
+  bridge → WhatsApp (`bridge/handlers/grafana-alert.ts`, auth `GRAFANA_ALERT_SECRET` ou
+  `AI_GATE_SECRET`, destino `ALERT_WHATSAPP_TO`).
 - **Lane de IA (fazer.ai): flag `AI_LANE_ENABLED` default OFF; o estado é a label `ai-vendas`;
   o `/ai-gate` é fail-closed.** Ligar a flag sem o wiring externo (agente bindado + `AI_GATE_SECRET`
   + contactAuth apontando pro `/ai-gate`) = lead no vácuo. Ver `docs/ai-lane-funil-agro.md`.
