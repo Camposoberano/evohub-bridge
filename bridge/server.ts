@@ -391,8 +391,9 @@ const version = {
     "funil-5895-logistica-sem-pausa",
     "funil-5895-resposta-logistica-adiada",
     "funnel-queue-stale-head-of-line-fix",
+    "stop-price-sequence",
   ],
-  build: "2026-11-01-funnel-queue-stale-head-of-line-fix",
+  build: "2026-11-04-stop-price-sequence",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -846,6 +847,7 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-funil-resume": "resume",
   "cmd-iniciar-funil": "funil",
   "cmd-enviar-preco": "preco",
+  "cmd-parar-preco": "stop-preco",
   "cmd-enviar-video": "video",
   "cmd-enviar-plantio": "plantio",
   "cmd-enviar-nutricao": "nutricao",

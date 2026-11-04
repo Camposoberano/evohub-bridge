@@ -287,6 +287,34 @@ export async function handle(req: Request): Promise<Response> {
     return json({ ok: true, action: "stop", cancelled: cancelled ?? 0 });
   }
 
+  if (action === "stop-preco") {
+    const { count: cancelled, error } = await db.from("scheduled_messages")
+      .update({ status: "cancelled" })
+      .eq("conversation_id", conv.id)
+      .eq("funnel", `${funnelId}:preco`)
+      .in("status", ["pending", "paused"])
+      .select("id", { count: "exact", head: true });
+    if (error) {
+      console.error("stop-preco: falha ao cancelar peças", error);
+      return json({ error: "não foi possível parar os preços" }, 500);
+    }
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "manual_price_stopped",
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: cwConvId,
+        cancelled: cancelled ?? 0,
+      },
+    });
+    await nota(
+      cwConvId,
+      `⏹️ *Preços parados* — ${cancelled ?? 0} mensagens de preço pendentes canceladas. Vídeo, nutrição e atendimento continuam disponíveis.`,
+      acct,
+    );
+    return json({ ok: true, action: "stop-preco", cancelled: cancelled ?? 0 });
+  }
+
   // "pago" e "nao-compra" são etiquetas PERSISTENTES no Chatwoot (poll dedicado em
   // server.ts, startOutcomeLabelLoop -- diferente do poll de cmd-* que remove a etiqueta
   // depois de rodar). Cícero marca a etiqueta e ela fica visível como status permanente.
@@ -667,7 +695,7 @@ export async function handle(req: Request): Promise<Response> {
 
   return json({
     error: "ação desconhecida: " + action +
-      " (use: funil, pause, stop, resume, bot-on, status, catalogo, catalogo-sair, preco, video, plantio, nutricao, recuperacao-1..4)",
+      " (use: funil, pause, stop, stop-preco, resume, bot-on, status, catalogo, catalogo-sair, preco, video, plantio, nutricao, recuperacao-1..4)",
   }, 400);
 }
 
