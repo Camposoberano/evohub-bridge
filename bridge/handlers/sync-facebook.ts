@@ -11,7 +11,7 @@ import {
   ingestInbound,
   repairInboundMedia,
 } from "../shared/inbound.ts";
-import { listConversationMessages } from "../shared/chatwoot.ts";
+import { listActiveConversationIds, listConversationMessages } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
   inferSocialPriceReplyFromPrompts,
@@ -67,6 +67,10 @@ async function fetchSocialProfile(
 }
 type Db = ReturnType<typeof admin>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+const OUTGOING_OVERLAP_MS = 5 * 60_000;
+const OUTGOING_FULL_SCAN_MS = 30 * 60_000;
+const OUTGOING_MAX_CONVERSATIONS_PER_TICK = 10;
+const outgoingScanState = new Map<string, { scannedAt: number; fullAt: number; pendingIds: number[] }>();
 
 export async function handle(req: Request): Promise<Response> {
   if (!["GET", "POST"].includes(req.method)) {
@@ -97,7 +101,7 @@ export async function handle(req: Request): Promise<Response> {
   const db = admin();
   let query = db.from("channels")
     .select(
-      "id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier",
+      "id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier,chatwoot_inbox_id",
     )
     .in("type", channelType ? [channelType] : ["facebook", "instagram"])
     .eq("status", "active");
@@ -124,6 +128,9 @@ export async function handle(req: Request): Promise<Response> {
     outgoing_sent: 0,
     outgoing_duplicates: 0,
     outgoing_failed: 0,
+    outgoing_conversations_scanned: 0,
+    outgoing_activity_pages: 0,
+    outgoing_fallbacks: 0,
     stale_conversations: 0,
     errors: [] as string[],
   };
@@ -170,6 +177,9 @@ export async function handle(req: Request): Promise<Response> {
         totals.outgoing_duplicates += outgoing.outgoing_duplicates;
         totals.outgoing_failed += outgoing.outgoing_failed;
         totals.stale_conversations += outgoing.stale_conversations;
+        totals.outgoing_conversations_scanned += outgoing.conversations_scanned;
+        totals.outgoing_activity_pages += outgoing.activity_pages;
+        totals.outgoing_fallbacks += outgoing.activity_fallback ? 1 : 0;
       }
       const channelErrors = totals.errors.filter((error) =>
         error.startsWith(`${channel.name ?? channel.id}: `)
@@ -698,31 +708,71 @@ async function syncOutgoing(
   if (secretError) throw secretError;
   if (!secret?.channel_token) throw new Error("canal sem token");
 
-  const { data: conversations, error: convError } = await db.from(
-    "conversations",
-  )
-    .select("*, contacts(*)")
-    .eq("channel_id", channel.id)
-    .neq("status", "resolved")
-    .order("opened_at", { ascending: false })
-    .limit(20);
-  if (convError) throw convError;
-
   const result = {
     outgoing_found: 0,
     outgoing_sent: 0,
     outgoing_duplicates: 0,
     outgoing_failed: 0,
     stale_conversations: 0,
+    conversations_scanned: 0,
+    activity_pages: 0,
+    activity_fallback: false,
   };
 
-  for (const conversation of conversations ?? []) {
+  const now = Date.now();
+  const channelId = String(channel.id);
+  const prior = outgoingScanState.get(channelId);
+  const full = !prior || now - prior.fullAt >= OUTGOING_FULL_SCAN_MS;
+  const sinceMs = full
+    ? opts.cutoffMs
+    : Math.max(opts.cutoffMs, prior.scannedAt - OUTGOING_OVERLAP_MS);
+  const inboxId = Number(channel.chatwoot_inbox_id);
+  let conversations: Json[] = [];
+  let remainingIds: number[] = [];
+  try {
+    if (!Number.isSafeInteger(inboxId) || inboxId <= 0) {
+      throw new Error("canal social sem chatwoot_inbox_id");
+    }
+    const active = await listActiveConversationIds(inboxId, sinceMs, acct);
+    result.activity_pages = active.pages;
+    // Prioriza atividade nova sem deixar o estoque antigo faminto em cada tick.
+    const candidates = [...new Set([
+      ...active.ids.slice(0, 5),
+      ...(prior?.pendingIds ?? []),
+      ...active.ids.slice(5),
+    ])];
+    const selectedIds = candidates.slice(0, OUTGOING_MAX_CONVERSATIONS_PER_TICK);
+    remainingIds = candidates.slice(OUTGOING_MAX_CONVERSATIONS_PER_TICK);
+    for (let start = 0; start < selectedIds.length; start += 100) {
+      const { data, error } = await db.from("conversations")
+        .select("id,chatwoot_conversation_id,contacts(*)")
+        .eq("channel_id", channel.id)
+        .in("chatwoot_conversation_id", selectedIds.slice(start, start + 100));
+      if (error) throw error;
+      conversations.push(...(data ?? []) as Json[]);
+    }
+  } catch (error) {
+    // Se a lista de atividade falhar, a recuperação antiga ainda pode alcançar as
+    // conversas mais recentes. Não avança o cursor: a próxima rodada tenta de novo.
+    result.activity_fallback = true;
+    console.warn("sync-facebook outgoing activity fallback:", errorMessage(error));
+    const { data, error: convError } = await db.from("conversations")
+      .select("id,chatwoot_conversation_id,contacts(*)")
+      .eq("channel_id", channel.id)
+      .neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(20);
+    if (convError) throw convError;
+    conversations = (data ?? []) as Json[];
+  }
+
+  for (const conversation of conversations) {
     const cwConversationId = conversation.chatwoot_conversation_id as
       | number
       | undefined;
     const contact = conversation.contacts as Json | undefined;
     const to = contact?.external_contact_id as string | undefined;
     if (!cwConversationId || !to) continue;
+    result.conversations_scanned++;
 
     let messages: Json[];
     try {
@@ -812,6 +862,14 @@ async function syncOutgoing(
       if (sent.ok) result.outgoing_sent++;
       else result.outgoing_failed++;
     }
+  }
+
+  if (!result.activity_fallback) {
+    outgoingScanState.set(channelId, {
+      scannedAt: now,
+      fullAt: full ? now : prior!.fullAt,
+      pendingIds: remainingIds,
+    });
   }
 
   return result;

@@ -508,6 +508,59 @@ export async function listConversationMessages(
   return (json.payload ?? []) as Record<string, unknown>[];
 }
 
+/** Lista IDs da inbox com atividade recente, em ordem de última atividade. */
+export async function listActiveConversationIds(
+  inboxId: number,
+  sinceMs: number,
+  acct: CwAcct = envAcct(),
+): Promise<{ ids: number[]; pages: number }> {
+  const ids = new Set<number>();
+  let previousActivity = Infinity;
+  for (let page = 1; page <= 40; page++) {
+    const url = `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations?` +
+      new URLSearchParams({ inbox_id: String(inboxId), status: "all", page: String(page) });
+    const res = await fetch(url, {
+      headers: adminHeaders(acct),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      throw new Error(`Chatwoot listActiveConversationIds ${res.status}: ${await res.text()}`);
+    }
+    const payload = (await res.json().catch(() => null))?.data?.payload;
+    if (!Array.isArray(payload)) throw new Error("Chatwoot activity list inválida");
+    let sorted = true;
+    let oldest = Infinity;
+    for (const item of payload) {
+      const id = Number(item.id);
+      if (item.last_activity_at == null) {
+        sorted = false;
+        if (Number(item.inbox_id) === inboxId && Number.isSafeInteger(id) && id > 0) {
+          ids.add(id);
+        }
+        continue;
+      }
+      const activity = Number(item.last_activity_at) * 1000;
+      if (!Number.isFinite(activity)) {
+        sorted = false;
+        if (Number(item.inbox_id) === inboxId && Number.isSafeInteger(id) && id > 0) {
+          ids.add(id);
+        }
+        continue;
+      }
+      if (activity > previousActivity) sorted = false;
+      previousActivity = activity;
+      oldest = Math.min(oldest, activity);
+      if (activity >= sinceMs && Number(item.inbox_id) === inboxId) {
+        if (Number.isSafeInteger(id) && id > 0) ids.add(id);
+      }
+    }
+    if (payload.length < 25 || (sorted && oldest < sinceMs)) {
+      return { ids: [...ids], pages: page };
+    }
+  }
+  throw new Error("Chatwoot activity list excedeu 40 páginas");
+}
+
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);

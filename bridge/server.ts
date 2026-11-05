@@ -200,6 +200,7 @@ const version = {
   app: "evohub-bridge",
   features: [
     "sync-facebook",
+    "social-outgoing-activity-bounded",
     "sync-instagram",
     "auto-sync-loop",
     "whatsapp-media",
@@ -393,7 +394,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-04-stop-price-sequence",
+  build: "2026-11-05-social-outgoing-activity-bounded",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
