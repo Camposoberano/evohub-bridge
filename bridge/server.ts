@@ -201,6 +201,7 @@ const version = {
   features: [
     "sync-facebook",
     "social-outgoing-activity-bounded",
+    "wa-conversation-create-claim",
     "sync-instagram",
     "auto-sync-loop",
     "whatsapp-media",
@@ -394,7 +395,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-05-social-outgoing-activity-bounded",
+  build: "2026-11-05-wa-conversation-create-claim",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
