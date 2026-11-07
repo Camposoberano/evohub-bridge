@@ -75,3 +75,10 @@ O dono informou o número próprio `11910363320` para o ensaio. As conversas exi
 ## Virada futura dos anúncios
 
 A virada exige patch próprio após o ensaio: trocar o seletor de versão em `funnel-identity.ts`, ajustar inscrição e catch-up em `funil-enroll.ts`, apontar o acionamento n8n dos anúncios ao contrato novo, revisar controles e relatórios que consultam a versão antiga, e definir destino das sequências antigas ainda ativas. Fazer deploy e verificar ambos os canais; manter caminho para voltar o seletor antigo sem apagar histórico. Este patch não faz parte da preparação isolada.
+
+## Ensaio em andamento — 07/11/2026
+
+- Código publicado no `main` em `5f88cc8`, Coolify produção `m8qf6ru2x75gukzozpsrssrm` implantado; `/version` confirmou `2026-11-07-mega-sorgo-7d-test`. Allowlist de produção: conversas 673 e 1286. Workflow n8n `tqo0h3yNVAykSZdK` publicado somente para teste.
+- Inscritas 39 peças em cada conversa para o número próprio `11910363320`. Texto, imagem e cartão interativo saíram em ambos; replay da inscrição 673 retornou `duplicate=true`, preservando 39 linhas.
+- No 5895 o clique “Quero saber mais ✅” chegou como `[button]` e texto espelhado sem ID, causando pausa antes do áudio. Hotfix `cabcf95` reconhece títulos exatos dos botões informativos e `[button]`; teste unitário e `deno check` passaram. Coolify implantou o hotfix e `/version` confirmou `2026-11-07-mega-sorgo-7d-button-echo`. A sequência 673 foi retomada com 36 peças reancoradas, começando às 17h36 BRT. O 6836 seguiu em `running` e dois áudios já saíram.
+- Os primeiros vídeos dos dois canais ficaram `sent` com mídia e ID Chatwoot; o dono confirmou que o vídeo do 6836 chegou e abriu no WhatsApp. Aguardar confirmação visual do 5895. Acompanhar os cinco vídeos oficiais condicionados ao botão “Sim, quero ver”. Não trocar o roteamento de anúncios enquanto o ensaio estiver em andamento.

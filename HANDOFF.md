@@ -1,7 +1,14 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Leia primeiro o bloco de 2026-11-02 (tarde) abaixo.** Depois o de 02/11 madrugada e o de
-> 2026-11-01. O resto é histórico (06/10 e 17/10).
+> **Leia primeiro o bloco de 2026-11-07 abaixo.** Depois os blocos anteriores conforme o tema.
+
+## ESTADO ATUAL — 2026-11-07, ensaio Mega Sorgo 7 dias
+
+- `main` público em `cabcf95` e bridge de produção implantado no Coolify `m8qf6ru2x75gukzozpsrssrm`; `/version` confirmou build `2026-11-07-mega-sorgo-7d-button-echo`. Roteamento dos anúncios 5895/6836 **permanece** no funil anterior. Código, mídia e workflow de teste estão separados.
+- Workflow n8n `tqo0h3yNVAykSZdK` publicado só para teste, com credenciais existentes. Allowlist de produção `MEGA_SORGO_7D_TEST_CONVERSATIONS=673,1286`. Essas conversas pertencem ao número próprio informado pelo dono `11910363320`: 673 no 5895, 1286 no 6836.
+- Cada conversa recebeu 39 peças agendadas a cada 5 minutos, dentro de 08h–20h BRT; as últimas passam para a manhã seguinte. O replay da inscrição 673 retornou `duplicate=true` e manteve 39 linhas. Texto, imagem, cartão interativo e áudios foram enviados nos dois canais; o primeiro vídeo do 6836 foi marcado `sent`, e o dono confirmou que chegou e abriu. O primeiro vídeo do 5895 também ficou `sent` às 17h46, aguardando confirmação visual do dono.
+- Incidente encontrado no teste: ao tocar “Quero saber mais ✅”, o provedor espelhou `[button]` e o título sem ID. A regra de resposta livre pausou a conversa 673. Hotfix `cabcf95` reconhece esses cliques informativos; teste unitário e `deno check` passaram. A conversa 673 foi retomada com 36 peças reancoradas, sem rajada de atrasados. Conversa 1286 seguiu `running`.
+- Ainda falta acompanhar o restante da sequência, os cinco vídeos oficiais **somente após** o botão “Sim, quero ver”, e decidir a virada futura dos anúncios. Não iniciar outra inscrição nas conversas de teste nem mudar o roteamento enquanto este ensaio estiver ativo. Plano e reversão em `docs/superpowers/plans/2026-11-07-mega-sorgo-7d.md`.
 
 ## ESTADO ATUAL — 2026-11-02 (tarde, ~15:35 BRT)
 
