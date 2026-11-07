@@ -11,6 +11,12 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
 
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 
+- **6836 compartilha o conteúdo n8n do funil completo do 5895, mas mantém canal, fila e recibos próprios.**
+  `mega-sorgo-5895-20260930` é uma versão histórica de conteúdo, não a identidade do número
+  remetente. Resolver o canal pela conversa; filtrar reconciliação e alertas por `channel_id` e
+  confirmar o recibo apenas na instância uazapi desse canal. Não copiar workflows nem reinscrever
+  conversas antigas em lote.
+
 - **Chatwoot filter = 1 condição `equal_to` com todos os valores (IN), nunca N condições
   `equal_to` OR'd.** 16 OR levavam ~15s e estouravam timeout na VPS (HTTP 500 no
   controle de bot); 1 condição IN = 143ms–1,3s. Vale pra `macro-poll`/`bot-mute`/`outcome`.

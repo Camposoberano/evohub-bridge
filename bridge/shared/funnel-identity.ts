@@ -12,6 +12,7 @@ export const RESTORED_5895_FUNNEL_LABEL =
   "Anúncios 5895 — funil completo 30/09";
 export const SOCIAL_N8N_FUNNEL_LABEL =
   "Anúncios sociais — funil completo 30/09";
+export const SOBERANO_WHATSAPP_FUNNEL_CHANNELS = ["5895", "6836"] as const;
 export const MAIN_FUNNELS = [
   LEGACY_MAIN_FUNNEL,
   AD_5895_FUNNEL,
@@ -25,7 +26,10 @@ export function funnelVersionForChannel(
   enabledSocialIds?: ReadonlySet<string>,
 ): string | null {
   if (!channel) return null;
-  if (canalAlvoFunil(channel, "5895")) return RESTORED_5895_FUNNEL;
+  if ((!channel.type || channel.type === "whatsapp") &&
+    SOBERANO_WHATSAPP_FUNNEL_CHANNELS.some((target) => canalAlvoFunil(channel, target))) {
+    return RESTORED_5895_FUNNEL;
+  }
   if (isApprovedSocialChannel(channel, enabledSocialIds)) return SOCIAL_N8N_FUNNEL;
   return null;
 }

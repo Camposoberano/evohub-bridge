@@ -199,6 +199,7 @@ const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
   features: [
+    "wa-6836-n8n-shared-funnel",
     "sync-facebook",
     "social-outgoing-activity-bounded",
     "wa-conversation-create-claim",
@@ -395,7 +396,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-05-wa-conversation-create-claim",
+  build: "2026-11-07-wa-6836-n8n-shared-funnel",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

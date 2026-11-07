@@ -44,3 +44,11 @@ docs/*
 !docs/contact-auth.md
 !docs/plano-migracao-n8n.md
 !docs/kit-atendimento-manual.md
+!docs/superpowers/
+docs/superpowers/*
+!docs/superpowers/specs/
+docs/superpowers/specs/*
+!docs/superpowers/specs/2026-11-07-funil-6836-design.md
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/2026-11-07-funil-6836.md

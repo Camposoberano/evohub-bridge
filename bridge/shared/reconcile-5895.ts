@@ -16,7 +16,7 @@ type Row = {
 };
 
 const digits = (value: unknown) => String(value ?? "").replace(/\D/g, "");
-const HUB_5895_NUMBER = "5519999715895";
+const RECONCILE_CHANNELS = ["5895", "6836"] as const;
 const confirmedStatuses = new Set(["Delivered", "Read", "Played"]);
 const MAX_CANDIDATES = 3;
 // Depois disto a janela Meta (24-72h) fechou e o recibo já saiu do histórico que o
@@ -48,13 +48,15 @@ export type ReconcileSummary = {
 export async function expireStale5895Uncertain(
   db: DbClient = admin(),
   now = Date.now(),
+  channelId?: string,
 ): Promise<number> {
-  const { data, error } = await db.from("scheduled_messages")
-    .select("id,payload")
+  let query = db.from("scheduled_messages")
+    .select(channelId ? "id,payload,conversations!inner(channel_id)" : "id,payload")
     .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
     .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
-    .is("payload->__funnel_delivery->>followups_released_at", null)
-    .limit(200);
+    .is("payload->__funnel_delivery->>followups_released_at", null);
+  if (channelId) query = query.eq("conversations.channel_id", channelId);
+  const { data, error } = await query.limit(200);
   if (error) throw error;
   let expired = 0;
   for (const row of (data ?? []) as Pick<Row, "id" | "payload">[]) {
@@ -144,13 +146,43 @@ export async function reconcile5895Uncertain(
   db: DbClient = admin(),
   now = Date.now(),
 ): Promise<ReconcileSummary> {
+  const totals: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, expired: 0, unresolved: 0, errors: {} };
+  for (const target of RECONCILE_CHANNELS) {
+    let result: ReconcileSummary;
+    try {
+      result = await reconcileChannelUncertain(db, now, target);
+    } catch (error) {
+      console.error(`reconcile ${target}:`, error);
+      problem(totals, `${target}:channel_error`);
+      continue;
+    }
+    for (const key of ["checked", "reconciled", "released_unconfirmed", "expired", "unresolved"] as const) {
+      totals[key] += result[key];
+    }
+    for (const [key, count] of Object.entries(result.errors)) {
+      totals.errors[`${target}:${key}`] = count;
+      // Mantém a chave agregada consumida pelo endpoint n8n.
+      totals.errors[key] = (totals.errors[key] ?? 0) + count;
+    }
+  }
+  return totals;
+}
+
+async function reconcileChannelUncertain(
+  db: DbClient, now: number, target: string,
+): Promise<ReconcileSummary> {
   const summary: ReconcileSummary = { checked: 0, reconciled: 0, released_unconfirmed: 0, expired: 0, unresolved: 0, errors: {} };
+  const { data: channel, error: channelError } = await db.from("channels")
+    .select("id,phone_number").eq("name", target).maybeSingle();
+  if (channelError) throw channelError;
+  if (!channel || !digits(channel.phone_number).endsWith(target)) return summary;
   // Primeiro drena as peças velhas demais p/ confirmar (72h); cobre áudio/text que o laço abaixo
   // não seleciona. Roda no mesmo cron do reconcile (/n8n-reconcile-5895).
-  summary.expired = await expireStale5895Uncertain(db, now);
+  summary.expired = await expireStale5895Uncertain(db, now, String(channel.id));
   const { data, error } = await db.from("scheduled_messages")
-    .select("id,conversation_id,funnel,step,type,status,payload")
+    .select("id,conversation_id,funnel,step,type,status,payload,conversations!inner(channel_id)")
     .like("funnel", `${RESTORED_5895_FUNNEL}%`).eq("status", "failed")
+    .eq("conversations.channel_id", channel.id)
     .in("type", ["video", "document", "interactive"])
     .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
     .order("send_at", { ascending: true }).limit(1000);
@@ -173,10 +205,7 @@ export async function reconcile5895Uncertain(
   if (conversationsError) throw conversationsError;
   const byId = new Map(((conversations ?? []) as Json[]).map((row) => [String(row.id), row]));
   const channelIds = [...new Set([...byId.values()].map((row) => String(row.channel_id)))];
-  if (byId.size !== ids.length || channelIds.length !== 1) throw new Error("invalid_channel");
-  const { data: channel, error: channelError } = await db.from("channels")
-    .select("phone_number").eq("id", channelIds[0]).single();
-  if (channelError || digits(channel?.phone_number) !== HUB_5895_NUMBER) {
+  if (byId.size !== ids.length || channelIds.length !== 1 || channelIds[0] !== String(channel.id)) {
     throw new Error("invalid_channel");
   }
   const instance = (await listInstances()).find((item) =>
@@ -336,10 +365,12 @@ export async function reconcile5895VideoNotice(
   if (!contactRows.length) return summary;
   const channelIds = [...new Set(contactRows.map((item) => String(item.channel_id)))];
   const { data: channels, error: channelsError } = await db.from("channels")
-    .select("id,phone_number").in("id", channelIds);
+    .select("id,name,phone_number").in("id", channelIds);
   if (channelsError) throw channelsError;
   const channel = ((channels ?? []) as Json[]).find((item) =>
-    digits(item.phone_number) === HUB_5895_NUMBER
+    item.name === notice.instanceName && RECONCILE_CHANNELS.some((target) =>
+      item.name === target && digits(item.phone_number).endsWith(target)
+    )
   );
   if (!channel) return summary;
   const contactIds = contactRows.filter((item) => item.channel_id === channel.id)
@@ -369,7 +400,7 @@ export async function reconcile5895VideoNotice(
   if (!candidates.length) return summary;
 
   const instance = (await listInstances()).find((item) =>
-    item.name === notice.instanceName && digits(item.number) === HUB_5895_NUMBER
+    item.name === notice.instanceName && digits(item.number) === digits(channel.phone_number)
   );
   if (!instance?.token) return summary;
 
