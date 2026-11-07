@@ -21,10 +21,14 @@ import {
   isContactExcludedFromAutomation,
 } from "../shared/lead-block.ts";
 import { handle as funilControl } from "./funil-control.ts";
+import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
+import { scheduleSevenDayPieces } from "../shared/mega-sorgo-7d-schedule.ts";
+import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
 
 export type QueuePiece = {
+  code?: string;
   day: number;
   type: "text" | "text_sequence" | "image" | "audio" | "video" | "document" |
     "interactive" | "list";
@@ -45,13 +49,14 @@ function mediaRef(value: unknown): MediaRef | null {
 /** Resolve as referências estáveis da biblioteca histórica antes de aceitar o lote. */
 export async function resolveActionMedia(
   db: ReturnType<typeof admin>, pieces: QueuePiece[],
+  funnelVersion = "mega-sorgo",
 ): Promise<QueuePiece[]> {
   if (!pieces.some((piece) => piece.payload.media_ref != null || piece.payload.header_media_ref != null)) {
     return pieces;
   }
   const { data, error } = await db.from("funnel_media")
     .select("day,slot,url,caption,type")
-    .eq("funnel", "mega-sorgo").eq("active", true);
+    .eq("funnel", funnelVersion).eq("active", true);
   if (error) throw new Error("falha ao consultar biblioteca de mídia");
   const library = new Map<string, Json>();
   for (const item of (data ?? []) as Json[]) {
@@ -122,7 +127,7 @@ export function validateEnqueueBody(
     !Number.isSafeInteger(request.chatwoot_conversation_id) ||
     Number(request.chatwoot_conversation_id) <= 0 ||
     !["macro", "ad", "intent"].includes(String(request.source ?? "")) ||
-    ![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(String(request.funnel_version ?? ""))
+    ![RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL, MEGA_SORGO_7D_VERSION].includes(String(request.funnel_version ?? ""))
   ) return { ok: false, error: "identidade ou versão inválida" };
   if (request.selection != null &&
     (typeof request.selection !== "string" ||
@@ -149,8 +154,16 @@ export function validateEnqueueBody(
   if (!Array.isArray(body.pieces)) return { ok: false, error: "pieces obrigatório" };
   const pieces = body.pieces as unknown[];
   const mustBeEmpty = CONTROL_ACTIONS.has(action);
+  if (request.funnel_version === MEGA_SORGO_7D_VERSION &&
+    action !== "funil" && !mustBeEmpty) {
+    return { ok: false, error: "ação de teste de sete dias não autorizada" };
+  }
   if (mustBeEmpty && pieces.length !== 0) return { ok: false, error: "controle não aceita peças" };
-  if (action === "funil" && pieces.length !== 31) {
+  if (action === "funil" && request.funnel_version === MEGA_SORGO_7D_VERSION &&
+    pieces.length !== 0) {
+    return { ok: false, error: "funil de 7 dias usa catálogo interno" };
+  }
+  if (action === "funil" && request.funnel_version !== MEGA_SORGO_7D_VERSION && pieces.length !== 31) {
     return { ok: false, error: "funil de 30/09 exige 31 peças" };
   }
   if (!mustBeEmpty && action !== "funil" && (pieces.length < 1 || pieces.length > 30)) {
@@ -163,12 +176,19 @@ export function validateEnqueueBody(
       !TYPES.has(p.type as QueuePiece["type"]) ||
       !p.payload || typeof p.payload !== "object" || Array.isArray(p.payload) ||
       !Number.isInteger(p.day) ||
-      (action === "funil" ? Number(p.day) < 1 || Number(p.day) > 5 : Number(p.day) !== 0) ||
+      (action === "funil" ? Number(p.day) < 1 || Number(p.day) >
+        (request.funnel_version === MEGA_SORGO_7D_VERSION ? 7 : 5) : Number(p.day) !== 0) ||
       !Number.isInteger(p.offset_seconds) || Number(p.offset_seconds) < 0 ||
       Number(p.offset_seconds) > 3_600
     ) return { ok: false, error: "peça inválida" };
   }
   if (action === "funil") {
+    if (request.funnel_version === MEGA_SORGO_7D_VERSION) {
+      if (request.source !== "macro") {
+        return { ok: false, error: "catálogo de teste de sete dias inválido" };
+      }
+      return { ok: true, value: body as EnqueueBody };
+    }
     const days = pieces.map((p) => Number((p as Json).day));
     if (days.some((day, i) => i > 0 && day < days[i - 1])) {
       return { ok: false, error: "fases fora de ordem" };
@@ -189,6 +209,23 @@ export async function buildActionRows(
 ): Promise<ActionQueueRow[]> {
   if (!conversationId) throw new Error("conversation_id obrigatório");
   const key = actionKey(body.request);
+  if (body.request.funnel_version === MEGA_SORGO_7D_VERSION && body.request.action === "funil") {
+    const schedule = scheduleSevenDayPieces(body.pieces.map((piece) => ({
+      code: piece.code ?? "", day: piece.day,
+    })), now);
+    return await Promise.all(body.pieces.map(async (piece, step) => ({
+      id: await actionUuid(`${key}:${piece.code}`),
+      conversation_id: conversationId,
+      chatwoot_conversation_id: body.request.chatwoot_conversation_id,
+      funnel: MEGA_SORGO_7D_VERSION,
+      day: piece.day,
+      step,
+      type: piece.type,
+      payload: { ...piece.payload, __funnel_sequence_id: key, __funnel_piece_code: piece.code },
+      send_at: schedule[step].sendAt,
+      status: "paused" as const,
+    })));
+  }
   const starts = body.request.action === "funil"
     ? iniciosDosAcessos(
       now,
@@ -267,7 +304,12 @@ export async function handle(req: Request): Promise<Response> {
     .select("id,type,name,external_id,phone_number")
     .eq("id", conversation.channel_id).maybeSingle();
   if (channelError) return json({ ok: false, error: "falha ao consultar canal" }, 503);
-  if (!channel || funnelVersionForChannel(channel) !== body.request.funnel_version) {
+  const isSevenDayTest = body.request.funnel_version === MEGA_SORGO_7D_VERSION;
+  if (!channel || (isSevenDayTest
+    ? !isSevenDayWhatsAppChannel(channel) ||
+      body.request.source !== "macro" ||
+      !sevenDayTestConversationAllowed(body.request.chatwoot_conversation_id)
+    : funnelVersionForChannel(channel) !== body.request.funnel_version)) {
     return json({ ok: false, error: "canal ou versão não autorizada", terminal: true }, 422);
   }
   if (CONTROL_ACTIONS.has(body.request.action)) {
@@ -279,6 +321,7 @@ export async function handle(req: Request): Promise<Response> {
         body: JSON.stringify({
           action: body.request.action,
           chatwoot_conversation_id: body.request.chatwoot_conversation_id,
+          funnel_version: body.request.funnel_version,
           n8n_internal: true,
         }),
       },
@@ -289,9 +332,29 @@ export async function handle(req: Request): Promise<Response> {
     isContactBlocked(conversation.contacts) ||
     isContactExcludedFromAutomation(conversation.contacts)
   ) return json({ ok: false, error: "contato bloqueado", terminal: true }, 422);
+  if (isSevenDayTest && body.request.action === "funil") {
+    const { data: otherSequences, error: otherError } = await db.from("sales_sequences")
+      .select("id,funnel").eq("conversation_id", conversation.id)
+      .in("status", ["running", "paused"])
+      .neq("funnel", MEGA_SORGO_7D_VERSION).limit(1);
+    if (otherError) return json({ ok: false, error: "falha ao consultar outros funis" }, 503);
+    if (otherSequences?.length) {
+      return json({ ok: false, error: "conversa já tem outro funil ativo", terminal: true }, 422);
+    }
+  }
 
+  if (isSevenDayTest && body.request.action === "funil") {
+    body.pieces = SEVEN_DAY_CONTENT.map((piece) => ({
+      code: piece.code,
+      day: piece.day,
+      type: piece.type,
+      payload: { ...piece.payload },
+      offset_seconds: 0,
+    }));
+  }
   try {
-    body.pieces = await resolveActionMedia(db, body.pieces);
+    body.pieces = await resolveActionMedia(db, body.pieces,
+      isSevenDayTest ? MEGA_SORGO_7D_VERSION : "mega-sorgo");
   } catch (error) {
     return json({ ok: false, error: String(error) }, 422);
   }

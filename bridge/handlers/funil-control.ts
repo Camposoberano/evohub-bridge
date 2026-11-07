@@ -48,6 +48,9 @@ import {
   SOCIAL_N8N_FUNNEL,
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
+import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
+import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { resumeSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
 
 /**
  * Falha que NÃO adianta repetir — e a frase que explica isso ao atendente.
@@ -138,7 +141,12 @@ export async function handle(req: Request): Promise<Response> {
   if (controlChannelError) {
     return json({ error: "canal da conversa indisponível" }, 500);
   }
-  const funnelId = mainFunnelForChannel(controlChannel);
+  const sevenDayTest = body.funnel_version === MEGA_SORGO_7D_VERSION;
+  if (sevenDayTest && (!isSevenDayWhatsAppChannel(controlChannel) ||
+    !sevenDayTestConversationAllowed(cwConvId))) {
+    return json({ error: "conversa de teste não autorizada", terminal: true }, 422);
+  }
+  const funnelId = sevenDayTest ? MEGA_SORGO_7D_VERSION : mainFunnelForChannel(controlChannel);
   const n8nAlias: Record<string, string> = {
     iniciar: "funil",
     "start-funil": "funil",
@@ -191,12 +199,14 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (action === "pause") {
-    const { count: paused } = await db.from("scheduled_messages").update({
+    let pauseQuery = db.from("scheduled_messages").update({
       status: "paused",
     })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .eq("status", "pending")
-      .select("id", { count: "exact", head: true });
+      .eq("conversation_id", conv.id).eq("status", "pending");
+    pauseQuery = sevenDayTest
+      ? pauseQuery.like("funnel", `${funnelId}%`)
+      : pauseQuery.eq("funnel", funnelId);
+    const { count: paused } = await pauseQuery.select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "paused" })
       .eq("conversation_id", conv.id).eq("funnel", funnelId)
       .eq("status", "running");
@@ -270,12 +280,14 @@ export async function handle(req: Request): Promise<Response> {
   }
 
   if (action === "stop") {
-    const { count: cancelled } = await db.from("scheduled_messages").update({
+    let stopQuery = db.from("scheduled_messages").update({
       status: "cancelled",
     })
-      .eq("conversation_id", conv.id).eq("funnel", funnelId)
-      .in("status", ["pending", "paused"])
-      .select("id", { count: "exact", head: true });
+      .eq("conversation_id", conv.id).in("status", ["pending", "paused"]);
+    stopQuery = sevenDayTest
+      ? stopQuery.like("funnel", `${funnelId}%`)
+      : stopQuery.eq("funnel", funnelId);
+    const { count: cancelled } = await stopQuery.select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "cancelled" })
       .eq("conversation_id", conv.id).eq("funnel", funnelId)
       .in("status", ["running", "paused"]);
@@ -373,11 +385,9 @@ export async function handle(req: Request): Promise<Response> {
     // um funil parado por dias despejaria o resto do roteiro no cliente em minutos.
     // resumeSequenceRebased preserva os intervalos e reancora em agora+60s; é a mesma
     // função que o auto-resume usa, pra não voltarem a divergir.
-    const resumed = await resumeSequenceRebased(
-      db,
-      String(conv.id),
-      funnelId,
-    );
+    const resumed = sevenDayTest
+      ? await resumeSevenDaySequence(db, String(conv.id))
+      : await resumeSequenceRebased(db, String(conv.id), funnelId);
     await db.from("events").insert({
       source: "funil",
       event_type: "manual_resumed",

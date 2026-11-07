@@ -17,7 +17,7 @@ export const SEVEN_DAY_CONDITIONAL_VIDEOS = manifest.conditionalVideos;
 
 /** Fail closed: incomplete media or script cannot silently become an outgoing piece. */
 export function validateSevenDayContent(): void {
-  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 38 ||
+  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 39 ||
     SEVEN_DAY_CONDITIONAL_VIDEOS.length !== 5) throw new Error("catálogo de sete dias incompleto");
   const codes = new Set(SEVEN_DAY_CONTENT.map((piece) => piece.code));
   for (let n = 1; n <= 31; n++) {

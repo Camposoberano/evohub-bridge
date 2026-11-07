@@ -387,6 +387,7 @@ async function handleWhatsApp(db: Db, p: Json) {
           content,
           attachments,
           skipChatwoot: native,
+          buttonClickId: menuClick?.id ?? null,
           acct,
           // CTWA/free entry point: lead clicou em anúncio -> janela de 72h (origem='anuncio').
           referral: (m.referral as Json | undefined) ?? undefined,

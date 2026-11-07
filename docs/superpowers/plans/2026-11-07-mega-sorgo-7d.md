@@ -53,3 +53,11 @@
 - [ ] Validar payloads do novo contrato e os workflows antes de salvar; não alterar os 14 workflows ativos do 5895.
 - [ ] Testar unidade, integração local, checagem Deno e ensaio acelerado em conversa de teste dos dois números, sem anúncio real.
 - [ ] Preparar checklist de virada e reversão; confirmar que a versão nova está completa e que o roteamento de produção continua na antiga.
+
+## Estado em 07/11/2026
+
+- Catálogo próprio de 39 peças e cinco vídeos condicionais preparado; os 27 slots de mídia foram cadastrados em `soberano-out/funil/mega-sorgo-7d-v1/` e as URLs responderam HTTP 200. Os dez áudios foram aceitos pelo dono como gravados; a peça 25 usa cópia cortada antes do trecho final incompleto.
+- Agenda de sete dias, pausa por resposta, opt-out, retomada manual, allowlist de conversa e fila n8n estão implementados localmente. Testes focados: 22 passaram; `deno check server.ts` passou.
+- Workflow separado `tqo0h3yNVAykSZdK` (`Soberano — Mega Sorgo 7 dias TESTE`) criado no projeto pessoal do Cícero e mantido **inativo**. A credencial de entrada foi atribuída. O conector n8n recusou atribuir a credencial Bearer existente `Soberano 5895 bridge enqueue` ao nó HTTP Request; a ligação precisa ser concluída antes de qualquer ensaio real. O editor local estava desabilitado no ambiente Codex.
+- O bridge ainda não foi publicado nem implantado, e a variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` continua vazia: nenhum lead real pode entrar na versão nova. A versão dos anúncios 5895/6836 continua a atual.
+- Para considerar pronto para troca: resolver credencial n8n; fazer ensaio ponta a ponta em uma conversa de teste de cada número; verificar recibos e ausência de duplicidade; preparar a reversão. Ainda não marcar estes itens como concluídos.

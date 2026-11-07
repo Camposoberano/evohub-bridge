@@ -313,6 +313,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json, rawEventId =
         metaMessageId: msg.metaMessageId,
         msgType: msg.msgType,
         content: msg.content,
+        buttonClickId: msg.menuClickId,
         attachments: msg.attachments,
         sentAt: msg.sentAt,
         outgoing: msg.direction === "outgoing",

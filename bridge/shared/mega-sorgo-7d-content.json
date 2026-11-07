@@ -50,7 +50,7 @@
           "slot": "p04"
         }
       },
-      "asset": "audio_04.ogg",
+      "asset": "audio_01_-_fase_01.ogg",
       "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente. Já te mostro os números e um vídeo."
     },
     {
@@ -63,7 +63,7 @@
           "slot": "p05"
         }
       },
-      "asset": "audio_05.ogg",
+      "asset": "audio_02_-_fase_01.ogg",
       "script": "Hoje o grande problema na pecuária é comida cara com pouco lucro. O Mega Sorgo resolve isso: junta uma qualidade perto do milho com produção muito alta, e ainda tem boa resistência às pragas do milho, o que dá mais segurança na safra. Vou te passar um vídeo agora; qualquer dúvida, pode perguntar que eu respondo."
     },
     {
@@ -155,7 +155,7 @@
           "slot": "p09"
         }
       },
-      "asset": "audio_09.ogg",
+      "asset": "audio_01_-_fase_02.ogg",
       "script": "Uma coisa impressionante dele é a altura: passa de 5 metros, ou seja, muita massa por hectare. E o pessoal pergunta: e o vento? Como ele perfilha bem e tem raiz forte, aguenta bem o vento — melhor que as variedades mais baixas. Então, apesar de alto, é seguro no campo."
     },
     {
@@ -168,7 +168,7 @@
           "slot": "p10"
         }
       },
-      "asset": "audio_10.ogg",
+      "asset": "audio_02_-_fase_02.ogg",
       "script": "Agora a produção, que é o que o senhor quer saber — e ela vem em cortes. No primeiro, de *80 a 100 toneladas de silagem por hectare*; no segundo, de *50 a 60*; e, quando dá o terceiro, mais *30 a 40*. Na safrinha normalmente saem os dois primeiros. Somando, passa tranquilo de *130 toneladas por hectare*, e na safra cheia, com os três cortes, chega a 160, 200. Se a chuva não deixar o terceiro, o senhor solta o gado pra pastejar o rebrote. É média esperada, claro, varia com clima e manejo."
     },
     {
@@ -260,7 +260,7 @@
           "slot": "p14"
         }
       },
-      "asset": "audio_14.ogg",
+      "asset": "audio_01_-_fase_03.ogg",
       "script": "Aqui é o Cícero de novo. A produção é boa, mas pra mim o principal do Mega Sorgo é outro: ele rebrota. Com um plantio só, o senhor tira um corte, o rebrote e ainda um segundo — uma adubação de plantio e as de cobertura, e pronto. Isso corta custo e, principalmente, dá segurança: se a chuva atrasar e bater o momento crítico, no milho o senhor perde o ponto; no sorgo não — corta, ensila, e ele rebrota quando a chuva voltar. Independente do ano, o senhor garante comida no cocho."
     },
     {
@@ -273,7 +273,7 @@
           "slot": "p15"
         }
       },
-      "asset": "audio_15.ogg",
+      "asset": "audio_02_-_fase_03.ogg",
       "script": "E a qualidade? Comparado ao milho, o Mega Sorgo perde só no amido; em proteína e energia ele se equipara bem. E comparado ao capiaçu, que é o concorrente em produção, a silagem do Mega Sorgo tem qualidade bem superior. Ainda tem sacarose, aquele docinho de cana, então o gado gosta e come melhor. É produção alta com silagem de qualidade."
     },
     {
@@ -387,7 +387,7 @@
           "slot": "p19"
         }
       },
-      "asset": "audio_19.ogg",
+      "asset": "audio_01_-_fase_04.ogg",
       "script": "Olá, amigo, aqui é o Cícero. De nada adianta produção boa se a praga ataca, né? Uma vantagem do Mega Sorgo é a alta resistência às pragas do milho — cigarrinha e lagarta quase não pegam nele, e contra o pulgão ele também se sai bem. Não é milagre, mas é um dos melhores nesse ponto. Menos veneno e mais segurança no campo."
     },
     {
@@ -400,7 +400,7 @@
           "slot": "p20"
         }
       },
-      "asset": "audio_20.ogg",
+      "asset": "audio_02_-_fase_04.ogg",
       "script": "E a seca? Hoje o Brasil não tem mais a segurança de chuva de antes — tem o veranico, a safrinha apertada. O Mega Sorgo tem raiz profunda, que aproveita bem a água do solo e segura melhor o tempo seco. Resumindo: boa produção, boa resistência e qualidade. E é isso que importa pro senhor — não é vender mais, é ter mais *lucro*."
     },
     {
@@ -474,6 +474,18 @@
       }
     },
     {
+      "code": "24v",
+      "day": 3,
+      "type": "video",
+      "payload": {
+        "media_ref": {
+          "day": 0,
+          "slot": "p24v"
+        }
+      },
+      "asset": "05_gancho_safra_2027_estoque.mp4"
+    },
+    {
       "code": "24",
       "day": 3,
       "type": "interactive",
@@ -505,7 +517,7 @@
           "slot": "p25"
         }
       },
-      "asset": "audio_25.ogg",
+      "asset": "audio_01_-_fase_05_corte.ogg",
       "script": "Tudo bem, aqui é o Cícero. O Mega Sorgo produz o ano todo, mas a semente não — ela é desenvolvida e melhorada pelo Instituto Agronômico de Campinas, produção local pro Brasil todo, então falta. Hoje a gente está com o lote dessa safra abaixo de 20% e não dá pra garantir até quando dura. Por isso eu faço assim com quem tem interesse de verdade: *reservo os sacos no seu nome e seguro a condição* por *5 dias úteis*, sem compromisso. O senhor confirma com calma e, se não rolar, eu libero pro próximo. Assim o senhor não corre o risco de faltar nem de subir o preço."
     },
     {
@@ -518,7 +530,7 @@
           "slot": "p26"
         }
       },
-      "asset": "audio_26.ogg",
+      "asset": "audio_02_-_fase_05.ogg",
       "script": "E a parte boa: tem *frete grátis pro Brasil todo* e pronta entrega — assim que o senhor confirmar, já preparo o envio, normalmente sai em um dia útil, com nota fiscal e rastreamento. Eu só confirmo o prazo certinho pra sua região antes de fechar."
     },
     {

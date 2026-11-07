@@ -7,6 +7,11 @@ const CLOSE_MINUTE = 20 * 60;
 export const SEVEN_DAY_FUNNEL_DAYS = [1, 2, 3, 5, 6, 7] as const;
 export const PIECE_GAP_MINUTES = 4;
 
+export function isSevenDaySendHour(ms = Date.now()): boolean {
+  const minute = minuteOfLocalDay(ms);
+  return minute >= OPEN_MINUTE && minute < CLOSE_MINUTE;
+}
+
 function localDayUtc(ms: number): number {
   const local = new Date(ms - OFFSET_MS);
   return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
@@ -27,13 +32,13 @@ export function sevenDayFirstStart(enteredAt: number, firstDayCount: number): nu
     throw new Error("entrada ou número de peças inválido");
   }
   let day = localDayUtc(enteredAt);
-  const minute = minuteOfLocalDay(enteredAt);
-  const start = Math.max(OPEN_MINUTE, minute);
-  if (start + (firstDayCount - 1) * PIECE_GAP_MINUTES >= CLOSE_MINUTE) {
+  const start = Math.max(enteredAt, atLocalMinute(day, OPEN_MINUTE));
+  if (start + (firstDayCount - 1) * PIECE_GAP_MINUTES * MINUTE_MS >=
+    atLocalMinute(day, CLOSE_MINUTE)) {
     day += DAY_MS;
     return atLocalMinute(day, OPEN_MINUTE);
   }
-  return Math.max(enteredAt, atLocalMinute(day, OPEN_MINUTE));
+  return start;
 }
 
 export type SevenDayPiece = { code: string; day: number };
@@ -63,15 +68,17 @@ export function scheduleSevenDayPieces(
   return pieces.map((piece, position) => {
     const index = used.get(piece.day) ?? 0;
     used.set(piece.day, index + 1);
-    const startMinute = piece.day === 1
-      ? minuteOfLocalDay(first)
-      : 9 * 60;
-    const minute = startMinute + index * PIECE_GAP_MINUTES;
-    if (minute >= CLOSE_MINUTE) throw new Error(`dia ${piece.day} fora da janela`);
+    const timestamp = piece.day === 1
+      ? first + index * PIECE_GAP_MINUTES * MINUTE_MS
+      : atLocalMinute(firstLocalDay + (piece.day - 1) * DAY_MS,
+        9 * 60 + index * PIECE_GAP_MINUTES);
+    if (minuteOfLocalDay(timestamp) >= CLOSE_MINUTE) {
+      throw new Error(`dia ${piece.day} fora da janela`);
+    }
     return {
       ...piece,
       position,
-      sendAt: new Date(atLocalMinute(firstLocalDay + (piece.day - 1) * DAY_MS, minute)).toISOString(),
+      sendAt: new Date(timestamp).toISOString(),
     };
   });
 }

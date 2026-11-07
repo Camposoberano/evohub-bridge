@@ -1,5 +1,6 @@
 /** Contrato estável das macros comerciais do Hub Soberano. */
 import { SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
+import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
 export const SOBERANO_ACTIONS = [
   "funil",
   "preco",
@@ -41,7 +42,8 @@ export function isSoberanoAction(value: string): value is SoberanoAction {
 export function actionKey(request: ActionRequest): string {
   return [
     "soberano-action",
-    ...(request.funnel_version === SOCIAL_N8N_FUNNEL ? [SOCIAL_N8N_FUNNEL] : []),
+    ...([SOCIAL_N8N_FUNNEL, MEGA_SORGO_7D_VERSION].includes(request.funnel_version)
+      ? [request.funnel_version] : []),
     request.chatwoot_conversation_id,
     request.action,
     encodeURIComponent(request.request_id),

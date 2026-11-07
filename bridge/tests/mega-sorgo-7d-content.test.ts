@@ -7,7 +7,7 @@ import {
 Deno.test("catálogo separado cobre 31 peças e três dias finais sem dia 4", () => {
   validateSevenDayContent();
   assertEquals(MEGA_SORGO_7D_VERSION, "mega-sorgo-7d-v1");
-  assertEquals(SEVEN_DAY_CONTENT.length, 38);
+  assertEquals(SEVEN_DAY_CONTENT.length, 39);
   assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.day === 4), false);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "08")?.day, 1);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "18")?.day, 2);

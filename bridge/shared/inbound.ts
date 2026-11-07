@@ -25,6 +25,8 @@ import {
 } from "./chatwoot.ts";
 import { resumeWindowHeldMessages } from "./social-window-hold.ts";
 import { autoPauseFunil } from "./funnel-state.ts";
+import { applySevenDayInboundState } from "./mega-sorgo-7d-state.ts";
+import { enqueueSevenDayVideos } from "./mega-sorgo-7d-videos.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -85,6 +87,7 @@ export type IngestInboundMessage = {
   referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
   labels?: string[]; // etiquetas declarativas aplicadas após uma saída ser aceita
+  buttonClickId?: string | null; // clique de fluxo segue o ramo, sem pausa por texto livre
 };
 
 export async function ingestInbound(
@@ -620,6 +623,13 @@ async function ingestInboundClaimed(
   // renovada em cada mensagem; os roteadores podem promovê-la para espera humana sem prazo.
   if (!msg.outgoing) {
     try {
+      await applySevenDayInboundState(db, String(conv.id), {
+        content: msg.content,
+        clickId: msg.buttonClickId,
+      });
+      if (msg.buttonClickId === "video_7d_sim" && conv.chatwoot_conversation_id) {
+        await enqueueSevenDayVideos(db, String(conv.id), Number(conv.chatwoot_conversation_id));
+      }
       const paused = await autoPauseFunil(
         String(conv.id),
         "resposta_cliente",
