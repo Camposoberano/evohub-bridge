@@ -1,8 +1,27 @@
 import type { DbClient } from "./supabase.ts";
-import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
+import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "./mega-sorgo-7d-content.ts";
 import { scheduleSevenDayTestPieces } from "./mega-sorgo-7d-schedule.ts";
 
 export type SevenDayInboundDecision = "click" | "pause" | "optout";
+
+function passiveSevenDayClick(id: string): boolean {
+  return /^(?:f[1-4]_(?:sim|olhando|continuar|leite|corte|ambos|milho|capim|nao|ja|nunca)|f5_(?:pensar|depois)|video_7d_(?:sim|nao))$/.test(id);
+}
+
+const passiveButtonTitles = new Set(SEVEN_DAY_CONTENT.flatMap((piece) => {
+  const buttons = Array.isArray(piece.payload.buttons) ? piece.payload.buttons : [];
+  const sections = Array.isArray(piece.payload.sections) ? piece.payload.sections : [];
+  const rows = sections.flatMap((section: unknown) => {
+    const candidate = section as { rows?: unknown[] };
+    return Array.isArray(candidate.rows) ? candidate.rows : [];
+  });
+  return [...buttons, ...rows]
+    .filter((item): item is { id: string; title: string } =>
+      !!item && typeof item === "object" &&
+      passiveSevenDayClick(String((item as { id?: unknown }).id ?? "")) &&
+      typeof (item as { title?: unknown }).title === "string")
+    .map((item) => item.title.trim());
+}));
 
 export function rebaseSevenDayPaused(
   rows: { id: string; day: number; step: number }[], now = Date.now(),
@@ -75,10 +94,15 @@ export function classifySevenDayInbound(input: {
   // Só cliques informativos seguem a cadência. Preço, reserva, material e
   // atendimento desviam para outra ação: congelar a cadência evita sobreposição.
   if (input.clickId) {
-    if (/^(?:f[1-4]_(?:sim|olhando|continuar|leite|corte|ambos|milho|capim|nao|ja|nunca)|f5_(?:pensar|depois)|video_7d_(?:sim|nao))$/.test(input.clickId)) {
+    if (passiveSevenDayClick(input.clickId)) {
       return "click";
     }
     return "pause";
+  }
+  // Alguns provedores espelham o clique em dois eventos sem ID: primeiro
+  // "[button]", depois o título exato. Nenhum dos dois é texto livre.
+  if (input.content.trim() === "[button]" || passiveButtonTitles.has(input.content.trim())) {
+    return "click";
   }
   if (/\b(n[aã]o quero|sem interesse|me tira|pare|para de mandar|sai|stop)\b/i
     .test(input.content)) return "optout";

@@ -7,6 +7,8 @@ Deno.test("texto livre pausa, recusa encerra e clique segue o ramo", () => {
   assertEquals(classifySevenDayInbound({ content: "sim", clickId: "video_7d_sim" }), "click");
   assertEquals(classifySevenDayInbound({ content: "Quero preço", clickId: "menu_preco" }), "pause");
   assertEquals(classifySevenDayInbound({ content: "Reservar", clickId: "f5_reservar" }), "pause");
+  assertEquals(classifySevenDayInbound({ content: "[button]" }), "click");
+  assertEquals(classifySevenDayInbound({ content: "Quero saber mais ✅" }), "click");
 });
 
 Deno.test("retomada reancora peças restantes em dias distintos sem disparar atraso", () => {
