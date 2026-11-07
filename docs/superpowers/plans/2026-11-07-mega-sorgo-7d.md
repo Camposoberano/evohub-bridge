@@ -58,6 +58,18 @@
 
 - Catálogo próprio de 39 peças e cinco vídeos condicionais preparado; os 27 slots de mídia foram cadastrados em `soberano-out/funil/mega-sorgo-7d-v1/` e todas as URLs responderam HTTP 200 com `Content-Type` compatível. Os dez áudios foram aceitos pelo dono como gravados; a peça 25 usa cópia cortada antes do trecho final incompleto. Os canais reais consultados no banco são WhatsApp com nomes e finais 5895 e 6836, compatíveis com o bloqueio da versão de teste.
 - Agenda de sete dias, pausa por resposta, opt-out, retomada manual, allowlist de conversa e fila n8n estão implementados localmente. Testes focados: 22 passaram; `deno check server.ts` passou.
-- Workflow separado `tqo0h3yNVAykSZdK` (`Soberano — Mega Sorgo 7 dias TESTE`) criado no projeto pessoal do Cícero e mantido **inativo**. As credenciais existentes de entrada e saída foram associadas. O conector n8n recusou associar a credencial Bearer ao nó HTTP Request; a API oficial do n8n confirmou a associação depois, sem criar segredo novo.
+- Workflow separado `tqo0h3yNVAykSZdK` (`Soberano — Mega Sorgo 7 dias TESTE`) criado no projeto pessoal do Cícero e mantido **inativo**. As credenciais existentes de entrada e saída foram associadas. O conector n8n recusou associar a credencial Bearer ao nó HTTP Request; a API oficial do n8n confirmou a associação depois, sem criar segredo novo. O nó de validação gera `request_id` estável por conversa, exigido pelo contrato do bridge; esta correção foi conferida na versão salva do workflow.
 - O bridge ainda não foi publicado nem implantado, e a variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` continua vazia: nenhum lead real pode entrar na versão nova. A versão dos anúncios 5895/6836 continua a atual.
 - Para considerar pronto para troca: fazer ensaio ponta a ponta em uma conversa de teste de cada número; verificar recibos e ausência de duplicidade; preparar a reversão. Ainda não marcar estes itens como concluídos.
+
+## Ensaio controlado e reversão
+
+1. Publicar o código da branch no `main` e implantar o bridge em janela permitida. Conferir `uptime_s` de `/version` e a saúde do bridge. A variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` deve conter **somente** os IDs Chatwoot de teste fornecidos pelo dono, um do 5895 e um do 6836.
+2. Conferir no n8n o workflow `tqo0h3yNVAykSZdK`: autenticação de entrada `httpHeaderAuth`, saída `httpBearerAuth`, caminho `soberano-mega-sorgo-7d-teste`. Publicá-lo somente para o ensaio; ele não recebe tráfego dos anúncios.
+3. Em cada conversa de teste, verificar que não há `sales_sequences` ativa/pausada de outra versão. Enviar uma única requisição autenticada `action=funil`, `source=macro`, `funnel_version=mega-sorgo-7d-v1`. Confirmar 39 linhas agendadas, uma sequência `running`, horários locais e nenhuma linha do dia 4. Repetir a mesma requisição para confirmar idempotência.
+4. Conferir envio e recibo de uma peça texto e uma mídia em cada número; responder texto livre e confirmar pausa das peças restantes. Retomar explicitamente e confirmar reancoragem. Em teste separado, tocar `video_7d_sim` e verificar cinco vídeos em ordem, sem repetição. Verificar opt-out e atendimento humano em conversas descartáveis.
+5. Se houver erro, despublicar o workflow de teste, esvaziar a allowlist e pausar as sequências `mega-sorgo-7d-v1` ainda pendentes. Os roteadores de anúncios continuam apontados para `mega-sorgo-5895-20260930`; não alterar `channels.status` e não pausar a versão atual.
+
+## Virada futura dos anúncios
+
+A virada exige patch próprio após o ensaio: trocar o seletor de versão em `funnel-identity.ts`, ajustar inscrição e catch-up em `funil-enroll.ts`, apontar o acionamento n8n dos anúncios ao contrato novo, revisar controles e relatórios que consultam a versão antiga, e definir destino das sequências antigas ainda ativas. Fazer deploy e verificar ambos os canais; manter caminho para voltar o seletor antigo sem apagar histórico. Este patch não faz parte da preparação isolada.
