@@ -33,7 +33,7 @@ Deno.test("versão sete dias só aceita macro de teste e preserva identidade pr�
     payload: piece.payload, offset_seconds: 0,
   }));
   const rows = await buildActionRows(parsed.value, "conversation-test", Date.parse("2026-11-09T13:00:00Z"));
-  assertEquals(rows.length, 39);
+  assertEquals(rows.length, 34);
   assertEquals(rows[0].send_at, "2026-11-09T13:00:00.000Z");
   assertEquals(rows.find((row) => row.day === 5)?.send_at,
     new Date(Date.parse("2026-11-09T13:00:00Z") + SEVEN_DAY_CONTENT.findIndex((piece) => piece.day === 5) * 5 * 60_000).toISOString());

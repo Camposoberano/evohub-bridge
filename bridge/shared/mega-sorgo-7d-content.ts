@@ -17,11 +17,16 @@ export const SEVEN_DAY_CONDITIONAL_VIDEOS = manifest.conditionalVideos;
 
 /** Fail closed: incomplete media or script cannot silently become an outgoing piece. */
 export function validateSevenDayContent(): void {
-  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 39 ||
+  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 34 ||
     SEVEN_DAY_CONDITIONAL_VIDEOS.length !== 5) throw new Error("catálogo de sete dias incompleto");
+  if (SEVEN_DAY_CONTENT.some((piece) => piece.type === "video")) {
+    throw new Error("vídeo na cadência sem aceite do cliente");
+  }
   const codes = new Set(SEVEN_DAY_CONTENT.map((piece) => piece.code));
   for (let n = 1; n <= 31; n++) {
-    if (!codes.has(String(n).padStart(2, "0"))) throw new Error(`peça ${n} ausente`);
+    if (![6, 11, 16, 22].includes(n) && !codes.has(String(n).padStart(2, "0"))) {
+      throw new Error(`peça ${n} ausente`);
+    }
   }
   scheduleSevenDayPieces(SEVEN_DAY_CONTENT, Date.parse("2026-11-09T13:00:00Z"));
   for (const piece of SEVEN_DAY_CONTENT) {

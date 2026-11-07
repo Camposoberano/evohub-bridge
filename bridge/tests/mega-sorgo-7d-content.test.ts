@@ -7,7 +7,7 @@ import {
 Deno.test("catálogo separado cobre 31 peças e três dias finais sem dia 4", () => {
   validateSevenDayContent();
   assertEquals(MEGA_SORGO_7D_VERSION, "mega-sorgo-7d-v1");
-  assertEquals(SEVEN_DAY_CONTENT.length, 39);
+  assertEquals(SEVEN_DAY_CONTENT.length, 34);
   assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.day === 4), false);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "08")?.day, 1);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "18")?.day, 2);
@@ -24,11 +24,10 @@ Deno.test("cinco vídeos oficiais dependem de aceite e usam a ordem confirmada",
   assertNotEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "video_invite"), undefined);
 });
 
-Deno.test("ganchos do catálogo usam somente cópias narradas", () => {
-  assertEquals(SEVEN_DAY_CONTENT.filter((piece) => piece.type === "video")
-    .map((piece) => piece.asset), [
-    "p06_narrado_leve.mp4", "p11_narrado_leve.mp4",
-    "p16_narrado_leve.mp4", "p22_narrado_leve.mp4",
-    "p24v_narrado_leve.mp4",
-  ]);
+Deno.test("vídeos da conversa só entram após aceite", () => {
+  assertEquals(SEVEN_DAY_CONTENT.filter((piece) => piece.type === "video").length, 0);
+  assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "04")?.asset,
+    "p04_sem_promessa_video.ogg");
+  assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "05")?.asset,
+    "p05_sem_promessa_video.ogg");
 });

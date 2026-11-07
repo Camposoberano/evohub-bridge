@@ -9,6 +9,11 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Mega Sorgo 7 dias: vídeos curtos editados são para redes sociais, não para a conversa.**
+  O dono avaliou que a narração recortada com trilha soa sem contexto no atendimento.
+  A cadência do WhatsApp não inclui vídeos; os cinco vídeos oficiais com som saem somente
+  após o botão “Sim, quero ver”. Os áudios 04/05 não devem prometer vídeo imediato.
+
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 
 - **Vídeo de funil com narração: conferir stream de áudio no arquivo final, não só HTTP 200.**

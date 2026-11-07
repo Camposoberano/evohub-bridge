@@ -50,8 +50,8 @@
           "slot": "p04"
         }
       },
-      "asset": "audio_01_-_fase_01.ogg",
-      "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente. Já te mostro os números e um vídeo."
+      "asset": "p04_sem_promessa_video.ogg",
+      "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente."
     },
     {
       "code": "05",
@@ -63,20 +63,8 @@
           "slot": "p05"
         }
       },
-      "asset": "audio_02_-_fase_01.ogg",
-      "script": "Hoje o grande problema na pecuária é comida cara com pouco lucro. O Mega Sorgo resolve isso: junta uma qualidade perto do milho com produção muito alta, e ainda tem boa resistência às pragas do milho, o que dá mais segurança na safra. Vou te passar um vídeo agora; qualquer dúvida, pode perguntar que eu respondo."
-    },
-    {
-      "code": "06",
-      "day": 1,
-      "type": "video",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p06"
-        }
-      },
-      "asset": "p06_narrado_leve.mp4"
+      "asset": "p05_sem_promessa_video.ogg",
+      "script": "Hoje o grande problema na pecuária é comida cara com pouco lucro. O Mega Sorgo resolve isso: junta uma qualidade perto do milho com produção muito alta, e ainda tem boa resistência às pragas do milho, o que dá mais segurança na safra."
     },
     {
       "code": "07",
@@ -172,18 +160,6 @@
       "script": "Agora a produção, que é o que o senhor quer saber — e ela vem em cortes. No primeiro, de *80 a 100 toneladas de silagem por hectare*; no segundo, de *50 a 60*; e, quando dá o terceiro, mais *30 a 40*. Na safrinha normalmente saem os dois primeiros. Somando, passa tranquilo de *130 toneladas por hectare*, e na safra cheia, com os três cortes, chega a 160, 200. Se a chuva não deixar o terceiro, o senhor solta o gado pra pastejar o rebrote. É média esperada, claro, varia com clima e manejo."
     },
     {
-      "code": "11",
-      "day": 1,
-      "type": "video",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p11"
-        }
-      },
-      "asset": "p11_narrado_leve.mp4"
-    },
-    {
       "code": "12",
       "day": 1,
       "type": "list",
@@ -275,18 +251,6 @@
       },
       "asset": "audio_02_-_fase_03.ogg",
       "script": "E a qualidade? Comparado ao milho, o Mega Sorgo perde só no amido; em proteína e energia ele se equipara bem. E comparado ao capiaçu, que é o concorrente em produção, a silagem do Mega Sorgo tem qualidade bem superior. Ainda tem sacarose, aquele docinho de cana, então o gado gosta e come melhor. É produção alta com silagem de qualidade."
-    },
-    {
-      "code": "16",
-      "day": 2,
-      "type": "video",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p16"
-        }
-      },
-      "asset": "p16_narrado_leve.mp4"
     },
     {
       "code": "16b1",
@@ -417,18 +381,6 @@
       "asset": "prova-social/20.jpg"
     },
     {
-      "code": "22",
-      "day": 2,
-      "type": "video",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p22"
-        }
-      },
-      "asset": "p22_narrado_leve.mp4"
-    },
-    {
       "code": "23",
       "day": 2,
       "type": "list",
@@ -472,18 +424,6 @@
           }
         ]
       }
-    },
-    {
-      "code": "24v",
-      "day": 3,
-      "type": "video",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p24v"
-        }
-      },
-      "asset": "p24v_narrado_leve.mp4"
     },
     {
       "code": "24",
