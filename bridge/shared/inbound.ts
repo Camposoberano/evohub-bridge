@@ -27,6 +27,7 @@ import { resumeWindowHeldMessages } from "./social-window-hold.ts";
 import { autoPauseFunil } from "./funnel-state.ts";
 import { applySevenDayInboundState } from "./mega-sorgo-7d-state.ts";
 import { enqueueSevenDayVideos } from "./mega-sorgo-7d-videos.ts";
+import { sevenDayTestConversationAllowed } from "./mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -623,12 +624,15 @@ async function ingestInboundClaimed(
   // renovada em cada mensagem; os roteadores podem promovê-la para espera humana sem prazo.
   if (!msg.outgoing) {
     try {
-      await applySevenDayInboundState(db, String(conv.id), {
-        content: msg.content,
-        clickId: msg.buttonClickId,
-      });
-      if (msg.buttonClickId === "video_7d_sim" && conv.chatwoot_conversation_id) {
-        await enqueueSevenDayVideos(db, String(conv.id), Number(conv.chatwoot_conversation_id));
+      if (conv.chatwoot_conversation_id &&
+        sevenDayTestConversationAllowed(Number(conv.chatwoot_conversation_id))) {
+        await applySevenDayInboundState(db, String(conv.id), {
+          content: msg.content,
+          clickId: msg.buttonClickId,
+        });
+        if (msg.buttonClickId === "video_7d_sim") {
+          await enqueueSevenDayVideos(db, String(conv.id), Number(conv.chatwoot_conversation_id));
+        }
       }
       const paused = await autoPauseFunil(
         String(conv.id),
