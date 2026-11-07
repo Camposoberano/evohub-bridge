@@ -23,3 +23,12 @@ Deno.test("cinco vídeos oficiais dependem de aceite e usam a ordem confirmada",
   assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.code === "official_01"), false);
   assertNotEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "video_invite"), undefined);
 });
+
+Deno.test("ganchos do catálogo usam somente cópias narradas", () => {
+  assertEquals(SEVEN_DAY_CONTENT.filter((piece) => piece.type === "video")
+    .map((piece) => piece.asset), [
+    "p06_narrado_leve.mp4", "p11_narrado_leve.mp4",
+    "p16_narrado_leve.mp4", "p22_narrado_leve.mp4",
+    "p24v_narrado_leve.mp4",
+  ]);
+});

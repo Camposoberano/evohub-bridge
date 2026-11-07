@@ -76,7 +76,7 @@
           "slot": "p06"
         }
       },
-      "asset": "01_gancho_silagem_cara_plante_volume.mp4"
+      "asset": "p06_narrado_leve.mp4"
     },
     {
       "code": "07",
@@ -181,7 +181,7 @@
           "slot": "p11"
         }
       },
-      "asset": "02_altura_acima_5_metros.mp4"
+      "asset": "p11_narrado_leve.mp4"
     },
     {
       "code": "12",
@@ -286,7 +286,7 @@
           "slot": "p16"
         }
       },
-      "asset": "04_gancho_economia_ate_3_cortes.mp4"
+      "asset": "p16_narrado_leve.mp4"
     },
     {
       "code": "16b1",
@@ -426,7 +426,7 @@
           "slot": "p22"
         }
       },
-      "asset": "03_gancho_cigarrinha_lagarta.mp4"
+      "asset": "p22_narrado_leve.mp4"
     },
     {
       "code": "23",
@@ -483,7 +483,7 @@
           "slot": "p24v"
         }
       },
-      "asset": "05_gancho_safra_2027_estoque.mp4"
+      "asset": "p24v_narrado_leve.mp4"
     },
     {
       "code": "24",

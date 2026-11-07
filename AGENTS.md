@@ -11,6 +11,13 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
 
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 
+- **Vídeo de funil com narração: conferir stream de áudio no arquivo final, não só HTTP 200.**
+  Em 07/11/2026 os cinco ganchos de 12–13 s do Mega Sorgo foram cadastrados e enviados
+  com `video:h264` mas sem stream de áudio já na origem. HEAD/Content-Type e recibo `sent`
+  não detectam vídeo mudo. Antes de cadastrar MP4 narrado, executar `ffprobe` e exigir
+  `audio:aac`; confirmar um envio no aparelho. Os cinco vídeos oficiais tinham áudio;
+  somente os ganchos foram substituídos por cópias narradas em caminhos novos.
+
 - **6836 compartilha o conteúdo n8n do funil completo do 5895, mas mantém canal, fila e recibos próprios.**
   `mega-sorgo-5895-20260930` é uma versão histórica de conteúdo, não a identidade do número
   remetente. Resolver o canal pela conversa; filtrar reconciliação e alertas por `channel_id` e
