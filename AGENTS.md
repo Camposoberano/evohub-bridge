@@ -40,10 +40,10 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
      laço Deno — medir os dois lados antes de afirmar ganho.
   2. Antes da Fase 1, **inventariar o que já está no n8n**. Sem isso a migração duplica
      lógica que já existe, e 21 dos 41 workflows são cópias/testes que dão para limpar.
-  3. Para um agente inspecionar: precisa de `N8N_API_KEY` no `.env` (não há nenhuma hoje);
-     `/api/v1/workflows` exige o header `X-N8N-API-KEY` e `/rest/login` responde 401. Criar
-     uma key **nova** resolve dois problemas de uma vez, porque a anterior foi colada em chat
-     e está na fila de rotação.
+  3. `N8N_API_KEY` foi encontrada no `.env` local em 07/11/2026 e funcionou na API oficial.
+     `/api/v1/workflows` exige o header `X-N8N-API-KEY`; nunca imprimir a chave. Conferir
+     sua validade antes de diagnosticar falha de acesso. A chave anterior exposta no chat
+     permanece na fila de rotação até confirmação de que esta é outra chave.
 - **Observabilidade — onde ver CPU (e por que um agente NÃO consegue ver hoje).**
   `https://grafana.soberano.pro` (Grafana 13.x, `/api/health` responde sem auth e serve de
   ping). Serviço Coolify `mbc0rqqk3kn47uxkw8mufuuu` = Grafana + Prometheus + Alertmanager +
