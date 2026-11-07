@@ -56,7 +56,7 @@
 
 ## Estado em 07/11/2026
 
-- Catálogo próprio de 39 peças e cinco vídeos condicionais preparado; os 27 slots de mídia foram cadastrados em `soberano-out/funil/mega-sorgo-7d-v1/` e as URLs responderam HTTP 200. Os dez áudios foram aceitos pelo dono como gravados; a peça 25 usa cópia cortada antes do trecho final incompleto.
+- Catálogo próprio de 39 peças e cinco vídeos condicionais preparado; os 27 slots de mídia foram cadastrados em `soberano-out/funil/mega-sorgo-7d-v1/` e todas as URLs responderam HTTP 200 com `Content-Type` compatível. Os dez áudios foram aceitos pelo dono como gravados; a peça 25 usa cópia cortada antes do trecho final incompleto. Os canais reais consultados no banco são WhatsApp com nomes e finais 5895 e 6836, compatíveis com o bloqueio da versão de teste.
 - Agenda de sete dias, pausa por resposta, opt-out, retomada manual, allowlist de conversa e fila n8n estão implementados localmente. Testes focados: 22 passaram; `deno check server.ts` passou.
 - Workflow separado `tqo0h3yNVAykSZdK` (`Soberano — Mega Sorgo 7 dias TESTE`) criado no projeto pessoal do Cícero e mantido **inativo**. As credenciais existentes de entrada e saída foram associadas. O conector n8n recusou associar a credencial Bearer ao nó HTTP Request; a API oficial do n8n confirmou a associação depois, sem criar segredo novo.
 - O bridge ainda não foi publicado nem implantado, e a variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` continua vazia: nenhum lead real pode entrar na versão nova. A versão dos anúncios 5895/6836 continua a atual.

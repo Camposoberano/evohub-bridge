@@ -24,6 +24,8 @@ Deno.test("versão sete dias só aceita macro de teste e preserva identidade pr�
   assertEquals(validateEnqueueBody({ request: { ...seven, source: "ad" }, pieces: [] }).ok, false);
   assertEquals(validateEnqueueBody({ request: seven,
     pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...seven, action: "preco" },
+    pieces: [{ day: 0, type: "text", payload: { content: "Preço" }, offset_seconds: 0 }] }).ok, false);
   assertEquals(actionKey(seven).includes("mega-sorgo-7d-v1"), true);
   if (!parsed.ok) return;
   parsed.value.pieces = SEVEN_DAY_CONTENT.map((piece) => ({
