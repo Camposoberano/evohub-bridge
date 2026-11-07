@@ -62,6 +62,8 @@
 - O bridge ainda não foi publicado nem implantado, e a variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` continua vazia: nenhum lead real pode entrar na versão nova. A versão dos anúncios 5895/6836 continua a atual.
 - Para considerar pronto para troca: fazer ensaio ponta a ponta em uma conversa de teste de cada número; verificar recibos e ausência de duplicidade; preparar a reversão. Ainda não marcar estes itens como concluídos.
 
+O dono informou o número próprio `11910363320` para o ensaio. As conversas existentes são Chatwoot **673 no 5895** e **1286 no 6836**; não há sequência ativa/pausada de outra versão nessas conversas. A cadência de teste foi comprimida para uma peça a cada **5 minutos**, preservando a janela de envio 08h–20h BRT. Se as 39 peças não couberem até 20h, as restantes passam para 08h do dia seguinte. Esta compressão só é usada pela versão isolada de teste; a agenda nominal de sete dias permanece disponível para a virada futura.
+
 ## Ensaio controlado e reversão
 
 1. Publicar o código da branch no `main` e implantar o bridge em janela permitida. Conferir `uptime_s` de `/version` e a saúde do bridge. A variável `MEGA_SORGO_7D_TEST_CONVERSATIONS` deve conter **somente** os IDs Chatwoot de teste fornecidos pelo dono, um do 5895 e um do 6836.

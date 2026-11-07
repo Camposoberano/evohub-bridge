@@ -1,6 +1,6 @@
 import type { DbClient } from "./supabase.ts";
 import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
-import { PIECE_GAP_MINUTES, sevenDayFirstStart } from "./mega-sorgo-7d-schedule.ts";
+import { scheduleSevenDayTestPieces } from "./mega-sorgo-7d-schedule.ts";
 
 export type SevenDayInboundDecision = "click" | "pause" | "optout";
 
@@ -9,21 +9,10 @@ export function rebaseSevenDayPaused(
 ): { id: string; send_at: string }[] {
   if (!rows.length) return [];
   const sorted = [...rows].sort((a, b) => a.day - b.day || a.step - b.step);
-  const firstDay = sorted[0].day;
-  const firstCount = sorted.filter((row) => row.day === firstDay).length;
-  const start = sevenDayFirstStart(now + 5 * 60_000, firstCount);
-  const local = new Date(start - 3 * 60 * 60_000);
-  const baseDay = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
-  const counts = new Map<number, number>();
-  return sorted.map((row) => {
-    const index = counts.get(row.day) ?? 0;
-    counts.set(row.day, index + 1);
-    const timestamp = row.day === firstDay
-      ? start + index * PIECE_GAP_MINUTES * 60_000
-      : baseDay + (row.day - firstDay) * 24 * 60 * 60_000 +
-        (9 * 60 + index * PIECE_GAP_MINUTES) * 60_000 + 3 * 60 * 60_000;
-    return { id: row.id, send_at: new Date(timestamp).toISOString() };
-  });
+  const scheduled = scheduleSevenDayTestPieces(sorted.map((row) => ({
+    code: row.id, day: row.day,
+  })), now + 5 * 60_000);
+  return scheduled.map((piece) => ({ id: piece.code, send_at: piece.sendAt }));
 }
 
 export async function resumeSevenDaySequence(db: DbClient, conversationId: string): Promise<number> {

@@ -1,7 +1,7 @@
 import type { DbClient } from "./supabase.ts";
 import { actionUuid } from "./n8n-action-contract.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONDITIONAL_VIDEOS } from "./mega-sorgo-7d-content.ts";
-import { scheduleSevenDayPieces } from "./mega-sorgo-7d-schedule.ts";
+import { scheduleSevenDayTestPieces } from "./mega-sorgo-7d-schedule.ts";
 
 /** Aceite explícito: enfileira uma única vez, na ordem, com mídia confirmada. */
 export async function enqueueSevenDayVideos(
@@ -23,7 +23,7 @@ export async function enqueueSevenDayVideos(
     ((media ?? []) as { slot: string; url: string; type: string }[])
       .map((row) => [String(row.slot), row]),
   );
-  const scheduled = scheduleSevenDayPieces(SEVEN_DAY_CONDITIONAL_VIDEOS.map((_, i) => ({
+  const scheduled = scheduleSevenDayTestPieces(SEVEN_DAY_CONDITIONAL_VIDEOS.map((_, i) => ({
     code: `official_0${i + 1}`, day: 1,
   })), now);
   const rows = await Promise.all(SEVEN_DAY_CONDITIONAL_VIDEOS.map(async (video, step) => {

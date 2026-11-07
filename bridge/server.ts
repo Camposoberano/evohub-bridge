@@ -396,7 +396,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-07-wa-6836-n8n-shared-funnel",
+  build: "2026-11-07-mega-sorgo-7d-test",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

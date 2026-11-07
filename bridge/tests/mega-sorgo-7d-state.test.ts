@@ -19,7 +19,7 @@ Deno.test("retomada reancora peças restantes em dias distintos sem disparar atr
   ], now);
   assertEquals(rows.map((row) => row.id), ["d3a", "d3b", "d6", "d7"]);
   assertEquals(rows[0].send_at, "2026-11-07T22:35:00.000Z");
-  assertEquals(rows[1].send_at, "2026-11-07T22:39:00.000Z");
-  assertEquals(rows[2].send_at, "2026-11-10T12:00:00.000Z");
-  assertEquals(rows[3].send_at, "2026-11-11T12:00:00.000Z");
+  assertEquals(rows[1].send_at, "2026-11-07T22:40:00.000Z");
+  assertEquals(rows[2].send_at, "2026-11-07T22:45:00.000Z");
+  assertEquals(rows[3].send_at, "2026-11-07T22:50:00.000Z");
 });

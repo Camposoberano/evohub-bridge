@@ -22,7 +22,7 @@ import {
 } from "../shared/lead-block.ts";
 import { handle as funilControl } from "./funil-control.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
-import { scheduleSevenDayPieces } from "../shared/mega-sorgo-7d-schedule.ts";
+import { scheduleSevenDayTestPieces } from "../shared/mega-sorgo-7d-schedule.ts";
 import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
@@ -210,7 +210,7 @@ export async function buildActionRows(
   if (!conversationId) throw new Error("conversation_id obrigatório");
   const key = actionKey(body.request);
   if (body.request.funnel_version === MEGA_SORGO_7D_VERSION && body.request.action === "funil") {
-    const schedule = scheduleSevenDayPieces(body.pieces.map((piece) => ({
+    const schedule = scheduleSevenDayTestPieces(body.pieces.map((piece) => ({
       code: piece.code ?? "", day: piece.day,
     })), now);
     return await Promise.all(body.pieces.map(async (piece, step) => ({
