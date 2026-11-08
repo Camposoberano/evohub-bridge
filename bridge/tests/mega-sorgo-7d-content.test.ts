@@ -8,6 +8,9 @@ Deno.test("catálogo separado cobre 31 peças e três dias finais sem dia 4", ()
   validateSevenDayContent();
   assertEquals(MEGA_SORGO_7D_VERSION, "mega-sorgo-7d-v1");
   assertEquals(SEVEN_DAY_CONTENT.length, 34);
+  assertEquals(SEVEN_DAY_CONTENT.slice(0, 2).map((piece) => [piece.code, piece.type]),
+    [["04", "audio"], ["01", "text"]]);
+  assertEquals(String(SEVEN_DAY_CONTENT[1].payload.content).startsWith("🌾 *Mega Sorgo"), true);
   assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.day === 4), false);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "08")?.day, 1);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "18")?.day, 2);

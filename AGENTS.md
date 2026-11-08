@@ -13,6 +13,10 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
   O dono avaliou que a narração recortada com trilha soa sem contexto no atendimento.
   A cadência do WhatsApp não inclui vídeos; os cinco vídeos oficiais com som saem somente
   após o botão “Sim, quero ver”. Os áudios 04/05 não devem prometer vídeo imediato.
+- **Mega Sorgo 7 dias: abrir com áudio do Cícero, depois texto explicativo.**
+  O dono rejeitou a saudação automática em texto “bom dia, vida boa” como primeira peça.
+  A abertura precisa começar pela voz dele e o texto seguinte deve explicar o produto
+  sem repetir o cumprimento. Alterar a ordem no catálogo e em qualquer fila de teste nova.
 
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 

@@ -22,6 +22,10 @@ export function validateSevenDayContent(): void {
   if (SEVEN_DAY_CONTENT.some((piece) => piece.type === "video")) {
     throw new Error("vídeo na cadência sem aceite do cliente");
   }
+  if (SEVEN_DAY_CONTENT[0]?.code !== "04" || SEVEN_DAY_CONTENT[0]?.type !== "audio" ||
+    SEVEN_DAY_CONTENT[1]?.code !== "01" || SEVEN_DAY_CONTENT[1]?.type !== "text") {
+    throw new Error("abertura deve começar com áudio e texto complementar");
+  }
   const codes = new Set(SEVEN_DAY_CONTENT.map((piece) => piece.code));
   for (let n = 1; n <= 31; n++) {
     if (![6, 11, 16, 22].includes(n) && !codes.has(String(n).padStart(2, "0"))) {

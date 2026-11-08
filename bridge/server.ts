@@ -396,7 +396,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-08-mega-sorgo-7d-night-retest",
+  build: "2026-11-08-mega-sorgo-7d-audio-first",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

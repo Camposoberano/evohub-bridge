@@ -2,11 +2,24 @@
   "version": "mega-sorgo-7d-v1",
   "pieces": [
     {
+      "code": "04",
+      "day": 1,
+      "type": "audio",
+      "payload": {
+        "media_ref": {
+          "day": 0,
+          "slot": "p04"
+        }
+      },
+      "asset": "p04_sem_promessa_video.ogg",
+      "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente."
+    },
+    {
       "code": "01",
       "day": 1,
       "type": "text",
       "payload": {
-        "content": "E aí, bom dia, vida boa! 😊👋 Aqui é o *Cícero Sobreira*, da *Campo Soberano* 👨‍🌾🌾 Vou te mostrar a semente que dá *até 3 cortes num plantio só* — silagem farta até no ano de chuva fraca. 🌾"
+        "content": "🌾 *Mega Sorgo Santa Elisa* é uma opção para quem precisa de silagem com regularidade. Depois do primeiro corte, a planta pode rebrotar e permitir novos cortes, conforme o clima e o manejo. Isso ajuda a produzir mais volumoso sem replantar a cada corte. Nos próximos passos, vou te mostrar os números, o manejo e exemplos da lavoura. Se quiser falar da sua propriedade, pode responder a qualquer momento."
       }
     },
     {
@@ -39,19 +52,6 @@
           }
         ]
       }
-    },
-    {
-      "code": "04",
-      "day": 1,
-      "type": "audio",
-      "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "p04"
-        }
-      },
-      "asset": "p04_sem_promessa_video.ogg",
-      "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente."
     },
     {
       "code": "05",
