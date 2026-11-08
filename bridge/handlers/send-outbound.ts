@@ -25,6 +25,7 @@ import {
 } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
+import { isSevenDayNightTest } from "../shared/mega-sorgo-7d-night-test.ts";
 import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
@@ -238,7 +239,8 @@ export async function handle(req: Request): Promise<Response> {
   }
   // Última barreira para toda peça ligada a scheduled_messages, incluindo chamadas
   // do n8n que não passam pelo pump local. Mensagens manuais continuam fora desta regra.
-  if (funnelLink.scheduled_message_id && !isWithinFunnelSendHours()) {
+  if (funnelLink.scheduled_message_id && !isWithinFunnelSendHours() &&
+    !(funnelLink.funnel === "mega-sorgo-7d-v1" && isSevenDayNightTest(cwConvId))) {
     const nextSendAt = new Date(nextFunnelSendAt()).toISOString();
     const { data: deferred, error: deferError } = await db
       .from("scheduled_messages")
