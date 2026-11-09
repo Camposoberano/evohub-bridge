@@ -51,12 +51,14 @@ docs/superpowers/specs/*
 !docs/superpowers/specs/2026-11-07-funil-6836-design.md
 !docs/superpowers/specs/2026-11-07-mega-sorgo-7d-design.md
 !docs/superpowers/specs/2026-11-09-mega-sorgo-7d-reparos-design.md
+!docs/superpowers/specs/2026-11-09-mega-sorgo-7d-fotos-reais-design.md
 !docs/superpowers/plans/
 docs/superpowers/plans/*
 !docs/superpowers/plans/2026-11-07-funil-6836.md
 !docs/superpowers/plans/2026-11-07-mega-sorgo-7d.md
 !docs/superpowers/plans/2026-11-09-mega-sorgo-7d-reparos.md
 !docs/superpowers/plans/2026-11-09-mega-sorgo-7d-verificacao.md
+!docs/superpowers/plans/2026-11-09-mega-sorgo-7d-fotos-reais.md
 
 # Cópias locais comprimidas já cadastradas no Storage; não versionar binários.
 ops/mega-sorgo-7d-media/

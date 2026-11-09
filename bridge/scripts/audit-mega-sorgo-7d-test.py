@@ -53,10 +53,10 @@ def main() -> int:
         status = dict(collections.Counter(row["status"] for row in current))
         codes = [row["payload"].get("__funnel_piece_code") for row in current]
         issues: list[str] = []
-        if len(current) != 34 or len(set(codes)) != 34:
-            issues.append("expected 34 unique pieces")
-        if [row["type"] for row in current[:2]] != ["audio", "text"]:
-            issues.append("opening order is not audio then text")
+        if len(current) != 33 or len(set(codes)) != 33:
+            issues.append("expected 33 unique pieces")
+        if [row["type"] for row in current[:2]] != ["audio", "image"]:
+            issues.append("opening order is not audio then photo")
         if sum(row["type"] == "audio" for row in current) != 10:
             issues.append("expected 10 audio pieces")
         if any(row["day"] == 4 for row in current):

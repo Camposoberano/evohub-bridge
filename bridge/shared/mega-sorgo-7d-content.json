@@ -15,25 +15,17 @@
       "script": "Amigo, deixa eu te falar direto o que interessa: o Mega Sorgo Santa Elisa te dá silagem em *vários cortes num plantio só* — o senhor corta, ele rebrota e vem de novo. É comida farta e de qualidade, com menos custo, porque não precisa replantar a cada corte. Meu nome é Cícero, da Campo Soberano, a gente é especialista nessa semente."
     },
     {
-      "code": "01",
-      "day": 1,
-      "type": "text",
-      "payload": {
-        "content": "🌾 *Mega Sorgo Santa Elisa* é uma opção para quem precisa de silagem com regularidade. Depois do primeiro corte, a planta pode rebrotar e permitir novos cortes, conforme o clima e o manejo. Isso ajuda a produzir mais volumoso sem replantar a cada corte. Nos próximos passos, vou te mostrar os números, o manejo e exemplos da lavoura. Se quiser falar da sua propriedade, pode responder a qualquer momento."
-      }
-    },
-    {
       "code": "02",
       "day": 1,
       "type": "image",
       "payload": {
         "media_ref": {
           "day": 0,
-          "slot": "p02"
+          "slot": "p02_foto18_20261109"
         },
-        "caption": "Somos da *Campo Soberano* 🌾 Especialistas no *Mega Sorgo Santa Elisa* 🚜 — a silagem que *rebrota*."
+        "caption": "🌾 Registro real da lavoura: a pessoa ao lado ajuda a mostrar a altura das plantas."
       },
-      "asset": "logo"
+      "asset": "prova-social/18.jpg"
     },
     {
       "code": "03",
@@ -256,13 +248,13 @@
       "code": "16b1",
       "day": 2,
       "type": "image",
-      "asset": "prova-social/18.jpg",
+      "asset": "prova-social/12.jpg",
       "payload": {
         "media_ref": {
           "day": 0,
-          "slot": "p16b1"
+          "slot": "p16b1_foto12_20261109"
         },
-        "caption": "Lavouras de *Mega Sorgo* de clientes reais 🌾 — a planta passa da altura do produtor."
+        "caption": "🚜 Máquina junto à lavoura no registro da colheita."
       }
     },
     {
@@ -275,7 +267,7 @@
           "day": 0,
           "slot": "p16b2"
         },
-        "caption": "A colheita vira silagem farta no cocho. 🌾"
+        "caption": "🚜 Colheita em andamento na lavoura."
       }
     },
     {
@@ -376,7 +368,7 @@
           "day": 0,
           "slot": "p21"
         },
-        "caption": "🌾 *Lavoura forte* mesmo no ano mais difícil — e silagem farta no cocho."
+        "caption": "🌾 Registro da colheita com o material na carreta."
       },
       "asset": "prova-social/20.jpg"
     },
@@ -492,10 +484,11 @@
       "payload": {
         "media_ref": {
           "day": 0,
-          "slot": "p28"
-        }
+          "slot": "p28_foto15_20261109"
+        },
+        "caption": "🚜 Mais um registro real da operação de colheita no campo."
       },
-      "asset": "logistica"
+      "asset": "prova-social/15.jpg"
     },
     {
       "code": "29",

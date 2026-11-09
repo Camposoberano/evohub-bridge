@@ -13,10 +13,14 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
   O dono avaliou que a narração recortada com trilha soa sem contexto no atendimento.
   A cadência do WhatsApp não inclui vídeos; os cinco vídeos oficiais com som saem somente
   após o botão “Sim, quero ver”. Os áudios 04/05 não devem prometer vídeo imediato.
-- **Mega Sorgo 7 dias: abrir com áudio do Cícero, depois texto explicativo.**
+- **Mega Sorgo 7 dias: abrir com áudio do Cícero, depois foto real.**
   O dono rejeitou a saudação automática em texto “bom dia, vida boa” como primeira peça.
-  A abertura precisa começar pela voz dele e o texto seguinte deve explicar o produto
-  sem repetir o cumprimento. Alterar a ordem no catálogo e em qualquer fila de teste nova.
+  Depois rejeitou o texto `01`, que repetia rebrote e vários cortes já falados no áudio.
+  A peça `01` foi retirada; a próxima é a foto real `18.jpg`. Não voltar a acrescentar
+  uma paráfrase do áudio logo após a abertura.
+- **Imagens do funil são fotos reais do acervo.** Não gerar lavoura, colheita ou
+  embalagem por IA. Legendas podem ser redigidas com IA, mas só descrevem o que
+  a foto mostra; não atribuir produtividade, clima, frete ou entrega à foto sem prova.
 - **Mega Sorgo 7 dias: não enviar `[nome]` literal nem PDF automático.** O ensaio de 08/11
   marcou 34/34 peças como enviadas nos dois números, mas as peças finais continham o
   marcador literal e o PDF saiu sem pedido. O dia 5 oferece o material por texto;

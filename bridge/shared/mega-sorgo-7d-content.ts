@@ -17,14 +17,14 @@ export const SEVEN_DAY_CONDITIONAL_VIDEOS = manifest.conditionalVideos;
 
 /** Fail closed: incomplete media or script cannot silently become an outgoing piece. */
 export function validateSevenDayContent(): void {
-  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 34 ||
+  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 33 ||
     SEVEN_DAY_CONDITIONAL_VIDEOS.length !== 5) throw new Error("catálogo de sete dias incompleto");
   if (SEVEN_DAY_CONTENT.some((piece) => piece.type === "video")) {
     throw new Error("vídeo na cadência sem aceite do cliente");
   }
   if (SEVEN_DAY_CONTENT[0]?.code !== "04" || SEVEN_DAY_CONTENT[0]?.type !== "audio" ||
-    SEVEN_DAY_CONTENT[1]?.code !== "01" || SEVEN_DAY_CONTENT[1]?.type !== "text") {
-    throw new Error("abertura deve começar com áudio e texto complementar");
+    SEVEN_DAY_CONTENT[1]?.code !== "02" || SEVEN_DAY_CONTENT[1]?.type !== "image") {
+    throw new Error("abertura deve começar com áudio e foto real");
   }
   const pdfOffer = SEVEN_DAY_CONTENT.find((piece) => piece.code === "d5_pdf");
   if (pdfOffer?.type !== "text" || pdfOffer.payload.media_ref) {
@@ -32,7 +32,7 @@ export function validateSevenDayContent(): void {
   }
   const codes = new Set(SEVEN_DAY_CONTENT.map((piece) => piece.code));
   for (let n = 1; n <= 31; n++) {
-    if (![6, 11, 16, 22].includes(n) && !codes.has(String(n).padStart(2, "0"))) {
+    if (![1, 6, 11, 16, 22].includes(n) && !codes.has(String(n).padStart(2, "0"))) {
       throw new Error(`peça ${n} ausente`);
     }
   }

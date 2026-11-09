@@ -4,13 +4,18 @@ import {
   SEVEN_DAY_CONTENT, validateSevenDayContent,
 } from "../shared/mega-sorgo-7d-content.ts";
 
-Deno.test("catálogo separado cobre 31 peças e três dias finais sem dia 4", () => {
+Deno.test("catálogo abre com áudio e foto real sem repetir texto", () => {
   validateSevenDayContent();
   assertEquals(MEGA_SORGO_7D_VERSION, "mega-sorgo-7d-v1");
-  assertEquals(SEVEN_DAY_CONTENT.length, 34);
+  assertEquals(SEVEN_DAY_CONTENT.length, 33);
   assertEquals(SEVEN_DAY_CONTENT.slice(0, 2).map((piece) => [piece.code, piece.type]),
-    [["04", "audio"], ["01", "text"]]);
-  assertEquals(String(SEVEN_DAY_CONTENT[1].payload.content).startsWith("🌾 *Mega Sorgo"), true);
+    [["04", "audio"], ["02", "image"]]);
+  assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.code === "01"), false);
+  assertEquals(SEVEN_DAY_CONTENT[1].asset, "prova-social/18.jpg");
+  assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "16b1")?.asset,
+    "prova-social/12.jpg");
+  assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "28")?.asset,
+    "prova-social/15.jpg");
   assertEquals(SEVEN_DAY_CONTENT.some((piece) => piece.day === 4), false);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "08")?.day, 1);
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "18")?.day, 2);
@@ -37,7 +42,7 @@ Deno.test("vídeos da conversa só entram após aceite", () => {
 
 Deno.test("PDF depende de pedido e mensagens finais não contêm marcador de nome", () => {
   const byCode = new Map(SEVEN_DAY_CONTENT.map((piece) => [piece.code, piece]));
-  assertEquals(SEVEN_DAY_CONTENT.length, 34);
+  assertEquals(SEVEN_DAY_CONTENT.length, 33);
   assertEquals(SEVEN_DAY_CONTENT.filter((piece) => piece.type === "audio").length, 10);
   assertEquals(byCode.get("d5_pdf")?.type, "text");
   assertEquals("media_ref" in (byCode.get("d5_pdf")?.payload ?? {}), false);

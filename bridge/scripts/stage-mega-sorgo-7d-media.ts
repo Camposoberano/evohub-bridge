@@ -58,8 +58,9 @@ for (const item of items) {
   } else if (item.asset.startsWith("prova-social/")) {
     item.sourcePath = `${photoRoot}/${item.asset.split("/").pop()}`;
   } else if (item.asset.endsWith(".ogg")) {
-    item.sourcePath = item.asset.includes("_corte")
-      ? `${editedRoot}/${item.asset}` : `${audioRoot}/${item.asset}`;
+    const edited = `${editedRoot}/${item.asset}`;
+    item.sourcePath = await Deno.stat(edited).then(() => edited)
+      .catch(() => `${audioRoot}/${item.asset}`);
   } else {
     const optimized = `${editedRoot}/${item.asset}`;
     item.sourcePath = await Deno.stat(optimized).then(() => optimized).catch(() => `${videoRoot}/${item.asset}`);
