@@ -111,7 +111,7 @@ export function scheduleSevenDayRemainingPieces(
 
 /** Ensaio isolado: percorre o catálogo inteiro a cada 5 min, sem furar 08h–20h. */
 export function scheduleSevenDayTestPieces(
-  pieces: SevenDayPiece[], enteredAt: number,
+  pieces: SevenDayPiece[], enteredAt: number, allowOutOfHours = false,
 ): ScheduledSevenDayPiece[] {
   const codes = new Set<string>();
   let slot = enteredAt;
@@ -121,8 +121,10 @@ export function scheduleSevenDayTestPieces(
     codes.add(piece.code);
     const day = localDayUtc(slot);
     const minute = minuteOfLocalDay(slot);
-    if (minute < OPEN_MINUTE) slot = atLocalMinute(day, OPEN_MINUTE);
-    else if (minute >= CLOSE_MINUTE) slot = atLocalMinute(day + DAY_MS, OPEN_MINUTE);
+    if (!allowOutOfHours) {
+      if (minute < OPEN_MINUTE) slot = atLocalMinute(day, OPEN_MINUTE);
+      else if (minute >= CLOSE_MINUTE) slot = atLocalMinute(day + DAY_MS, OPEN_MINUTE);
+    }
     const sendAt = new Date(slot).toISOString();
     slot += PIECE_GAP_MINUTES * MINUTE_MS;
     return { ...piece, position, sendAt };

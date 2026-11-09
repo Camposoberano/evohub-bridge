@@ -14,6 +14,7 @@ import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.t
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
 import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 import { isSevenDaySendHour } from "../shared/mega-sorgo-7d-schedule.ts";
+import { isSevenDayNightTest, isSevenDayNightTestWindow } from "../shared/mega-sorgo-7d-night-test.ts";
 import { transitionSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
 
 type Json = Record<string, unknown>;
@@ -54,7 +55,20 @@ export function shouldCancelTerminal5895(funnel: unknown, blocked: string | null
 
 /** Lista IDs, nunca payload, para o workflow não carregar conteúdo nem segredo do banco. */
 async function due(): Promise<Response> {
-  if (!isWithinFunnelSendHours()) return json([]);
+  if (!isWithinFunnelSendHours()) {
+    if (!isSevenDayNightTestWindow()) return json([]);
+    const db = admin();
+    const { data, error } = await db.from("scheduled_messages")
+      .select("id,chatwoot_conversation_id")
+      .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
+      .in("chatwoot_conversation_id", [5004, 5005])
+      .lte("send_at", new Date().toISOString())
+      .order("send_at", { ascending: true }).limit(20);
+    if (error) return json({ ok: false, error: "falha ao consultar teste noturno" }, 503);
+    return json(((data ?? []) as Json[])
+      .filter((row: Json) => isSevenDayNightTest(Number(row.chatwoot_conversation_id)))
+      .map((row: Json) => ({ id: row.id })));
+  }
   const db = admin();
   const now = new Date().toISOString();
   const versions = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL,
@@ -109,9 +123,6 @@ async function send(req: Request): Promise<Response> {
   if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(id)) {
     return json({ ok: false, error: "scheduled_message_id inválido" }, 400);
   }
-  if (!isWithinFunnelSendHours()) {
-    return json({ ok: true, sent: false, blocked: "horario-comercial" });
-  }
   const db = admin();
   const { data: row, error: rowError } = await db.from("scheduled_messages")
     .select("id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at,status")
@@ -121,6 +132,10 @@ async function send(req: Request): Promise<Response> {
     return json({ ok: false, error: "peça n8n não encontrada" }, 404);
   }
   const isSevenDay = queueBaseVersion(row.funnel) === MEGA_SORGO_7D_VERSION;
+  const nightTest = isSevenDay && isSevenDayNightTest(Number(row.chatwoot_conversation_id));
+  if (!isWithinFunnelSendHours() && !nightTest) {
+    return json({ ok: true, sent: false, blocked: "horario-comercial" });
+  }
   if (row.status === "sent") return json({ ok: true, sent: true, duplicate: true });
   if (row.status !== "pending") {
     return json({ ok: true, sent: false, blocked: "peça não pendente" });
@@ -128,7 +143,7 @@ async function send(req: Request): Promise<Response> {
   if (Date.parse(String(row.send_at)) > Date.now()) {
     return json({ ok: true, sent: false, not_due: true });
   }
-  if (isSevenDay && (!isSevenDaySendHour() ||
+  if (isSevenDay && ((!isSevenDaySendHour() && !nightTest) ||
     !sevenDayTestConversationAllowed(Number(row.chatwoot_conversation_id)))) {
     return json({ ok: true, sent: false, blocked: "teste-7d-nao-autorizado" });
   }
