@@ -24,7 +24,6 @@ import { handle as funilControl } from "./funil-control.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
 import { scheduleSevenDayPieces, scheduleSevenDayTestPieces } from "../shared/mega-sorgo-7d-schedule.ts";
 import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
-import { isSevenDayNightTest } from "../shared/mega-sorgo-7d-night-test.ts";
 
 type Json = Record<string, unknown>;
 
@@ -218,8 +217,7 @@ export async function buildActionRows(
   if (body.request.funnel_version === MEGA_SORGO_7D_VERSION && body.request.action === "funil") {
     const pieces = body.pieces.map((piece) => ({ code: piece.code ?? "", day: piece.day }));
     const schedule = body.request.test_accelerated === true
-      ? scheduleSevenDayTestPieces(pieces, now,
-        isSevenDayNightTest(body.request.chatwoot_conversation_id, now))
+      ? scheduleSevenDayTestPieces(pieces, now)
       : scheduleSevenDayPieces(pieces, now);
     return await Promise.all(body.pieces.map(async (piece, step) => ({
       id: await actionUuid(`${key}:${piece.code}`),
@@ -451,8 +449,7 @@ export async function handle(req: Request): Promise<Response> {
     return json({ ok: false, error: "falha ao registrar confirmação" }, 503);
   }
   const first = rows[0];
-  const firstDue = !existed && first &&
-    (isWithinFunnelSendHours() || isSevenDayNightTest(body.request.chatwoot_conversation_id)) &&
+  const firstDue = !existed && first && isWithinFunnelSendHours() &&
     Date.parse(first.send_at) <= Date.now();
   return json({
     ok: true,
