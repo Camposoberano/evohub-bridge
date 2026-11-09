@@ -17,6 +17,12 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
   O dono rejeitou a saudação automática em texto “bom dia, vida boa” como primeira peça.
   A abertura precisa começar pela voz dele e o texto seguinte deve explicar o produto
   sem repetir o cumprimento. Alterar a ordem no catálogo e em qualquer fila de teste nova.
+- **Mega Sorgo 7 dias: não enviar `[nome]` literal nem PDF automático.** O ensaio de 08/11
+  marcou 34/34 peças como enviadas nos dois números, mas as peças finais continham o
+  marcador literal e o PDF saiu sem pedido. O dia 5 oferece o material por texto;
+  o arquivo só sai após `menu_isca_silagem`, com deduplicação diária existente.
+  A agenda real é o padrão; cinco minutos entre peças só com `test_accelerated=true`
+  numa macro da versão isolada e em conversa da allowlist.
 
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 

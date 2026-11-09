@@ -26,6 +26,10 @@ export function validateSevenDayContent(): void {
     SEVEN_DAY_CONTENT[1]?.code !== "01" || SEVEN_DAY_CONTENT[1]?.type !== "text") {
     throw new Error("abertura deve começar com áudio e texto complementar");
   }
+  const pdfOffer = SEVEN_DAY_CONTENT.find((piece) => piece.code === "d5_pdf");
+  if (pdfOffer?.type !== "text" || pdfOffer.payload.media_ref) {
+    throw new Error("PDF do dia 5 deve depender de pedido");
+  }
   const codes = new Set(SEVEN_DAY_CONTENT.map((piece) => piece.code));
   for (let n = 1; n <= 31; n++) {
     if (![6, 11, 16, 22].includes(n) && !codes.has(String(n).padStart(2, "0"))) {
@@ -36,6 +40,7 @@ export function validateSevenDayContent(): void {
   for (const piece of SEVEN_DAY_CONTENT) {
     if (!piece.payload || typeof piece.payload !== "object") throw new Error(`payload ${piece.code} ausente`);
     const text = JSON.stringify(piece.payload);
+    if (text.includes("[nome]")) throw new Error(`marcador de nome na peça ${piece.code}`);
     if (/140\s*t(?:\/ha|\/ano)|80%\s*superior|quase imune/i.test(text)) {
       throw new Error(`claim antigo na peça ${piece.code}`);
     }
