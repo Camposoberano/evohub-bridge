@@ -83,6 +83,32 @@ export function scheduleSevenDayPieces(
   });
 }
 
+/** Retoma os dias restantes preservando os intervalos da cadência real. */
+export function scheduleSevenDayRemainingPieces(
+  pieces: SevenDayPiece[], enteredAt: number,
+): ScheduledSevenDayPiece[] {
+  if (!pieces.length) return [];
+  const firstDay = Math.min(...pieces.map((piece) => piece.day));
+  const firstCount = pieces.filter((piece) => piece.day === firstDay).length;
+  const first = sevenDayFirstStart(enteredAt, firstCount);
+  const firstLocalDay = localDayUtc(first);
+  const used = new Map<number, number>();
+  const codes = new Set<string>();
+  return pieces.map((piece, position) => {
+    if (!SEVEN_DAY_FUNNEL_DAYS.includes(piece.day as typeof SEVEN_DAY_FUNNEL_DAYS[number]) ||
+      !piece.code || codes.has(piece.code)) throw new Error("peça restante inválida");
+    codes.add(piece.code);
+    const index = used.get(piece.day) ?? 0;
+    used.set(piece.day, index + 1);
+    const timestamp = piece.day === firstDay
+      ? first + index * PIECE_GAP_MINUTES * MINUTE_MS
+      : atLocalMinute(firstLocalDay + (piece.day - firstDay) * DAY_MS,
+        9 * 60 + index * PIECE_GAP_MINUTES);
+    if (minuteOfLocalDay(timestamp) >= CLOSE_MINUTE) throw new Error(`dia ${piece.day} fora da janela`);
+    return { ...piece, position, sendAt: new Date(timestamp).toISOString() };
+  });
+}
+
 /** Ensaio isolado: percorre o catálogo inteiro a cada 5 min, sem furar 08h–20h. */
 export function scheduleSevenDayTestPieces(
   pieces: SevenDayPiece[], enteredAt: number,

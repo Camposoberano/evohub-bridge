@@ -1,6 +1,12 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
-> **Leia primeiro o bloco de 2026-11-07 abaixo.** Depois os blocos anteriores conforme o tema.
+> **Leia primeiro a atualização de 2026-11-09 abaixo.** Depois os blocos anteriores conforme o tema.
+
+## ESTADO ATUAL — 2026-11-09, reparos do Mega Sorgo preparados localmente
+
+O dono aprovou manter **34 peças e 10 áudios**, corrigir erros do ensaio e testar depois em conversas próprias. Na branch `codex/mega-sorgo-publish`, worktree `.publish-stop-preco`, estão preparados: PDF apenas sob pedido (a peça do dia 5 virou convite em texto), retirada dos marcadores `[nome]`, agenda real como padrão e cadência de cinco minutos somente com `test_accelerated=true` em macro de teste, retirada da exceção noturna vencida, mapeamento dos botões de vídeo quando a UazAPI devolve apenas título, e retomada da sequência real preservando os dias restantes. O funil dos anúncios 5895/6836 continua na versão antiga; **código desta branch não foi publicado nem implantado; não houve novo envio aos clientes**. O n8n ativo `pQFCtRhzQTKqXTjS` teve apenas a exceção fixa da madrugada de 08/11 removida e está publicado na versão `334f3055-aa65-4b51-95fa-bd78b4a60f89`, com janela normal 06h–20h55 BRT no gate do cron. Documentos: spec `docs/superpowers/specs/2026-11-09-mega-sorgo-7d-reparos-design.md`, plano de implementação e roteiro `docs/superpowers/plans/2026-11-09-mega-sorgo-7d-verificacao.md`.
+
+Validação local: testes focados da agenda, estado, conteúdo e botões passaram (18/18); `deno check bridge/server.ts` passou. Auditor read-only `bridge/scripts/audit-mega-sorgo-7d-test.py` foi preparado e detectou corretamente os problemas antigos do ensaio de 08/11. Próximo passo: publicar e implantar apenas em janela autorizada, criar conversas de teste limpas, inscrever com flag de aceleração e seguir o roteiro; **não trocar o roteamento dos anúncios** até avaliação do teste.
 
 ## ESTADO ATUAL — 2026-11-07, ensaio Mega Sorgo 7 dias
 

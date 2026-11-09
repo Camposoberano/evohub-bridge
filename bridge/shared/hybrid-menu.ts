@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|f[1-5]_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
+    /^(menu_|f[1-5]_|video_7d_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
       .test(value)
   ) {
     return value;
@@ -95,6 +95,8 @@ export function normalizeHybridButtonReply(
     "boleto": "pag_boleto",
     "quero o material": "menu_isca_silagem",
     "agora nao": "menu_isca_nao_silagem",
+    "sim quero ver": "video_7d_sim",
+    "sem videos agora": "video_7d_nao",
     "quero saber mais": "f1_sim",
     "so olhando": "f1_olhando",
     "quanto produz": "f1_continuar",

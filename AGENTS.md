@@ -23,6 +23,15 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
   o arquivo só sai após `menu_isca_silagem`, com deduplicação diária existente.
   A agenda real é o padrão; cinco minutos entre peças só com `test_accelerated=true`
   numa macro da versão isolada e em conversa da allowlist.
+- **UazAPI devolve às vezes só o título do botão.** No convite dos cinco vídeos
+  oficiais, mapear `Sim, quero ver 🎬` para `video_7d_sim`. A recusa usa título
+  exclusivo `Sem vídeos agora` para não colidir com `Agora não` da isca PDF.
+  Sem isso, o aceite era interpretado como `menu_depoimento` e os vídeos oficiais
+  não entravam na fila.
+- **Retomada do Mega Sorgo preserva a cadência original.** Sequência real pausada
+  volta com os dias restantes espaçados pelo número do dia; somente uma inscrição
+  explicitamente `test_accelerated=true` retoma em intervalos de cinco minutos.
+  Comprimir a sequência real na retomada causaria uma rajada de mensagens.
 
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
 

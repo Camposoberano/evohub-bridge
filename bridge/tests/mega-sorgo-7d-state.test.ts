@@ -18,10 +18,26 @@ Deno.test("retomada reancora peças restantes em dias distintos sem disparar atr
     { id: "d3b", day: 3, step: 1 },
     { id: "d3a", day: 3, step: 0 },
     { id: "d7", day: 7, step: 3 },
-  ], now);
+  ], now, true);
   assertEquals(rows.map((row) => row.id), ["d3a", "d3b", "d6", "d7"]);
   assertEquals(rows[0].send_at, "2026-11-07T22:35:00.000Z");
   assertEquals(rows[1].send_at, "2026-11-07T22:40:00.000Z");
   assertEquals(rows[2].send_at, "2026-11-07T22:45:00.000Z");
   assertEquals(rows[3].send_at, "2026-11-07T22:50:00.000Z");
+});
+
+Deno.test("retomada real preserva distância entre dias restantes", () => {
+  const now = Date.parse("2026-11-09T22:30:00Z"); // segunda 19h30 BRT
+  const rows = rebaseSevenDayPaused([
+    { id: "d3a", day: 3, step: 0 },
+    { id: "d3b", day: 3, step: 1 },
+    { id: "d5", day: 5, step: 2 },
+    { id: "d6", day: 6, step: 3 },
+    { id: "d7", day: 7, step: 4 },
+  ], now);
+  assertEquals(rows.map((row) => row.send_at), [
+    "2026-11-09T22:35:00.000Z", "2026-11-09T22:40:00.000Z",
+    "2026-11-11T12:00:00.000Z", "2026-11-12T12:00:00.000Z",
+    "2026-11-13T12:00:00.000Z",
+  ]);
 });

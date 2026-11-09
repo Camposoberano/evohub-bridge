@@ -1,6 +1,6 @@
 import type { DbClient } from "./supabase.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "./mega-sorgo-7d-content.ts";
-import { scheduleSevenDayTestPieces } from "./mega-sorgo-7d-schedule.ts";
+import { scheduleSevenDayRemainingPieces, scheduleSevenDayTestPieces } from "./mega-sorgo-7d-schedule.ts";
 
 export type SevenDayInboundDecision = "click" | "pause" | "optout";
 
@@ -24,11 +24,12 @@ const passiveButtonTitles = new Set(SEVEN_DAY_CONTENT.flatMap((piece) => {
 }));
 
 export function rebaseSevenDayPaused(
-  rows: { id: string; day: number; step: number }[], now = Date.now(),
+  rows: { id: string; day: number; step: number }[], now = Date.now(), accelerated = false,
 ): { id: string; send_at: string }[] {
   if (!rows.length) return [];
   const sorted = [...rows].sort((a, b) => a.day - b.day || a.step - b.step);
-  const scheduled = scheduleSevenDayTestPieces(sorted.map((row) => ({
+  const schedule = accelerated ? scheduleSevenDayTestPieces : scheduleSevenDayRemainingPieces;
+  const scheduled = schedule(sorted.map((row) => ({
     code: row.id, day: row.day,
   })), now + 5 * 60_000);
   return scheduled.map((piece) => ({ id: piece.code, send_at: piece.sendAt }));
@@ -41,11 +42,17 @@ export async function resumeSevenDaySequence(db: DbClient, conversationId: strin
   if (sequenceError) throw sequenceError;
   if (sequence?.status !== "paused") return 0;
   const { data: paused, error: pausedError } = await db.from("scheduled_messages")
-    .select("id,day,step").eq("conversation_id", conversationId)
+    .select("id,day,step,payload").eq("conversation_id", conversationId)
     .like("funnel", `${MEGA_SORGO_7D_VERSION}%`).eq("status", "paused")
     .order("day").order("step").limit(100);
   if (pausedError) throw pausedError;
-  const rebased = rebaseSevenDayPaused((paused ?? []) as { id: string; day: number; step: number }[]);
+  const rows = (paused ?? []) as { id: string; day: number; step: number; payload?: Record<string, unknown> }[];
+  const modes = new Set(rows.map((row) => {
+    const key = String(row.payload?.__funnel_sequence_id ?? "");
+    return key.includes(":accelerated:") ? "accelerated" : "real";
+  }));
+  if (modes.size > 1) throw new Error("cadências mistas na retomada do funil");
+  const rebased = rebaseSevenDayPaused(rows, Date.now(), modes.has("accelerated"));
   for (const row of rebased) {
     const { error } = await db.from("scheduled_messages").update({
       status: "pending", send_at: row.send_at,

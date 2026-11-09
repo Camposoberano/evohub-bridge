@@ -62,6 +62,12 @@ Deno.test("títulos de plantio e nutrição da UazAPI mantêm o botão específi
   assertEquals(normalizeHybridMenuClick("Silagem"), "uso_silagem");
 });
 
+Deno.test("convite dos vídeos oficiais preserva aceite e recusa específicos", () => {
+  assertEquals(normalizeHybridMenuClick("video_7d_sim"), "video_7d_sim");
+  assertEquals(normalizeHybridMenuClick("Sim, quero ver 🎬"), "video_7d_sim");
+  assertEquals(normalizeHybridButtonReply("Sem vídeos agora"), "video_7d_nao");
+});
+
 Deno.test("menu híbrido tem fallback textual acionável", () => {
   const text = buildHybridMenuFallback("Como posso ajudar?", [
     { id: "menu_preco", title: "Ver preço" },

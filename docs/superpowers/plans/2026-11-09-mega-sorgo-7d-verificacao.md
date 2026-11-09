@@ -34,9 +34,11 @@ Substituir o ID e o `request_id` para a segunda conversa. Não imprimir ou colar
 
 3. Conferir resposta `accepted: 34`, uma sequência `running` por conversa, zero peças do dia 4 e dez áudios. Repetir o mesmo pedido para confirmar `duplicate: true` e nenhuma linha nova. Conferir que a abertura chega em áudio, depois texto, e pedir confirmação no aparelho.
 4. Sem clicar no convite de vídeo, verificar zero linhas `funnel = mega-sorgo-7d-v1:video`. Tocar uma vez em “Sim, quero ver”: esperar cinco linhas `official_01`–`official_05` em ordem e conferir áudio e imagem dos vídeos no aparelho. Repetir o clique: esperar zero linhas extras.
+   No 6836/UazAPI, conferir tanto o ID `video_7d_sim` quanto o retorno apenas pelo título `Sim, quero ver 🎬`; `Sem vídeos agora` deve produzir `video_7d_nao`, sem acionar a recusa do PDF.
 5. No convite do material, tocar “Quero o PDF 📩”: confirmar um único documento pelo fluxo `menu_isca_silagem` e a etiqueta `interesse-silagem`. Repetir no mesmo dia: o claim diário deve impedir outro envio. Não confundir a peça `d5_pdf` (texto) com o arquivo entregue sob pedido.
 6. Para cada conversa, rodar `python bridge/scripts/audit-mega-sorgo-7d-test.py E:/Projetos_Novos/evohub/.env REQUEST_ID CHATWOOT_ID`, usando o `request_id` exato da inscrição. O auditor usa somente GET e mostra status da fila, registros em `messages`, vídeos e inconsistências. Uma peça `text_sequence` pode criar três mensagens com o mesmo `scheduled_message_id`; isso é esperado. `sent` no bridge não prova entregue/lido no aparelho.
 7. Testar uma resposta livre em conversa descartável: o restante deve pausar; opt-out cancela. Uma retomada exige ação explícita. Não usar o mesmo teste de 34 peças para esses cenários destrutivos.
+   Confirmar que a retomada da agenda real preserva os intervalos entre os dias restantes; somente o teste explicitamente acelerado continua a cada cinco minutos.
 
 ## 3. Critérios para considerar pronto
 
