@@ -13,15 +13,15 @@ Esta revisão prepara o código para um teste isolado. O roteamento dos anúncio
 
 ## 2. Ensaio em número próprio, somente com autorização de envio
 
-1. Criar ou escolher uma conversa limpa em cada canal, ligada ao número do dono; confirmar o ID Chatwoot e o canal no banco. Incluir **apenas** esses IDs na allowlist de teste. Não alterar `channels.status` nem o roteamento dos anúncios.
+1. Foram criadas conversas limpas no número próprio: **5004 no 5895** e **5005 no 6836**, com vínculos no banco e allowlist de produção limitada a `5004,5005`. As conversas antigas 673/1286 ainda têm `sales_sequences` marcadas `running` e não devem ser reutilizadas. Não alterar `channels.status` nem o roteamento dos anúncios.
 2. Em janela permitida, publicar o patch no `main`, implantar o bridge e confirmar `/version` e `uptime_s`. O `build` é etiqueta manual; confirmar também o commit do Coolify. A inscrição de teste é um `POST /n8n-action-enqueue` com Bearer `N8N_ACTION_SECRET` já configurado, corpo:
 
 ```json
 {
   "request": {
-    "request_id": "ensaio-7d-reparos-20261109-673",
+    "request_id": "ensaio-7d-reparos-20261109-5004",
     "source": "macro",
-    "chatwoot_conversation_id": 673,
+    "chatwoot_conversation_id": 5004,
     "action": "funil",
     "funnel_version": "mega-sorgo-7d-v1",
     "test_accelerated": true

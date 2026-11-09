@@ -1,6 +1,6 @@
 """Read-only audit of one identified seven-day test in allowlisted Chatwoot conversations.
 
-Usage: python bridge/scripts/audit-mega-sorgo-7d-test.py PATH_TO_ENV REQUEST_ID 673 1286
+Usage: python bridge/scripts/audit-mega-sorgo-7d-test.py PATH_TO_ENV REQUEST_ID CHATWOOT_ID...
 Uses only GET requests. Never prints credentials, phone numbers, or message bodies.
 """
 
@@ -18,8 +18,8 @@ def main() -> int:
     if not request_id or len(request_id) > 180:
         raise SystemExit("valid request ID required")
     ids = [int(raw) for raw in sys.argv[3:]]
-    if not ids or any(value not in (673, 1286) for value in ids):
-        raise SystemExit("only allowlisted test conversations 673/1286 are supported")
+    if not ids or any(value <= 0 for value in ids):
+        raise SystemExit("positive Chatwoot conversation IDs required")
     env = dotenv_values(sys.argv[1])
     base = env["SUPABASE_URL"].rstrip("/")
     key = env["SUPABASE_SERVICE_ROLE_KEY"]
