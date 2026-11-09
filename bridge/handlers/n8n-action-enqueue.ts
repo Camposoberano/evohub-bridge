@@ -22,7 +22,7 @@ import {
 } from "../shared/lead-block.ts";
 import { handle as funilControl } from "./funil-control.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
-import { scheduleSevenDayTestPieces } from "../shared/mega-sorgo-7d-schedule.ts";
+import { scheduleSevenDayPieces, scheduleSevenDayTestPieces } from "../shared/mega-sorgo-7d-schedule.ts";
 import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 import { isSevenDayNightTest } from "../shared/mega-sorgo-7d-night-test.ts";
 
@@ -148,6 +148,11 @@ export function validateEnqueueBody(
     (typeof request.repair_missing_opening !== "boolean" || action !== "funil")) {
     return { ok: false, error: "reparo inválido para a ação" };
   }
+  if (request.test_accelerated != null &&
+    (request.test_accelerated !== true || request.action !== "funil" ||
+      request.source !== "macro" || request.funnel_version !== MEGA_SORGO_7D_VERSION)) {
+    return { ok: false, error: "ensaio acelerado inválido" };
+  }
   if (String(request.selection ?? "").startsWith("preco_cotar_") &&
     typeof request.quote_registered !== "boolean") {
     return { ok: false, error: "estado de cotação obrigatório" };
@@ -211,9 +216,11 @@ export async function buildActionRows(
   if (!conversationId) throw new Error("conversation_id obrigatório");
   const key = actionKey(body.request);
   if (body.request.funnel_version === MEGA_SORGO_7D_VERSION && body.request.action === "funil") {
-    const schedule = scheduleSevenDayTestPieces(body.pieces.map((piece) => ({
-      code: piece.code ?? "", day: piece.day,
-    })), now, isSevenDayNightTest(body.request.chatwoot_conversation_id, now));
+    const pieces = body.pieces.map((piece) => ({ code: piece.code ?? "", day: piece.day }));
+    const schedule = body.request.test_accelerated === true
+      ? scheduleSevenDayTestPieces(pieces, now,
+        isSevenDayNightTest(body.request.chatwoot_conversation_id, now))
+      : scheduleSevenDayPieces(pieces, now);
     return await Promise.all(body.pieces.map(async (piece, step) => ({
       id: await actionUuid(`${key}:${piece.code}`),
       conversation_id: conversationId,

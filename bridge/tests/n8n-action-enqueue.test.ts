@@ -6,6 +6,7 @@ import {
   validateEnqueueBody,
 } from "../handlers/n8n-action-enqueue.ts";
 import { SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
+import { scheduleSevenDayPieces } from "../shared/mega-sorgo-7d-schedule.ts";
 import { actionKey } from "../shared/n8n-action-contract.ts";
 
 const request = {
@@ -36,8 +37,18 @@ Deno.test("versão sete dias só aceita macro de teste e preserva identidade pr�
   assertEquals(rows.length, 34);
   assertEquals(rows[0].send_at, "2026-11-09T13:00:00.000Z");
   assertEquals(rows.find((row) => row.day === 5)?.send_at,
-    new Date(Date.parse("2026-11-09T13:00:00Z") + SEVEN_DAY_CONTENT.findIndex((piece) => piece.day === 5) * 5 * 60_000).toISOString());
+    scheduleSevenDayPieces(SEVEN_DAY_CONTENT, Date.parse("2026-11-09T13:00:00Z"))
+      .find((row) => row.day === 5)?.sendAt);
   assertEquals(rows.every((row) => row.funnel === "mega-sorgo-7d-v1"), true);
+  const fast = validateEnqueueBody({ request: { ...seven, test_accelerated: true }, pieces: [] });
+  assertEquals(fast.ok, true);
+  if (fast.ok) {
+    fast.value.pieces = parsed.value.pieces;
+    const fastRows = await buildActionRows(fast.value, "conversation-test", Date.parse("2026-11-09T13:00:00Z"));
+    assertEquals(fastRows[1].send_at, "2026-11-09T13:05:00.000Z");
+  }
+  assertEquals(validateEnqueueBody({ request: { ...seven, source: "ad", test_accelerated: true }, pieces: [] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...request, test_accelerated: true }, pieces: [] }).ok, false);
 });
 
 Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
