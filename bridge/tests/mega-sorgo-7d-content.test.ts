@@ -34,3 +34,14 @@ Deno.test("vídeos da conversa só entram após aceite", () => {
   assertEquals(SEVEN_DAY_CONTENT.find((piece) => piece.code === "05")?.asset,
     "p05_sem_promessa_video.ogg");
 });
+
+Deno.test("PDF depende de pedido e mensagens finais não contêm marcador de nome", () => {
+  const byCode = new Map(SEVEN_DAY_CONTENT.map((piece) => [piece.code, piece]));
+  assertEquals(SEVEN_DAY_CONTENT.length, 34);
+  assertEquals(SEVEN_DAY_CONTENT.filter((piece) => piece.type === "audio").length, 10);
+  assertEquals(byCode.get("d5_pdf")?.type, "text");
+  assertEquals("media_ref" in (byCode.get("d5_pdf")?.payload ?? {}), false);
+  for (const code of ["d6_duvida", "d7_ultima"]) {
+    assertEquals(String(byCode.get(code)?.payload.content).includes("[nome]"), false);
+  }
+});

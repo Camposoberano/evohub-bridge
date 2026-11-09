@@ -577,14 +577,9 @@
     {
       "code": "d5_pdf",
       "day": 5,
-      "type": "document",
-      "asset": "Silagem de Sorgo — Embrapa.pdf",
+      "type": "text",
       "payload": {
-        "media_ref": {
-          "day": 0,
-          "slot": "d5_pdf"
-        },
-        "caption": "📚 Material da Embrapa para uma silagem de qualidade."
+        "content": "O material gratuito da Embrapa continua disponível. Se quiser receber o PDF, responda 'Quero o material' e envio por aqui. 📚"
       }
     },
     {
@@ -600,7 +595,7 @@
       "day": 6,
       "type": "text",
       "payload": {
-        "content": "E aí, [nome], tudo certo? 🤔 Ficou alguma *dúvida ou curiosidade* sobre o Mega Sorgo — plantio, produção ou a condição desta safra? Tô aqui, é só me chamar."
+        "content": "E aí, tudo certo? 🤔 Ficou alguma *dúvida ou curiosidade* sobre o Mega Sorgo — plantio, produção ou a condição desta safra? Tô aqui, é só me chamar."
       }
     },
     {
@@ -608,7 +603,7 @@
       "day": 7,
       "type": "text",
       "payload": {
-        "content": "Ficou alguma *dúvida ou curiosidade* sobre o Mega Sorgo, [nome]? 🤔 Se quiser, ainda posso verificar a condição de *frete grátis + desconto por volume* e reservar o seu hoje."
+        "content": "Ficou alguma *dúvida ou curiosidade* sobre o Mega Sorgo? 🤔 Se quiser, ainda posso verificar a condição de *frete grátis + desconto por volume* e reservar o seu hoje."
       }
     }
   ],
