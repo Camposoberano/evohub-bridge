@@ -18,6 +18,7 @@ import {
 import { stepById } from "./flow.ts";
 import { resolveEmbrapaOfferReply } from "./embrapa-offer-reply.ts";
 import { gravadorDeFluxo } from "./flow-record.ts";
+import { sendMarketingConsentPrompt } from "./marketing-consent-prompt.ts";
 import {
   cancelDeferredFlow,
   claimDeferredFlow,
@@ -42,6 +43,32 @@ import { optionalEnv } from "./env.ts";
 import { descreveErro } from "./erros.ts";
 
 type Json = Record<string, unknown>;
+
+function gravadorComConsentimentoEmbrapa(
+  db: DbClient,
+  channel: Json,
+  to: string,
+  campaignId: string,
+) {
+  const recordStep = gravadorDeFluxo(db, channel, to);
+  return async (step: Parameters<typeof recordStep>[0]) => {
+    try {
+      await recordStep(step);
+    } catch (error) {
+      console.error("registro do PDF Embrapa falhou:", String(error));
+    }
+    if (
+      campaignId === EMBRAPA_5895_CAMPAIGN_ID && step.id === "quero" &&
+      step.kind === "media" && step.media?.type === "document"
+    ) {
+      try {
+        await sendMarketingConsentPrompt(db, channel, to);
+      } catch (error) {
+        console.error("consentimento após PDF da campanha não enviado:", String(error));
+      }
+    }
+  };
+}
 
 /**
  * Pedido de humano disparado de dentro do fluxo (step com `pedirHumano`): pausa sem prazo,
@@ -367,7 +394,7 @@ export async function continueFlowOnReply(
       passo,
       branchReplyId,
       Date.now(),
-      gravadorDeFluxo(db, channel, from),
+      gravadorComConsentimentoEmbrapa(db, channel, from, camp.id),
     );
     await saveFlowPosition(db, camp.id, from, r.position, extra);
     console.log(
@@ -453,7 +480,7 @@ export async function pumpDeferredEmbrapaPdf(
       sending = true;
       const r = await advanceFlow(
         camp.flow, ch, p.contact_key, p.step_id, "quero", Date.now(),
-        gravadorDeFluxo(db, canal as Json, p.contact_key),
+        gravadorComConsentimentoEmbrapa(db, canal as Json, p.contact_key, camp.id),
       );
       if (r.enviados === 0 || r.falhas > 0) {
         await setClaimedFlowStatus(db, camp.id, p.contact_key, p.step_id, "failed");

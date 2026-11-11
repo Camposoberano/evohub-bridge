@@ -47,6 +47,8 @@ import {
   routeContactToAiLane,
 } from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
+import { marketingConsentChoice, recordMarketingConsent } from "../shared/marketing-consent.ts";
+import { sendMarketingConsentPrompt } from "../shared/marketing-consent-prompt.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
@@ -395,6 +397,12 @@ async function handleWhatsApp(db: Db, p: Json) {
 
         if (isNegativeIntent(content)) {
           try {
+            await recordMarketingConsent({ db, channelId: String(channel.id), phone: from,
+              choice: "no", inboundMessageId: String(m.id ?? "") || null });
+          } catch (error) {
+            console.error("falha ao registrar opt-out WhatsApp:", error);
+          }
+          try {
             const result = await stopContactAutomation(
               db,
               String(channel.id),
@@ -409,6 +417,20 @@ async function handleWhatsApp(db: Db, p: Json) {
             );
           } catch (e) {
             console.error("hub: falha ao encerrar desinteresse", e);
+          }
+          continue;
+        }
+
+        if (marketingConsentChoice(menuClick?.id)) {
+          if (await claimDelivery(
+            db, `wa-action-${channel.id}-${m.id}-${menuClick!.id}`, "wa-action",
+          )) {
+            try {
+              await handleMenuClick(db, channel as Json, from, menuClick!.id, acct,
+                String(m.id ?? "") || undefined);
+            } catch (error) {
+              console.error("consentimento WhatsApp não registrado:", error);
+            }
           }
           continue;
         }
@@ -3569,6 +3591,14 @@ async function handleIscaSequence(
     registro: `[isca ${isca.id}] ${isca.filename}`,
     labels: [isca.etiqueta],
   }, acct);
+  if (isca.id === "silagem") {
+    try {
+      await sendMarketingConsentPrompt(db, channel, from, acct);
+    } catch (error) {
+      // O PDF já saiu: não liberar o claim para evitar uma segunda entrega.
+      console.error("consentimento após PDF não enviado:", String(error));
+    }
+  }
 }
 
 export async function handleHumanRequest(
@@ -3696,6 +3726,16 @@ export async function handleMenuClick(
   acct?: CwAcct,
   inboundMessageId?: string,
 ): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+  const consentChoice = marketingConsentChoice(menuId);
+  if (consentChoice) {
+    await recordMarketingConsent({ db, channelId: String(channel.id), phone: from,
+      choice: consentChoice, inboundMessageId, buttonId: menuId });
+    const response = consentChoice === "yes"
+      ? "Combinado! A Campo Soberano poderá enviar materiais técnicos e ofertas sobre o Mega Sorgo Santa Elisa por aqui. Para parar, escreva PARAR."
+      : "Combinado. A Campo Soberano não enviará novos materiais ou ofertas por WhatsApp. Seguimos à disposição nesta conversa.";
+    return { sent: await sendWhatsAppPiece(db, channel, from,
+      { type: "text", text: { body: response } }, response, "text", acct) };
+  }
   const restoredAction = restoredButtonAction(menuId);
   if (restoredAction) {
     const { error } = await db.from("events").insert({

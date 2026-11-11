@@ -788,6 +788,7 @@ async function purgeOldEventsInBatches(
   while (Date.now() < DEADLINE) {
     const { data: rows, error } = await db.from("events")
       .select("id").lt("received_at", cutoff)
+      .neq("source", "marketing-consent")
       .order("received_at", { ascending: true }).limit(BATCH);
     // Erro do PostgREST é objeto plano; embrulha em Error com a causa legível (senão o catch
     // do loop logava "[object Object]" e o 57014/timeout ficava invisível).

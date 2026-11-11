@@ -72,6 +72,8 @@ export function normalizeHybridButtonReply(
     .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
     .toLowerCase();
   const replies: Record<string, string> = {
+    "sim quero receber": "menu_marketing_sim",
+    "nao obrigado": "menu_marketing_nao",
     "silagem": "uso_silagem",
     "pastejo": "uso_pastejo",
     "pasto": "uso_pastejo",

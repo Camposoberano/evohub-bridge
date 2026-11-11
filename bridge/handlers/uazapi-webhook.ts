@@ -12,6 +12,7 @@ import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { aiLaneEnabled, routeContactToAiLane } from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
+import { marketingConsentChoice, recordMarketingConsent } from "../shared/marketing-consent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
 import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
@@ -347,7 +348,14 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json, rawEventId =
     }
 
     if (msg.direction === "incoming") {
+      if (marketingConsentChoice(msg.menuClickId)) continue;
       if (isNegativeIntent(msg.content)) {
+        try {
+          await recordMarketingConsent({ db, channelId: String(channel.id), phone: msg.from,
+            choice: "no", inboundMessageId: msg.metaMessageId });
+        } catch (error) {
+          console.error("falha ao registrar opt-out WhatsApp:", error);
+        }
         try {
           const result = await stopContactAutomation(
             db,
@@ -538,6 +546,10 @@ async function handleUazapiClick(
   acct: Awaited<ReturnType<typeof accountForChannel>>,
   inboundMessageId?: string,
 ): Promise<void> {
+  if (marketingConsentChoice(id)) {
+    await handleMenuClick(db, channel, from, id, acct, inboundMessageId);
+    return;
+  }
   const domain = clickDomain(id);
   if (
     domain === "mega_sorgo" &&
