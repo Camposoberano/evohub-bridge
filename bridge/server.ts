@@ -219,6 +219,8 @@ const version = {
     "media-retention-bucket",
     "meta-templates",
     "campaign-gated",
+    "bf-rotating-image-buttons",
+    "bf-uazapi-only-flow",
     "outbound-media-caption-fix",
     "template-header-media",
     "audio-ptt-ogg",
@@ -398,7 +400,7 @@ const version = {
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
   ],
-  build: "2026-11-09-mega-sorgo-7d-night-test",
+  build: "2026-11-12-bf-rotating-images",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

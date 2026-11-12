@@ -65,6 +65,8 @@ export type FlowStep = {
   buttons?: FlowButton[];
   /** imagem no topo do cartão de botões */
   imageUrl?: string;
+  /** Lista de imagens rotativas; cada contato mantém a mesma escolha em todas as tentativas. */
+  imageUrls?: string[];
   /** kind=list — no máximo 10 linhas por seção */
   sections?: FlowSection[];
   /** kind=wait — pausa por tempo, sem esperar resposta */
@@ -96,6 +98,8 @@ export type Flow = {
   /** step por onde começa; default é o primeiro da lista */
   startId?: string;
   steps: FlowStep[];
+  /** Quando true, uma falha no UAZAPI não cai silenciosamente no envio oficial da Meta. */
+  uazapiOnly?: boolean;
 };
 
 /** Steps que param o fluxo aguardando o lead. `wait` pausa por tempo, não por resposta. */

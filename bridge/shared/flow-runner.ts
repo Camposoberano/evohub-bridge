@@ -73,6 +73,18 @@ export type RunResult = {
  */
 export type OnStepSent = (step: FlowStep) => Promise<void>;
 
+/** Seleciona sempre a mesma arte para o mesmo contato, inclusive em nova tentativa. */
+function imagemRotativa(step: FlowStep, to: string): string | undefined {
+  const urls = (step.imageUrls ?? []).map((url) => url.trim()).filter(Boolean);
+  if (!urls.length) return step.imageUrl;
+  const digits = to.replace(/\D/g, "");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < digits.length; i++) {
+    hash = Math.imul(hash ^ digits.charCodeAt(i), 0x01000193);
+  }
+  return urls[(hash >>> 0) % urls.length];
+}
+
 /**
  * Envia um step. Devolve true se saiu por qualquer rota.
  *
@@ -84,6 +96,7 @@ async function enviarStep(
   to: string,
   step: FlowStep,
 ): Promise<boolean> {
+  const buttonImage = step.kind === "buttons" ? imagemRotativa(step, to) : undefined;
   // Abridor oficial de janela fria: template NUNCA sai pela uazapi. É um conceito do
   // WhatsApp oficial (Meta Cloud) e é a ÚNICA coisa que a Meta aceita fora da janela de 24h
   // — texto/mídia/botão interativo são recusados até o lead responder. Por isso ignora a
@@ -140,7 +153,7 @@ async function enviarStep(
         to,
         step.text ?? "",
         step.buttons,
-        step.imageUrl,
+        buttonImage,
       );
     } else if (step.kind === "list" && step.sections?.length) {
       r = await hybridSendList(
@@ -186,6 +199,9 @@ async function enviarStep(
       type: "interactive",
       interactive: {
         type: "button",
+        ...(buttonImage ? {
+          header: { type: "image", image: { link: buttonImage } },
+        } : {}),
         body: { text: step.text ?? "" },
         action: {
           buttons: step.buttons.slice(0, 3).map((b) => ({
@@ -248,6 +264,7 @@ export async function runFlow(
   }
 
   const { enviar, pararEm, fim } = stepsUntilWait(flow, inicio.id);
+  const flowChannel = flow.uazapiOnly ? { ...ch, uazapiOnly: true } : ch;
   let enviados = 0, falhas = 0;
   let pedirHumano = false;
   let handoffContexto: Record<string, unknown> | undefined;
@@ -259,7 +276,7 @@ export async function runFlow(
     if (step.delaySeg && step !== enviar[0]) {
       await new Promise((r) => setTimeout(r, step.delaySeg! * 1000));
     }
-    if (await enviarStep(ch, to, step)) {
+    if (await enviarStep(flowChannel, to, step)) {
       enviados++;
       // Só marca o handoff depois que a peça saiu: prometer "o Cícero te chama" sem a
       // mensagem ter ido seria o mesmo buraco que o pedido-humano original fechou.

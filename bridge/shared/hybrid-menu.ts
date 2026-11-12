@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|f[1-5]_|video_7d_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
+    /^(menu_|f[1-5]_|video_7d_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_|bf_)/
       .test(value)
   ) {
     return value;
@@ -72,6 +72,9 @@ export function normalizeHybridButtonReply(
     .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
     .toLowerCase();
   const replies: Record<string, string> = {
+    "consultar desconto": "bf_consultar_desconto",
+    "tenho duvidas": "bf_tenho_duvidas",
+    "deixar para depois": "bf_deixar_depois",
     "sim quero receber": "menu_marketing_sim",
     "nao obrigado": "menu_marketing_nao",
     "silagem": "uso_silagem",
