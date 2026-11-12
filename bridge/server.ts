@@ -132,6 +132,7 @@ import {
   marcarResultadoIncerto,
   pausarCampanha,
   pendentesElegiveis,
+  reservarProximoItem,
   reservarProximoItemRotacao,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
@@ -142,6 +143,7 @@ import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
 import {
   bloqueioPorContato,
+  etiquetaBlackFridayPorContato,
   motivoDoBloqueio,
 } from "./shared/gate-comercial.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
@@ -1502,6 +1504,7 @@ async function runRecoveryChain() {
 // O intervalo global ocupa a janela restante e encurta quando um número está atrasado.
 // Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
 const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
+const BLACK_FRIDAY_5895_CAMPAIGN_ID = "black-friday-mega-sorgo-5895-2026-11-12";
 
 function startCampaignQueueLoop() {
   if (optionalEnv("CAMPAIGN_QUEUE_ENABLED") === "false") return;
@@ -1546,7 +1549,9 @@ function startCampaignQueueLoop() {
         const camp = state.campaigns.find((c) => c.id === campaignId);
         if (!camp?.flow) continue;
 
-        const item = await reservarProximoItemRotacao(db, campaignId);
+        const item = campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID
+          ? await reservarProximoItem(db, campaignId)
+          : await reservarProximoItemRotacao(db, campaignId);
         if (!item) continue;
 
         let runFlowIniciado = false;
@@ -1582,6 +1587,17 @@ function startCampaignQueueLoop() {
           // 224 conversas em 12/09, 6 delas com venda ganha.
           let bloqueioComercial;
           try {
+            if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+              const exclusao = await etiquetaBlackFridayPorContato(
+                db,
+                String(canal.id),
+                item.contact_key,
+              );
+              if (exclusao) {
+                await marcarPulado(db, item.id, "etiqueta-" + exclusao);
+                continue;
+              }
+            }
             bloqueioComercial = await bloqueioPorContato(
               db,
               String(canal.id),
@@ -1605,6 +1621,9 @@ function startCampaignQueueLoop() {
           }
 
           const ch = await flowChannelFor(db, canal as Record<string, unknown>);
+          if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+            ch.uazapiOnly = true;
+          }
           let preflight;
           try {
             preflight = await validarContatoAntesDaCampanha({
@@ -1613,6 +1632,7 @@ function startCampaignQueueLoop() {
               channelName: String(canal.name ?? ""),
               phone: item.contact_key,
               route: ch.route,
+              allowOpenAndRecent: campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID,
             });
           } catch (error) {
             const motivo = error instanceof Error

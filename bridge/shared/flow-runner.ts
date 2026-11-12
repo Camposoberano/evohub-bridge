@@ -39,6 +39,8 @@ export type FlowPosition = {
 export type FlowChannel = {
   /** rota não-oficial; null força tudo pelo oficial */
   route: HybridRoute | null;
+  /** Quando true, não usa a Meta como fallback se a rota UAZAPI falhar. */
+  uazapiOnly?: boolean;
   /** token do canal oficial (fallback) */
   token?: string;
   /** phone_number_id do canal oficial (fallback) */
@@ -87,7 +89,7 @@ async function enviarStep(
   // — texto/mídia/botão interativo são recusados até o lead responder. Por isso ignora a
   // rota híbrida e vai direto no oficial; sem token oficial, não há como abrir.
   if (step.kind === "template") {
-    if (!ch.token || !ch.phoneNumberId || !step.template?.name) return false;
+    if (ch.uazapiOnly || !ch.token || !ch.phoneNumberId || !step.template?.name) return false;
     const components: Json[] = [];
     const hm = step.template.headerMedia;
     if (hm?.url) {
@@ -152,6 +154,7 @@ async function enviarStep(
     if (r?.ok) return true;
   }
 
+  if (ch.uazapiOnly) return false;
   if (!ch.token || !ch.phoneNumberId) return false;
   const path = `${ch.phoneNumberId}/messages`;
   let body: Json | null = null;

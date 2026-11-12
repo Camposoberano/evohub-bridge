@@ -123,6 +123,8 @@ export async function validarContatoAntesDaCampanha(input: {
   channelName: string;
   phone: string;
   route: HybridRoute | null;
+  /** Público de reativação já congelado a partir de inbound nos últimos 60 dias. */
+  allowOpenAndRecent?: boolean;
   now?: number;
 }): Promise<CampaignPreflightResult> {
   const { db } = input;
@@ -204,6 +206,7 @@ export async function validarContatoAntesDaCampanha(input: {
   }
 
   if (
+    !input.allowOpenAndRecent &&
     conversations.some((conversation) => conversation.status !== "resolved")
   ) {
     return {
@@ -215,7 +218,7 @@ export async function validarContatoAntesDaCampanha(input: {
   const conversationIds = conversations.map((conversation) =>
     String(conversation.id)
   );
-  if (conversationIds.length) {
+  if (!input.allowOpenAndRecent && conversationIds.length) {
     const [recentInbound, orders, quotes] = await Promise.all([
       db.from("messages").select("id").in("conversation_id", conversationIds)
         .eq("direction", "in")
