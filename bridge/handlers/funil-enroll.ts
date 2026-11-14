@@ -57,8 +57,8 @@ import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
 const CANAL_ANUNCIO_ALVO = "5895";
-// Jornada estendida: os intervalos contam apenas dentro de 06h-20h55 BRT e começam no fim
-// da fase anterior. O corte às 20h55 protege o limite de 21h; às 06h continua o saldo.
+// Jornada estendida: os intervalos contam apenas dentro de 08h-19h55 BRT e começam no fim
+// da fase anterior. O corte às 19h55 protege o limite de 20h; às 08h continua o saldo.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
 export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
@@ -591,8 +591,17 @@ export async function handle(req: Request): Promise<Response> {
     return arr[Math.floor(Math.random() * arr.length)];
   };
 
-  const fast = body.fast === true || body.fast === "true";
-  const turbo = body.turbo === true || body.turbo === "true";
+  // Blindagem de produção: os modos de teste (fast/turbo) colapsam as fases em ~40min e NÃO
+  // podem rodar com lead real. Só valem com FUNIL_ALLOW_TEST_MODE=true no ambiente; sem isso,
+  // ignorados mesmo se o body pedir.
+  const allowTestMode = optionalEnv("FUNIL_ALLOW_TEST_MODE") === "true";
+  const fast = allowTestMode && (body.fast === true || body.fast === "true");
+  const turbo = allowTestMode && (body.turbo === true || body.turbo === "true");
+  if (!allowTestMode && (body.fast || body.turbo)) {
+    console.warn(
+      "funil-enroll: fast/turbo IGNORADO (FUNIL_ALLOW_TEST_MODE != true) — usando ritmo real",
+    );
+  }
   const agora = Date.now();
   // TURBO (teste): começa agora e mantém 70s entre momentos, sem horário comercial.
   const turboGaps = [0, 70, 70, 70, 70];
