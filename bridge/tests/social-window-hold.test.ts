@@ -13,12 +13,12 @@ Deno.test("o pump local não é dono de identidades n8n principais ou complement
 });
 
 Deno.test("a retomada preserva pausas e respeita o próximo horário comercial", () => {
-  const now = Date.parse("2026-10-11T23:45:00.000Z"); // 20h45 Fortaleza
+  const now = Date.parse("2026-10-11T23:45:00.000Z"); // 20h45 BRT: já fora da janela (corte 19h55)
   const rows = rebaseWindowHeldRows([
     { id: "b", send_at: "2026-10-10T13:30:00.000Z" },
     { id: "a", send_at: "2026-10-10T13:00:00.000Z" },
   ], now);
   assertEquals(rows.map((row) => row.id), ["a", "b"]);
-  assertEquals(rows[0].send_at, "2026-10-11T23:45:15.000Z");
-  assertEquals(rows[1].send_at, "2026-10-12T09:20:15.000Z"); // 06h20 Fortaleza
+  assertEquals(rows[0].send_at, "2026-10-12T11:00:00.000Z"); // 08h BRT do dia seguinte
+  assertEquals(rows[1].send_at, "2026-10-12T11:30:00.000Z");
 });

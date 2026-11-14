@@ -2,7 +2,11 @@ import { FUNNEL_CUTOFF_MINUTE, FUNNEL_OPEN_MINUTE } from "./business-hours.ts";
 
 const BRT_OFFSET_MS = 3 * 60 * 60_000;
 
-// Mantém o funil entre 06:00 e 20:55 BRT; a noite não consome intervalos.
+const OPEN_HOUR = Math.floor(FUNNEL_OPEN_MINUTE / 60);
+const OPEN_MIN = FUNNEL_OPEN_MINUTE % 60;
+
+// Mantém o funil dentro da janela de business-hours (08:00–19:55 BRT); a noite não consome
+// intervalos. A abertura vem de FUNNEL_OPEN_MINUTE — não hardcodar a hora aqui.
 export function clampBusinessTime(ms: number, durationSec = 0): number {
   const brt = new Date(ms - BRT_OFFSET_MS);
   const startSecond = brt.getUTCHours() * 3600 + brt.getUTCMinutes() * 60 +
@@ -16,7 +20,7 @@ export function clampBusinessTime(ms: number, durationSec = 0): number {
     endSecond > FUNNEL_CUTOFF_MINUTE * 60) {
     next.setUTCDate(next.getUTCDate() + 1);
   }
-  next.setUTCHours(6, 0, 0, 0);
+  next.setUTCHours(OPEN_HOUR, OPEN_MIN, 0, 0);
   return next.getTime() + BRT_OFFSET_MS;
 }
 
@@ -48,6 +52,6 @@ export function addBusinessSeconds(
 function nextBusinessOpening(ms: number): number {
   const brt = new Date(ms - BRT_OFFSET_MS);
   brt.setUTCDate(brt.getUTCDate() + 1);
-  brt.setUTCHours(6, 0, 0, 0);
+  brt.setUTCHours(OPEN_HOUR, OPEN_MIN, 0, 0);
   return brt.getTime() + BRT_OFFSET_MS;
 }
