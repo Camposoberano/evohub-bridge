@@ -402,8 +402,17 @@ export async function handle(req: Request): Promise<Response> {
     return arr[Math.floor(Math.random() * arr.length)];
   };
 
-  const fast = body.fast === true || body.fast === "true";
-  const turbo = body.turbo === true || body.turbo === "true";
+  // Blindagem de produção: os modos de teste (fast/turbo) colapsam as fases em ~40min e
+  // NÃO podem rodar com lead real (o 7d-v1 saiu em 40min no teste por turbo ligado na mão).
+  // Só valem com FUNIL_ALLOW_TEST_MODE=true no ambiente; sem isso, ignorados mesmo se o body pedir.
+  const allowTestMode = optionalEnv("FUNIL_ALLOW_TEST_MODE") === "true";
+  const fast = allowTestMode && (body.fast === true || body.fast === "true");
+  const turbo = allowTestMode && (body.turbo === true || body.turbo === "true");
+  if (!allowTestMode && (body.fast || body.turbo)) {
+    console.warn(
+      "funil-enroll: fast/turbo IGNORADO (FUNIL_ALLOW_TEST_MODE != true) — usando ritmo real",
+    );
+  }
   const manual = body.manual === true || body.manual === "true";
   const agora = Date.now();
   // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.

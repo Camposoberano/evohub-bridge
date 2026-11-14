@@ -27,6 +27,7 @@ import {
   normalizeHybridMenuClick,
 } from "../shared/hybrid-menu.ts";
 import {
+  handleHumanRequest,
   handleMenuClick,
   handleNutricaoClick,
   handlePlantioClick,
@@ -222,6 +223,10 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         outgoing: msg.direction === "outgoing",
         acct,
         referral: msg.referral,
+        // Clique num botão de avanço do funil não é "engajamento que para a régua":
+        // ele AVANÇA o drip (handleFunnelAdvanceTap). Isenta do cancelamento no inbound.
+        funnelAdvanceClick: msg.direction === "incoming" && !!msg.menuClickId &&
+          FUNNEL_ADVANCE_RE.test(msg.menuClickId),
       });
     } catch (e) {
       console.error("uazapi-webhook: ingest falhou", msg.metaMessageId, e);
@@ -399,6 +404,61 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   }
 }
 
+// Botões próprios do funil de 7 dias (f1_sim, f2_leite, f3_milho, f4_ja, f*_continuar...).
+const FUNNEL_ADVANCE_RE = /^f\d+_/;
+
+function clickOrigem(channel: Json): "social" | "whatsapp" {
+  return channel.type === "facebook" || channel.type === "instagram"
+    ? "social"
+    : "whatsapp";
+}
+
+async function conversationForContact(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+): Promise<{ id: string; chatwoot_conversation_id: number | null } | null> {
+  const { data: contact } = await db.from("contacts").select("id")
+    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
+  if (!contact) return null;
+  const { data: conv } = await db.from("conversations")
+    .select("id,chatwoot_conversation_id")
+    .eq("contact_id", contact.id).neq("status", "resolved")
+    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+  return (conv as
+    | { id: string; chatwoot_conversation_id: number | null }
+    | null) ?? null;
+}
+
+// Clique num botão de avanço/escolha do funil (antes caía em "clique sem handler" e o
+// cliente ficava sem resposta). Registra a escolha e adianta a próxima peça do drip.
+async function handleFunnelAdvanceTap(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+  buttonId: string,
+): Promise<void> {
+  const conv = await conversationForContact(db, channel, from);
+  await db.from("events").insert({
+    source: "funil",
+    event_type: "funnel_button_tap",
+    channel_id: channel.id,
+    payload: { conversation_id: conv?.id ?? null, button: buttonId },
+  }).then(() => {}, () => {});
+  if (!conv?.id) return;
+  // Adianta a próxima peça pendente do funil (drip linear): o pump envia no próximo tick.
+  // A escolha em si (leite/corte, milho/capim...) fica no evento acima para o humano/relatório
+  // — o drip linear não ramifica conteúdo por ela (limitação conhecida).
+  const { data: next } = await db.from("scheduled_messages").select("id")
+    .eq("conversation_id", conv.id).like("funnel", "mega-sorgo%")
+    .eq("status", "pending").order("send_at", { ascending: true })
+    .limit(1).maybeSingle();
+  if (next?.id) {
+    await db.from("scheduled_messages")
+      .update({ send_at: new Date().toISOString() }).eq("id", next.id);
+  }
+}
+
 async function handleUazapiClick(
   db: ReturnType<typeof admin>,
   channel: Json,
@@ -417,7 +477,22 @@ async function handleUazapiClick(
   }
 
   if (id.startsWith("menu_")) {
-    await handleMenuClick(db, channel, from, id, acct);
+    const res = await handleMenuClick(db, channel, from, id, acct);
+    // Preço pedido 2x no mesmo dia caía no silêncio (handleMenuClick devolve
+    // `already-sent-today` e o retorno era ignorado aqui). Agora leva pro Cícero.
+    if (id === "menu_preco" && res.reason === "already-sent-today") {
+      const conv = await conversationForContact(db, channel, from);
+      if (conv?.id) {
+        await autoPauseFunil(conv.id, "cotacao", { comPrazo: false });
+        await handleHumanRequest(db, channel, from, clickOrigem(channel), acct, {
+          tipo_pedido: "cotacao",
+        });
+        console.log(
+          "uazapi-webhook: 2o preço no dia -> fast-track humano",
+          sufixoContato(from),
+        );
+      }
+    }
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
   ) {
@@ -432,6 +507,8 @@ async function handleUazapiClick(
     id.startsWith("quali_obj_")
   ) {
     await handleCatalogClick(db, channel, from, id, acct);
+  } else if (FUNNEL_ADVANCE_RE.test(id)) {
+    await handleFunnelAdvanceTap(db, channel, from, id);
   } else {
     console.warn("uazapi-webhook: clique sem handler", id);
     return;

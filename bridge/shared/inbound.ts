@@ -84,6 +84,7 @@ export type IngestInboundMessage = {
   referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
   labels?: string[]; // etiquetas declarativas aplicadas após uma saída ser aceita
+  funnelAdvanceClick?: boolean; // clique num botão de avanço do funil (f*_): AVANÇA o drip, não cancela
 };
 
 export async function ingestInbound(
@@ -526,15 +527,19 @@ async function ingestInboundClaimed(
     }
   }
 
-  // Uma resposta passa o lead para a conversa comercial. Para Mega Sorgo, a régua de
+  // Uma resposta passa o lead para a conversa comercial. Para a família Mega Sorgo, a régua de
   // apresentação não pode continuar por cima do atendimento nem ser retomada depois.
-  if (!msg.outgoing) {
+  // `funnelAdvanceClick` (botão f*_ do funil de 7 dias) é exceção: avança o drip, não cancela.
+  // O filtro casa QUALQUER funil `mega-sorgo%` (mega-sorgo, -followup, -7d-v1, -7d-v2, -5895...):
+  // antes era só "mega-sorgo" e o funil novo (nome diferente) nunca parava na resposta do lead.
+  if (!msg.outgoing && !msg.funnelAdvanceClick) {
     try {
       const { data: sequence, error: sequenceError } = await db.from(
         "sales_sequences",
       ).select("id,status")
-        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
-        .in("status", ["running", "paused"]).maybeSingle();
+        .eq("conversation_id", conv.id).like("funnel", "mega-sorgo%")
+        .in("status", ["running", "paused"])
+        .order("started_at", { ascending: false }).limit(1).maybeSingle();
       if (sequenceError) throw sequenceError;
       if (sequence) {
         const { error: stateError } = await db.from("sales_sequences")
@@ -544,7 +549,7 @@ async function ingestInboundClaimed(
         const { error: cancelError } = await db.from("scheduled_messages")
           .update({ status: "cancelled" })
           .eq("conversation_id", conv.id)
-          .in("funnel", ["mega-sorgo", "mega-sorgo-followup"])
+          .like("funnel", "mega-sorgo%")
           .in("status", ["pending", "paused"]);
         if (cancelError) throw cancelError;
         const { error: eventError } = await db.from("events").insert({
