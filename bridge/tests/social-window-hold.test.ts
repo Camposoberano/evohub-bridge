@@ -19,6 +19,6 @@ Deno.test("a retomada preserva pausas e respeita o próximo horário comercial",
     { id: "a", send_at: "2026-10-10T13:00:00.000Z" },
   ], now);
   assertEquals(rows.map((row) => row.id), ["a", "b"]);
-  assertEquals(rows[0].send_at, "2026-10-12T11:00:00.000Z"); // 08h BRT do dia seguinte
-  assertEquals(rows[1].send_at, "2026-10-12T11:30:00.000Z");
+  assertEquals(rows[0].send_at, "2026-10-12T10:00:00.000Z"); // 07h BRT do dia seguinte
+  assertEquals(rows[1].send_at, "2026-10-12T10:30:00.000Z");
 });

@@ -54,8 +54,8 @@ import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
-// Jornada estendida: os intervalos contam apenas dentro de 08h-19h55 BRT e começam no fim
-// da fase anterior. O corte às 19h55 protege o limite de 20h; às 08h continua o saldo.
+// Jornada estendida: os intervalos contam apenas dentro de 07h-19h55 BRT e começam no fim
+// da fase anterior. O corte às 19h55 protege o limite de 20h; às 07h continua o saldo.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
 export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
