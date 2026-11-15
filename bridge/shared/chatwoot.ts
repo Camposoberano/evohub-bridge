@@ -2,6 +2,7 @@
 //  * Application API (token de agente/admin): cria inbox, busca dados de conta.
 //  * Client API pública (inbox_identifier + source_id): injeta mensagens de ENTRADA.
 import { env, optionalEnv } from "./env.ts";
+import { bestContactName, usableContactName } from "./contact-name.ts";
 
 type Json = Record<string, unknown>;
 
@@ -502,6 +503,76 @@ export async function listConversationMessages(
   }
   const json = await res.json();
   return (json.payload ?? []) as Record<string, unknown>[];
+}
+
+// --- Write-backs de identidade/estado (portados do hub CECAPE) -------------------------------
+// Escrevem nome/avatar/prioridade/status DE VOLTA no Chatwoot. Base dos loops de reparo de nome,
+// escalonamento de prioridade e sincronização de recibos. Nunca enviam/reenviam mensagem.
+
+export async function updateContactProfile(
+  contactId: number,
+  profile: { name?: string; avatarUrl?: string; fallbackPhone?: string },
+  acct: CwAcct = envAcct(),
+): Promise<string | null> {
+  if (!profile.name && !profile.avatarUrl && !profile.fallbackPhone) return null;
+  const url = `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/contacts/${contactId}`;
+  const currentResponse = await fetch(url, { headers: adminHeaders(acct) });
+  if (!currentResponse.ok) throw new Error(`Chatwoot readContactProfile ${currentResponse.status}`);
+  const current = await currentResponse.json();
+  const currentName = current?.name ?? current?.payload?.name;
+  const fallback: string | null = typeof profile.fallbackPhone === "string" && /^\+55\d{10,11}$/.test(profile.fallbackPhone) ? profile.fallbackPhone : null;
+  const name = bestContactName(currentName, [profile.name]) ?? fallback;
+  if (usableContactName(currentName) && !profile.avatarUrl) return name;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: adminHeaders(acct),
+    body: JSON.stringify({
+      ...(name ? { name } : {}),
+      ...(profile.avatarUrl ? { avatar_url: profile.avatarUrl } : {}),
+    }),
+  });
+  if (!res.ok) throw new Error(`Chatwoot updateContactProfile ${res.status}`);
+  return name;
+}
+
+export type NativePriority = "low" | "medium" | "high" | "urgent" | null;
+
+export async function setConversationPriority(
+  conversationId: number,
+  priority: NativePriority,
+  acct: CwAcct = envAcct(),
+): Promise<void> {
+  const res = await fetch(
+    `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/toggle_priority`,
+    { method: "POST", headers: appHeaders(acct), body: JSON.stringify({ priority }) },
+  );
+  if (!res.ok) throw new Error(`Chatwoot setConversationPriority ${res.status}`);
+}
+
+/** Endpoint de status da inbox API; nunca envia nem reenvia uma mensagem de WhatsApp. */
+export async function updateApiMessageStatus(
+  conversationId: number,
+  messageId: number,
+  status: "sent" | "delivered" | "read",
+  acct: CwAcct = envAcct(),
+): Promise<void> {
+  const url = `${baseOf(acct)}/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/messages/${messageId}`;
+  const options = (token?: string): RequestInit => ({
+    method: "PATCH",
+    headers: token
+      ? { "api_access_token": token, "Content-Type": "application/json" }
+      : appHeaders(acct),
+    body: JSON.stringify({ status }),
+  });
+  let res = await fetch(url, options());
+  if ((res.status === 401 || res.status === 403) && acct.adminToken) {
+    res = await fetch(url, options(acct.adminToken));
+  }
+  if (!res.ok) throw new Error(`Chatwoot updateApiMessageStatus ${res.status}`);
+  const body = await res.json().catch(() => null) as { status?: unknown } | null;
+  if (body?.status && body.status !== status) {
+    throw new Error("Chatwoot returned a different message status");
+  }
 }
 
 function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
