@@ -46,6 +46,16 @@
       }
     },
     {
+      "code": "img_j2_producao",
+      "day": 1,
+      "type": "image",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "producao_img" },
+        "caption": "📊 Produtividade que alimenta e dá resultado — Mega Sorgo Santa Elisa, safra 2027."
+      },
+      "asset": "producao-hectare.jpg"
+    },
+    {
       "code": "05",
       "day": 1,
       "type": "audio",
@@ -64,7 +74,7 @@
       "type": "list",
       "payload": {
         "text": "O senhor quer ver *quanto ele produz por hectare*? 📊",
-        "button_label": "Ver opções",
+        "button_label": "👉 Clique aqui",
         "sections": [
           {
             "title": "Continuar",
@@ -104,6 +114,16 @@
       }
     },
     {
+      "code": "v03_talhao",
+      "day": 1,
+      "type": "video",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "previa_03_talhao" },
+        "caption": "🎬 Do talhão ao cocho: veja o ciclo do Mega Sorgo na prática."
+      },
+      "asset": "previa-03-do-talhao-ao-cocho.mp4"
+    },
+    {
       "code": "08",
       "day": 1,
       "type": "interactive",
@@ -124,6 +144,16 @@
           }
         ]
       }
+    },
+    {
+      "code": "v06_porte",
+      "day": 1,
+      "type": "video",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "previa_06_porte" },
+        "caption": "🎬 Porte em escala real: o tamanho do Mega Sorgo na lavoura."
+      },
+      "asset": "previa-06-porte-em-escala-real.mp4"
     },
     {
       "code": "09",
@@ -157,7 +187,7 @@
       "type": "list",
       "payload": {
         "text": "Quer saber por que ele é *melhor que o milho*? 🤫🌽",
-        "button_label": "Ver opções",
+        "button_label": "👉 Clique aqui",
         "sections": [
           {
             "title": "Continuar",
@@ -276,7 +306,7 @@
       "type": "list",
       "payload": {
         "text": "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪",
-        "button_label": "Ver opções",
+        "button_label": "👉 Clique aqui",
         "sections": [
           {
             "title": "Continuar",
@@ -314,6 +344,16 @@
           }
         ]
       }
+    },
+    {
+      "code": "v04_seco",
+      "day": 2,
+      "type": "video",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "previa_04_seco" },
+        "caption": "🎬 Vantagem no período seco: como o Mega Sorgo segura firme."
+      },
+      "asset": "previa-04-vantagem-no-periodo-seco.mp4"
     },
     {
       "code": "18",
@@ -360,6 +400,16 @@
       "script": "E a seca? Hoje o Brasil não tem mais a segurança de chuva de antes — tem o veranico, a safrinha apertada. O Mega Sorgo tem raiz profunda, que aproveita bem a água do solo e segura melhor o tempo seco. Resumindo: boa produção, boa resistência e qualidade. E é isso que importa pro senhor — não é vender mais, é ter mais *lucro*."
     },
     {
+      "code": "v07_colheita",
+      "day": 2,
+      "type": "video",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "previa_07_colheita" },
+        "caption": "🎬 Colheita em campo real — o resultado na prática."
+      },
+      "asset": "previa-07-colheita-em-campo-real.mp4"
+    },
+    {
       "code": "21",
       "day": 2,
       "type": "image",
@@ -378,7 +428,7 @@
       "type": "list",
       "payload": {
         "text": "Quer *garantir o seu* pra safra 2027? 🚜",
-        "button_label": "Ver opções",
+        "button_label": "👉 Clique aqui",
         "sections": [
           {
             "title": "Continuar",
@@ -440,6 +490,16 @@
       }
     },
     {
+      "code": "v05_safra",
+      "day": 3,
+      "type": "video",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "previa_05_safra" },
+        "caption": "🎬 Safra 2027: só 5 kg/ha plantam até 1 hectare."
+      },
+      "asset": "previa-05-safra-2027-5kg-ha.mp4"
+    },
+    {
       "code": "25",
       "day": 3,
       "type": "audio",
@@ -471,9 +531,8 @@
       "type": "text_sequence",
       "payload": {
         "texts": [
-          "🏢 *Nossos depósitos:* 1️⃣ Campinas-SP · 2️⃣ Lucas do Rio Verde-MT · 3️⃣ Toledo-PR · 4️⃣ Fortaleza-CE · 5️⃣ Juazeiro do Norte-CE",
-          "🌱 *Disponibilidade:* Mega Sorgo Santa Elisa® — exclusivo em Campinas-SP. BRS 661 e BRS Ponta Negra (Embrapa) — Fortaleza-CE e Toledo-PR.",
-          "📦 Todo pedido sai com *nota fiscal*, *rastreamento* e dentro da legislação (*RENASEM*): semente com *germinação de 89%*, válida até *julho/2027*. O Cícero confirma o frete e o prazo pra sua região antes de fechar. 🇧🇷"
+          "🔥 *Condição desta safra:* desconto *por volume* — quanto maior a área, maior o desconto, chegando a *até 30%*. Sem exigência de volume mínimo: vale tanto pra quem quer testar quanto pra quem planta dezenas de hectares.",
+          "📦 *Frete grátis pro Brasil todo* + pronta entrega, com *nota fiscal* e *rastreamento*, dentro da legislação (RENASEM). O Cícero confirma o valor exato e o prazo pra sua região antes de fechar. 🇧🇷"
         ]
       }
     },
@@ -497,11 +556,11 @@
       "payload": {
         "media_ref": {
           "day": 0,
-          "slot": "p29"
+          "slot": "logistica_img"
         },
-        "caption": "📦 Nosso menor volume é o saco de *2 kg* — planta até *0,5 hectare*. Ideal pra testar antes de ampliar. 💡 Dá pra *reservar já o 2 kg* nessa condição e, se gostar, aumentar a área depois."
+        "caption": "🚚 *Frete grátis pro Brasil todo* — entregamos em todos os estados, com nota fiscal e rastreamento. É só reservar que o Cícero confirma o prazo da sua região."
       },
-      "asset": "pacote-2kg"
+      "asset": "frete-gratis-brasil"
     },
     {
       "code": "30",
@@ -526,12 +585,22 @@
       }
     },
     {
+      "code": "img_j11_embrapa",
+      "day": 3,
+      "type": "image",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "isca_silagem_capa" },
+        "caption": "📚 Cartilha da *Embrapa*: Sete passos para uma boa ensilagem de sorgo."
+      },
+      "asset": "isca-silagem-capa.png"
+    },
+    {
       "code": "31",
       "day": 3,
       "type": "list",
       "payload": {
         "text": "📚 Quer receber o material da Embrapa para fazer uma silagem de qualidade?",
-        "button_label": "Ver opções",
+        "button_label": "👉 Clique aqui",
         "sections": [
           {
             "title": "Material",
@@ -548,6 +617,16 @@
           }
         ]
       }
+    },
+    {
+      "code": "img_j12_curiosidade",
+      "day": 3,
+      "type": "image",
+      "payload": {
+        "media_ref": { "day": 0, "slot": "reativacao_header" },
+        "caption": "👀 Olha o *porte* do Mega Sorgo na lavoura."
+      },
+      "asset": "reativacao-header.jpg"
     },
     {
       "code": "video_invite",
@@ -596,7 +675,7 @@
       "day": 7,
       "type": "text",
       "payload": {
-        "content": "Ficou alguma *dúvida ou curiosidade* sobre o Mega Sorgo? 🤔 Se quiser, ainda posso verificar a condição de *frete grátis + desconto por volume* e reservar o seu hoje."
+        "content": "⏳ *Último aviso:* o lote desta safra está acabando e a condição com *desconto por volume + frete grátis* vale por poucos dias. Quer que eu reserve o seu antes de fechar o lote? 🚜"
       }
     }
   ],

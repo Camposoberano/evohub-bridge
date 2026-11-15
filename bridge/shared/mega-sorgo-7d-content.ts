@@ -17,11 +17,11 @@ export const SEVEN_DAY_CONDITIONAL_VIDEOS = manifest.conditionalVideos;
 
 /** Fail closed: incomplete media or script cannot silently become an outgoing piece. */
 export function validateSevenDayContent(): void {
-  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 33 ||
+  if (manifest.version !== MEGA_SORGO_7D_VERSION || SEVEN_DAY_CONTENT.length !== 41 ||
     SEVEN_DAY_CONDITIONAL_VIDEOS.length !== 5) throw new Error("catálogo de sete dias incompleto");
-  if (SEVEN_DAY_CONTENT.some((piece) => piece.type === "video")) {
-    throw new Error("vídeo na cadência sem aceite do cliente");
-  }
+  // Vídeos curtos na cadência LIBERADOS pelo dono (2026-11-15): prévias temáticas em J3 (produção),
+  // J4 (porte/altura), J7 (seca), + oferta (safra) e colheita. A regra antiga barrava todo vídeo sem
+  // aceite; agora é decisão de negócio consciente. Os 5 vídeos oficiais condicionais seguem na porta J12.
   if (SEVEN_DAY_CONTENT[0]?.code !== "04" || SEVEN_DAY_CONTENT[0]?.type !== "audio" ||
     SEVEN_DAY_CONTENT[1]?.code !== "02" || SEVEN_DAY_CONTENT[1]?.type !== "image") {
     throw new Error("abertura deve começar com áudio e foto real");
