@@ -1,8 +1,22 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { supabase, BRIDGE_URL } from "@/lib/supabase";
 import Nav from "@/components/Nav";
+
+// Lazy-load: FlowCanvas arrasta o React Flow (~75kB). Carrega só quando o editor aparece, em vez
+// de pesar o primeiro paint de /fluxos. ssr:false — é client puro (canvas + localStorage).
+const FlowCanvas = dynamic(() => import("@/components/FlowCanvas"), {
+  ssr: false,
+  loading: () => <div className="editor-skeleton">Carregando editor…</div>,
+});
+const FlowSimulator = dynamic(() => import("@/components/FlowSimulator"), { ssr: false });
+
+// Fase 1 do Editor Visual de Fluxos. Enquanto a flag estiver desligada, a tela é a de sempre
+// (textarea JSON + desenho read-only). Ligada, aparece o canvas React Flow editável, two-way
+// com o JSON. Nenhum envio novo: o disparo de teste continua sendo o mesmo botão de antes.
+const EDITOR_V2 = process.env.NEXT_PUBLIC_FLOW_EDITOR_V2 === "1" || process.env.NEXT_PUBLIC_FLOW_EDITOR_V2 === "true";
 
 // Espelha shared/flow.ts. Só o que o editor precisa saber para desenhar e avisar de erro —
 // a validação que vale é a do bridge, que recusa o disparo. Aqui é para o erro aparecer
@@ -15,7 +29,7 @@ const KINDS = [
   { k: "wait", label: "Pausa", cor: "var(--text-faint)" },
   { k: "end", label: "Fim", cor: "var(--green)" },
 ];
-const ESPERA = new Set(["buttons", "list"]);
+const ESPERA = new Set(["buttons", "list", "ai", "input"]);
 
 function alvosDeRamificacao(steps) {
   const alvos = new Set();
@@ -53,9 +67,56 @@ function validar(flow) {
     if (s.kind === "buttons") {
       if (!s.buttons?.length) problemas.push({ stepId: s.id, problema: "botões vazios" });
       if ((s.buttons?.length ?? 0) > 3) problemas.push({ stepId: s.id, problema: `${s.buttons.length} botões; o WhatsApp aceita 3` });
+      const titulos = (s.buttons ?? []).map((b) => (b.title ?? "").trim().toLowerCase());
+      if (new Set(titulos).size !== titulos.length) problemas.push({ stepId: s.id, problema: "títulos de botão repetidos — a Meta exige únicos" });
+      if ((s.text?.length ?? 0) > 1024) problemas.push({ stepId: s.id, problema: `texto com ${s.text.length} caracteres; limite 1024` });
+    }
+    if (s.kind === "list") {
+      const secs = s.sections ?? [];
+      if (secs.length > 10) problemas.push({ stepId: s.id, problema: `${secs.length} seções; o WhatsApp aceita 10` });
+      const totalLinhas = secs.reduce((n, sec) => n + (sec.rows?.length ?? 0), 0);
+      if (totalLinhas === 0) problemas.push({ stepId: s.id, problema: "lista sem nenhuma linha" });
+      if (totalLinhas > 10) problemas.push({ stepId: s.id, problema: `${totalLinhas} linhas no total; o WhatsApp aceita 10 somando todas as seções` });
+      if ((s.text?.length ?? 0) > 1024) problemas.push({ stepId: s.id, problema: `texto com ${s.text.length} caracteres; limite 1024` });
     }
     if (s.kind === "media" && !s.media?.url) problemas.push({ stepId: s.id, problema: "mídia sem url" });
+    if (s.kind === "condition") {
+      if (!s.cond?.field) problemas.push({ stepId: s.id, problema: "condição sem campo" });
+      if (s.cond && ["igual", "diferente", "contem"].includes(s.cond.op) && !s.cond.value?.trim()) problemas.push({ stepId: s.id, problema: "condição sem valor" });
+      if (!s.branches?.sim && !s.branches?.nao) problemas.push({ stepId: s.id, problema: "condição sem saída sim/não ligada" });
+    }
+    if (s.kind === "ai") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "agente IA sem a pergunta" });
+      const ops = s.ai?.opcoes ?? [];
+      if (ops.length < 2) problemas.push({ stepId: s.id, problema: "agente IA precisa de 2+ opções" });
+      for (const o of ops) if (o.id && !s.branches?.[o.id]) problemas.push({ stepId: s.id, problema: `opção "${o.titulo ?? o.id}" sem ramo` });
+      if (!s.branches?.fallback) problemas.push({ stepId: s.id, problema: "agente IA sem saída de baixa confiança ligada" });
+    }
+    if (s.kind === "cta") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem mensagem" });
+      if (!s.ctaText?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem texto do botão" });
+      if (!s.ctaUrl?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem URL" });
+      else if (!/^https?:\/\//i.test(s.ctaUrl.trim())) problemas.push({ stepId: s.id, problema: "URL deve começar com http(s)://" });
+    }
+    if (s.kind === "action") {
+      const a = s.contatoAcao ?? {};
+      const temAlgo = (a.addLabels?.length ?? 0) > 0 || (a.removeLabels?.length ?? 0) > 0 || !!a.setNome?.trim();
+      if (!temAlgo) problemas.push({ stepId: s.id, problema: "ação de contato sem nada a fazer (etiqueta ou nome)" });
+    }
+    if (s.kind === "api") {
+      const u = s.api?.url?.trim() ?? "";
+      if (!u) problemas.push({ stepId: s.id, problema: "chamada API sem URL" });
+      else if (!/^https?:\/\//i.test(u)) problemas.push({ stepId: s.id, problema: "URL da chamada API deve começar com http(s)://" });
+    }
+    if (s.kind === "goto" && !s.gotoFlowId?.trim()) problemas.push({ stepId: s.id, problema: "ir-para-fluxo sem fluxo de destino" });
+    if (s.kind === "input") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "pergunta aberta sem a mensagem" });
+      if (!s.input?.var?.trim()) problemas.push({ stepId: s.id, problema: "pergunta aberta sem a variável onde guardar a resposta" });
+      else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s.input.var.trim())) problemas.push({ stepId: s.id, problema: `variável "${s.input.var}" inválida — letras, números e _ (sem espaço/acento)` });
+      if (!s.next && !s.fallbackNext) problemas.push({ stepId: s.id, problema: "pergunta aberta sem próximo passo (ligue 'resposta → segue')" });
+    }
     if (s.kind === "text" && !s.text?.trim()) problemas.push({ stepId: s.id, problema: "texto vazio" });
+    if (s.kind === "text" && (s.text?.length ?? 0) > 4096) problemas.push({ stepId: s.id, problema: `texto com ${s.text.length} caracteres; limite 4096` });
     if (s.timeoutMin !== undefined && !s.onTimeout) {
       problemas.push({ stepId: s.id, problema: "timeoutMin sem onTimeout — o lead ficaria esperando para sempre" });
     }
@@ -66,7 +127,7 @@ function validar(flow) {
     const visto = new Set([inicio.id]);
     let atual = inicio;
     while (atual) {
-      if (ESPERA.has(atual.kind) || atual.kind === "wait" || atual.kind === "end") break;
+      if (ESPERA.has(atual.kind) || atual.kind === "wait" || atual.kind === "end" || atual.kind === "goto") break;
       const proxId = atual.next ?? proximoNaOrdem(steps, atual.id);
       if (!proxId) break;
       if (visto.has(proxId)) {
@@ -101,6 +162,50 @@ function resumo(s) {
   return s.text ?? "";
 }
 
+// ── Configuração de disparo (ritmo da campanha) ──────────────────────────────
+// Espelha shared/campaign-pace.ts PaceConfig. Guardado em flow.disparo (viaja com o fluxo,
+// salva na biblioteca) e enviado como `pace` no agendar-fluxo. Vazio = backend usa PACE_PADRAO.
+const DISPARO_PADRAO = { modo: "rampa", capInicial: 50, capIncremento: 10, capMaximo: 200, horaInicio: 8, horaFim: 17 };
+
+/** flow.disparo (UI) → PaceConfig (bridge). modo "fixo" = mesmo volume todo dia (sem rampa). */
+function paceDoFluxo(d) {
+  if (!d) return undefined;
+  const fixo = d.modo === "fixo";
+  const inicial = Number(d.capInicial ?? DISPARO_PADRAO.capInicial);
+  return {
+    capInicial: inicial,
+    capIncremento: fixo ? 0 : Number(d.capIncremento ?? DISPARO_PADRAO.capIncremento),
+    capMaximo: fixo ? inicial : Number(d.capMaximo ?? DISPARO_PADRAO.capMaximo),
+    horaInicio: Number(d.horaInicio ?? DISPARO_PADRAO.horaInicio),
+    horaFim: Number(d.horaFim ?? DISPARO_PADRAO.horaFim),
+  };
+}
+
+/** Confirmação amigável do disparo (sem JSON na cara). Mostra ok/erro e detalhes só se abrir. */
+function ResultadoDisparo({ resultado }) {
+  if (!resultado) return null;
+  const erro = resultado.error;
+  const n = resultado.agendados ?? resultado.fila ?? resultado.enfileirados ?? resultado.count ?? resultado.total ?? null;
+  return (
+    <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 10,
+      background: erro ? "rgba(251,93,118,.1)" : "rgba(46,204,113,.1)",
+      border: `1px solid ${erro ? "rgba(251,93,118,.3)" : "rgba(46,204,113,.3)"}` }}>
+      <div style={{ fontWeight: 800, fontSize: 13.5, color: erro ? "var(--red)" : "var(--green)" }}>
+        {erro ? "✕ Não disparou" : "✓ Fluxo ok — disparo criado"}
+        {!erro && n != null && <span style={{ fontWeight: 600, color: "var(--text-dim)" }}> · {n} na fila</span>}
+      </div>
+      {erro && <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4 }}>{String(erro)}</div>}
+      {!erro && <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 4 }}>Acompanhe em “Contatos dentro de um fluxo”, abaixo.</div>}
+      <details style={{ marginTop: 8 }}>
+        <summary style={{ cursor: "pointer", fontSize: 11, color: "var(--text-faint)" }}>detalhes técnicos</summary>
+        <pre style={{ marginTop: 6, padding: 10, borderRadius: 8, background: "var(--bg-deep)", border: "1px solid var(--border)", fontSize: 11, overflowX: "auto", color: "var(--text-dim)" }}>
+          {JSON.stringify(resultado, null, 2)}
+        </pre>
+      </details>
+    </div>
+  );
+}
+
 export default function Fluxos() {
   const router = useRouter();
   const [pronto, setPronto] = useState(false);
@@ -111,6 +216,14 @@ export default function Fluxos() {
   const [enviando, setEnviando] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [emAndamento, setEmAndamento] = useState([]);
+  const [forcarTeste, setForcarTeste] = useState(false);
+  // Biblioteca de fluxos (flow_definitions + flow_versions)
+  const [biblioteca, setBiblioteca] = useState([]);
+  const [fluxoId, setFluxoId] = useState(null);
+  const [fluxoNome, setFluxoNome] = useState("");
+  const [fluxoInfo, setFluxoInfo] = useState(null); // { status, current_version }
+  const [libMsg, setLibMsg] = useState("");
+  const [salvandoFluxo, setSalvandoFluxo] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -158,6 +271,8 @@ export default function Fluxos() {
           channel_id: canalId,
           numbers: nums,
           flow: { steps },
+          pace: paceDoFluxo(flow?.disparo),
+          forcar: forcarTeste,
         }),
       });
       setResultado(await res.json());
@@ -169,18 +284,97 @@ export default function Fluxos() {
     }
   }
 
+  // ── Biblioteca de fluxos ──────────────────────────────────────────────
+  // Lê via bridge GET /flows (service_role), NÃO direto no Supabase: a RLS de flow_definitions
+  // exige estar em dashboard_readers, então o admin logado via leitura direta recebia lista
+  // VAZIA (fluxo salvo/publicado não aparecia). O bridge lê como service_role e não depende disso.
+  const carregarBiblioteca = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch(`${BRIDGE_URL}/flows`, {
+        headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store",
+      });
+      const body = await res.json().catch(() => ({}));
+      setBiblioteca(Array.isArray(body.flows) ? body.flows : []);
+    } catch { setBiblioteca([]); }
+  }, []);
+
+  useEffect(() => { if (pronto) carregarBiblioteca(); }, [pronto, carregarBiblioteca]);
+
+  async function flowsPost(payload) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/flows`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.json();
+  }
+
+  async function carregarFluxo(id) {
+    setLibMsg("");
+    if (!id) { novoFluxo(); return; }
+    const { data: { session } } = await supabase.auth.getSession();
+    const res = await fetch(`${BRIDGE_URL}/flows?id=${encodeURIComponent(id)}`, {
+      headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store",
+    });
+    const body = await res.json().catch(() => ({}));
+    const data = body.definition;
+    if (!data) { setLibMsg("fluxo não encontrado"); return; }
+    setFluxoId(data.id);
+    setFluxoNome(data.name);
+    setFluxoInfo({ status: data.status, current_version: data.current_version });
+    setTexto(JSON.stringify(data.graph_json ?? { steps: [] }, null, 2));
+  }
+
+  function novoFluxo() {
+    setFluxoId(null); setFluxoNome(""); setFluxoInfo(null); setLibMsg("");
+  }
+
+  async function salvarFluxo() {
+    if (!fluxoNome.trim()) { setLibMsg("dê um nome ao fluxo"); return; }
+    if (jsonInvalido) { setLibMsg("JSON inválido"); return; }
+    setSalvandoFluxo(true);
+    const r = await flowsPost({ action: "save", id: fluxoId, name: fluxoNome.trim(), graph: { steps, startId: flow?.startId } });
+    setSalvandoFluxo(false);
+    if (r.error) { setLibMsg(r.error); return; }
+    setFluxoId(r.id); setLibMsg("rascunho salvo ✓"); carregarBiblioteca();
+  }
+
+  async function publicarFluxo() {
+    if (!fluxoId) { setLibMsg("salve o fluxo antes de publicar"); return; }
+    setSalvandoFluxo(true);
+    const r = await flowsPost({ action: "publish", id: fluxoId });
+    setSalvandoFluxo(false);
+    if (r.error) { setLibMsg(r.problemas ? `inválido: ${r.problemas.length} problema(s)` : r.error); return; }
+    setLibMsg(r.inalterado ? `sem mudança (v${r.version})` : `publicado v${r.version} ✓`);
+    setFluxoInfo({ status: "published", current_version: r.version });
+    carregarBiblioteca();
+  }
+
+  // Config de disparo — guardada em flow.disparo (viaja com o fluxo). Edita via texto (JSON).
+  const disparo = (flow && flow !== "erro" ? flow.disparo : null) ?? null;
+  function setDisparo(campos) {
+    const base = flow && flow !== "erro" ? flow : { steps };
+    const atual = base.disparo ?? DISPARO_PADRAO;
+    setTexto(JSON.stringify({ ...base, disparo: { ...atual, ...campos } }, null, 2));
+  }
+
   if (!pronto) return null;
   const podeDisparar = steps.length > 0 && problemas.length === 0 && numeros.trim() && canalId && !enviando;
+  const fluxoValido = steps.length > 0 && problemas.length === 0;
 
   return (
     <>
       <Nav />
       <div className="shell">
-        <h1 className="display" style={{ fontSize: 26, marginBottom: 6 }}>Fluxos conversacionais</h1>
+        <h1 className="page-title">Fluxos conversacionais</h1>
         <p style={{ color: "var(--text-dim)", fontSize: 14, marginBottom: 22 }}>
           Manda, espera a resposta e ramifica. O desenho abaixo mostra para onde cada resposta leva.
         </p>
 
+        {!EDITOR_V2 && (
         <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 18, alignItems: "start" }}>
           <div className="card" style={{ padding: 16 }}>
             <label style={{ fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".08em" }}>
@@ -231,11 +425,7 @@ export default function Fluxos() {
               </div>
             )}
 
-            {resultado && (
-              <pre style={{ marginTop: 14, padding: 12, borderRadius: 10, background: "var(--bg-deep)", border: "1px solid var(--border)", fontSize: 11, overflowX: "auto", color: resultado.error ? "var(--red)" : "var(--text-dim)" }}>
-                {JSON.stringify(resultado, null, 2)}
-              </pre>
-            )}
+            <ResultadoDisparo resultado={resultado} />
           </div>
 
           <div className="card" style={{ padding: 16 }}>
@@ -292,6 +482,156 @@ export default function Fluxos() {
             </div>
           </div>
         </div>
+        )}
+
+        {EDITOR_V2 && (
+          <>
+            <div className="card" style={{ padding: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <label style={{ fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".06em" }}>Biblioteca</label>
+              <select value={fluxoId ?? ""} onChange={(e) => carregarFluxo(e.target.value)} style={{ padding: "8px 10px", borderRadius: 10, fontSize: 13, minWidth: 180 }}>
+                <option value="">— novo fluxo —</option>
+                {biblioteca.map((f) => <option key={f.id} value={f.id}>{f.name}{f.status === "published" ? ` (v${f.current_version})` : f.status === "archived" ? " (arquivado)" : " (rascunho)"}</option>)}
+              </select>
+              <input value={fluxoNome} onChange={(e) => setFluxoNome(e.target.value)} placeholder="Nome do fluxo" style={{ padding: "8px 10px", borderRadius: 10, fontSize: 13, flex: "1 1 160px", minWidth: 120 }} />
+              <button className="btn-ghost" onClick={salvarFluxo} disabled={salvandoFluxo} style={{ padding: "8px 14px", borderRadius: 10 }}>{salvandoFluxo ? "…" : "Salvar"}</button>
+              <button className="btn-mint" onClick={publicarFluxo} disabled={salvandoFluxo || !fluxoId} style={{ padding: "8px 14px", borderRadius: 10 }}>Publicar</button>
+              {fluxoId && <button className="btn-ghost mini" onClick={novoFluxo}>Novo</button>}
+              {fluxoInfo?.status === "published" && <span className="badge badge-green" style={{ fontSize: 11 }}>publicado v{fluxoInfo.current_version}</span>}
+              {libMsg && <span style={{ fontSize: 12, color: libMsg.includes("✓") ? "var(--green)" : "var(--amber)" }}>{libMsg}</span>}
+            </div>
+
+            <div className="card" style={{ padding: 0, overflow: "hidden", marginTop: 18 }}>
+              <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--border-soft)", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: "var(--text)" }}>Editor de fluxo</div>
+                  <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Arraste blocos da paleta, ligue as saídas de cada botão ao próximo bloco. Sem código.</div>
+                </div>
+                {problemas.length > 0
+                  ? <span className="badge badge-red" style={{ fontSize: 11 }}>{problemas.length} problema{problemas.length > 1 ? "s" : ""}</span>
+                  : steps.length > 0 && <span className="badge badge-green" style={{ fontSize: 11 }}>válido</span>}
+              </div>
+              {jsonInvalido
+                ? <div style={{ padding: 16 }}><div className="badge badge-red">JSON inválido — corrija no modo avançado abaixo</div></div>
+                : <FlowCanvas
+                    value={{ steps, startId: flow?.startId }}
+                    onChange={(f) => setTexto(JSON.stringify({ ...(flow && flow !== "erro" ? flow : {}), ...f }, null, 2))}
+                    problemas={problemas}
+                  />}
+            </div>
+
+            {!jsonInvalido && steps.length > 0 && (
+              <div className="card" style={{ padding: 16, marginTop: 18 }}>
+                <details open>
+                  <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 12 }}>
+                    Simular conversa
+                  </summary>
+                  <FlowSimulator
+                    value={{ steps, startId: flow?.startId }}
+                    vars={{ nome: "Maria Silva", primeiro_nome: "Maria", telefone: "5511999999999" }}
+                  />
+                </details>
+              </div>
+            )}
+
+            {!jsonInvalido && steps.length > 0 && (() => {
+              const d = disparo ?? DISPARO_PADRAO;
+              const fixo = d.modo === "fixo";
+              const lbl = { fontSize: 11, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".05em", display: "block", marginBottom: 5 };
+              const inp = { width: 90, fontSize: 13, padding: "7px 9px", borderRadius: 9 };
+              const campo = (titulo, el) => <div><label style={lbl}>{titulo}</label>{el}</div>;
+              return (
+                <div className="card" style={{ padding: 16, marginTop: 18 }}>
+                  <details>
+                    <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".08em" }}>
+                      Configuração de disparo {disparo ? "" : "(usando padrão)"}
+                    </summary>
+                    <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "12px 0 14px" }}>
+                      Ritmo da campanha. O tempo <b>entre as mensagens de um mesmo contato</b> já está no fluxo (blocos de pausa) — aqui é o ritmo <b>entre contatos</b>, pra aquecer o número sem a Meta punir.
+                    </p>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+                      {campo("Primeiro horário", <input type="number" min={0} max={23} value={d.horaInicio} onChange={(e) => setDisparo({ horaInicio: Number(e.target.value) })} style={inp} />)}
+                      {campo("Último horário", <input type="number" min={1} max={24} value={d.horaFim} onChange={(e) => setDisparo({ horaFim: Number(e.target.value) })} style={inp} />)}
+                      {campo("Modo", (
+                        <select value={d.modo ?? "rampa"} onChange={(e) => setDisparo({ modo: e.target.value })} style={{ ...inp, width: 150 }}>
+                          <option value="rampa">Rampa (sobe por dia)</option>
+                          <option value="fixo">Fixo (mesmo todo dia)</option>
+                        </select>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginTop: 14 }}>
+                      {campo(fixo ? "Mensagens por dia" : "Começa com", <input type="number" min={1} value={d.capInicial} onChange={(e) => setDisparo({ capInicial: Number(e.target.value) })} style={inp} />)}
+                      {!fixo && campo("Sobe por dia", <input type="number" min={0} value={d.capIncremento} onChange={(e) => setDisparo({ capIncremento: Number(e.target.value) })} style={inp} />)}
+                      {!fixo && campo("Teto (máximo/dia)", <input type="number" min={1} value={d.capMaximo} onChange={(e) => setDisparo({ capMaximo: Number(e.target.value) })} style={inp} />)}
+                    </div>
+                    <div style={{ marginTop: 14, padding: "9px 12px", borderRadius: 9, background: "var(--surface-2)", fontSize: 12, color: "var(--text-dim)", lineHeight: 1.5 }}>
+                      {fixo
+                        ? <>Manda <b>{d.capInicial}</b> contatos por dia, das <b>{d.horaInicio}h</b> às <b>{d.horaFim}h</b>, espalhados pela janela.</>
+                        : <>Dia 1: <b>{d.capInicial}</b>. Sobe <b>{d.capIncremento}</b>/dia até o teto de <b>{d.capMaximo}</b>. Das <b>{d.horaInicio}h</b> às <b>{d.horaFim}h</b>.</>}
+                      {" "}O intervalo entre contatos é automático (espalha o teto do dia pela janela).
+                      {forcarTeste && <> <b style={{ color: "var(--amber)" }}>Forçar está ligado — o teste ignora esta janela.</b></>}
+                    </div>
+                  </details>
+                </div>
+              );
+            })()}
+
+            <div className="card" style={{ padding: 16, marginTop: 18 }}>
+              <label style={{ fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".08em" }}>
+                Testar fluxo
+              </label>
+              {fluxoValido && (
+                <div style={{ marginTop: 8, fontSize: 13, fontWeight: 700, color: "var(--green)" }}>✓ Fluxo ok — pronto para disparar</div>
+              )}
+              <textarea
+                value={numeros}
+                onChange={(e) => setNumeros(e.target.value)}
+                placeholder="Números de teste — 5511999999999"
+                style={{ width: "100%", minHeight: 60, marginTop: 10, fontSize: 13, padding: 10, borderRadius: 10, resize: "vertical" }}
+              />
+              <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={canalId} onChange={(e) => setCanalId(e.target.value)} style={{ padding: "9px 12px", borderRadius: 10, fontSize: 13 }}>
+                  {canais.map((c) => <option key={c.id} value={c.id}>{c.name} — {c.phone_number}</option>)}
+                </select>
+                <button className="btn-mint" onClick={disparar} disabled={!podeDisparar} style={{ padding: "10px 18px", borderRadius: 10 }}>
+                  {enviando ? "Disparando…" : "Disparar teste"}
+                </button>
+                <label title="Pula a revalidação do contato (conversa aberta, msg em 30 dias). Só pra teste." style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: forcarTeste ? "var(--amber)" : "var(--text-dim)" }}>
+                  <input type="checkbox" checked={forcarTeste} onChange={(e) => setForcarTeste(e.target.checked)} />
+                  forçar (teste: ignora revalidação + janela)
+                </label>
+              </div>
+
+              {problemas.length > 0 && (
+                <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: "rgba(251,93,118,.1)", border: "1px solid rgba(251,93,118,.3)" }}>
+                  <div style={{ fontWeight: 800, fontSize: 13, color: "var(--red)", marginBottom: 6 }}>
+                    {problemas.length} problema{problemas.length > 1 ? "s" : ""} — o disparo fica bloqueado
+                  </div>
+                  {problemas.map((p, i) => (
+                    <div key={i} style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 3 }}>
+                      <code style={{ color: "var(--red)" }}>{p.stepId}</code> — {p.problema}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <ResultadoDisparo resultado={resultado} />
+
+              <details style={{ marginTop: 14 }}>
+                <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 800, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: ".08em" }}>
+                  Avançado — JSON do fluxo (uso técnico)
+                </summary>
+                <textarea
+                  value={texto}
+                  onChange={(e) => setTexto(e.target.value)}
+                  placeholder='{"steps":[{"id":"oi","kind":"text","text":"Olá!"}]}'
+                  spellCheck={false}
+                  style={{ width: "100%", minHeight: 220, marginTop: 10, fontFamily: "ui-monospace, monospace", fontSize: 12, lineHeight: 1.5, padding: 12, borderRadius: 10, resize: "vertical" }}
+                />
+                {jsonInvalido && <div className="badge badge-red" style={{ marginTop: 10 }}>JSON inválido — confira vírgulas e chaves</div>}
+              </details>
+            </div>
+          </>
+        )}
 
         <div className="card" style={{ padding: 16, marginTop: 18 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>

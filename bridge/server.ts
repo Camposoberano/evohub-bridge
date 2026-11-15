@@ -35,6 +35,7 @@ import { accountForChannel } from "./shared/accounts.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as flows } from "./handlers/flows.ts";
 import { handle as jevTest } from "./handlers/jev-test.ts";
+import { handle as audiences } from "./handlers/audiences.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import {
@@ -130,6 +131,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/meta-templates": metaTemplates,
   "/flows": flows,
   "/jev-test": jevTest,
+  "/audiences": audiences,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
   "/channel-sync": channelSync,
