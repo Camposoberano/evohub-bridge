@@ -455,6 +455,38 @@ export async function assignConversation(
   }
 }
 
+/** Encaminha a conversa para um TIME do Chatwoot (nó Transferir com time). Portado do hub CECAPE. */
+export async function assignConversationTeam(
+  conversationId: number,
+  teamId: number,
+  acct: CwAcct = envAcct(),
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${
+        baseOf(acct)
+      }/api/v1/accounts/${acct.accountId}/conversations/${conversationId}/assignments`,
+      {
+        method: "POST",
+        headers: appHeaders(acct),
+        body: JSON.stringify({ team_id: teamId }),
+      },
+    );
+    if (!res.ok) {
+      console.warn(
+        `assignConversationTeam ${conversationId} -> ${res.status}: ${
+          (await res.text()).slice(0, 160)
+        }`,
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn(`assignConversationTeam ${conversationId} erro:`, e);
+    return false;
+  }
+}
+
 export async function setConversationLabels(
   conversationId: number,
   labels: string[],

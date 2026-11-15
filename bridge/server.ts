@@ -33,6 +33,8 @@ import {
 import { pumpRecoveryChain } from "./shared/recovery-chain.ts";
 import { accountForChannel } from "./shared/accounts.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
+import { handle as flows } from "./handlers/flows.ts";
+import { handle as jevTest } from "./handlers/jev-test.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import {
@@ -82,7 +84,7 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { flowChannelFor, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { flowChannelFor, pumpFlowTimeouts, pumpFlowWaits } from "./shared/flow-inbound.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   campanhasComFila,
@@ -126,6 +128,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
   "/meta-templates": metaTemplates,
+  "/flows": flows,
+  "/jev-test": jevTest,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
   "/channel-sync": channelSync,
@@ -1585,6 +1589,31 @@ function startFlowTimeoutLoop() {
   console.log("flow-timeout loop ON (2min)");
 }
 
+// Sweeper dos nós `wait` (pausa por tempo): sem ele um fluxo parado num "espera 2 dias" fica
+// pendurado pra sempre. Gated FLOW_WAIT_ENABLED=true (default OFF — nós wait são opt-in).
+const FLOW_WAIT_INTERVAL_MS = 2 * 60_000;
+
+function startFlowWaitLoop() {
+  if (optionalEnv("FLOW_WAIT_ENABLED") !== "true") return;
+  // Trava de reentrância: este loop também envia (retoma o fluxo após a pausa).
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await pumpFlowWaits(admin());
+      if (r.seguiram > 0) console.log("flow-wait:", JSON.stringify(r));
+    } catch (e) {
+      console.error("flow-wait loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 100_000);
+  setInterval(run, FLOW_WAIT_INTERVAL_MS);
+  console.log("flow-wait loop ON (2min)");
+}
+
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
@@ -1691,6 +1720,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
+  startFlowWaitLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
   startUazapiCatchupLoop();

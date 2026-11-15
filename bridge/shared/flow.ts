@@ -17,8 +17,63 @@ export type FlowStepKind =
   | "media"
   | "buttons"
   | "list"
+  | "cta"
+  | "condition"
+  | "transfer"
+  | "ai"
+  | "action"
+  | "api"
+  | "input"
+  | "goto"
   | "wait"
   | "end";
+
+/**
+ * kind=input — pergunta aberta: manda `text`, ESPERA a resposta livre do lead e GRAVA o que
+ * ele digitou numa variável (`input.var`), que os próximos steps interpolam via `{{var}}`. É o
+ * que o `ai` NÃO faz (aquele classifica e descarta o texto). Captura é efeito impuro (grava no
+ * contato) — o runner puro só manda a pergunta e para; quem grava é o chamador (flow-inbound).
+ * `tipo:"numero"` limpa a resposta pra dígitos. Sempre segue por `next`/`fallbackNext` (não
+ * ramifica); com `timeoutMin`+`onTimeout` pra não prender quem não responde.
+ */
+export type FlowInput = {
+  /** nome da variável onde guardar a resposta (ex.: "nome_completo", "cidade") */
+  var: string;
+  tipo?: "texto" | "numero";
+};
+
+/**
+ * kind=action — nó de lógica que mexe no contato/conversa sem mandar mensagem e segue adiante.
+ * Aplica/remove etiquetas e pode atualizar o nome do contato. Quem executa é o runner via
+ * callback (precisa de banco/Chatwoot) — `flow.ts` continua puro.
+ */
+export type FlowAction = {
+  addLabels?: string[];
+  removeLabels?: string[];
+  setNome?: string;
+};
+
+/**
+ * kind=api — chamada HTTP a um destino PRÉ-APROVADO (allowlist por env `FLOW_API_ALLOWLIST`).
+ * Fire-and-forget: manda os dados do contato pro n8n/CRM e segue; não captura resposta (o
+ * estado não persiste variáveis entre passos). Headers podem referenciar segredo por
+ * `{{env.NOME}}`, resolvido na hora do envio — segredo nunca fica no JSON do fluxo.
+ */
+export type FlowApi = {
+  method?: "GET" | "POST";
+  url: string;
+  headers?: Record<string, string>;
+  /** corpo (POST) — texto com `{{var}}` do contato interpolado; default = JSON dos vars */
+  bodyTemplate?: string;
+  timeoutMs?: number;
+};
+
+/** Regra de um nó de condição. Avaliada contra as variáveis do contato (nome, telefone, …). */
+export type FlowCond = {
+  field: string;
+  op: "igual" | "diferente" | "contem" | "existe" | "vazio";
+  value?: string;
+};
 
 export type FlowStep = {
   id: string;
@@ -39,6 +94,47 @@ export type FlowStep = {
   imageUrl?: string;
   /** kind=list — no máximo 10 linhas por seção */
   sections?: FlowSection[];
+  /** kind=cta — botão que abre um link (interactive cta_url no oficial; texto+link na uazapi) */
+  ctaText?: string;
+  ctaUrl?: string;
+  /** kind=condition — ramifica por `branches.sim` / `branches.nao` conforme a regra */
+  cond?: FlowCond;
+  /**
+   * kind=ai — manda a pergunta (`text`), espera a resposta livre, e o Jev classifica numa das
+   * `opcoes`. Ramifica por `branches[opcao.id]`; confiança abaixo de `minConfianca` (ou erro/sem
+   * chave) → `branches.fallback` (tipicamente Transferir humano).
+   */
+  ai?: {
+    instrucao?: string;
+    opcoes?: { id: string; titulo?: string; descricao?: string }[];
+    minConfianca?: number;
+  };
+  /** kind=action — etiquetas/campos a mexer no contato antes de seguir */
+  contatoAcao?: FlowAction;
+  /** kind=api — chamada HTTP a destino pré-aprovado antes de seguir */
+  api?: FlowApi;
+  /** kind=input — pergunta aberta: grava a resposta livre do lead em `input.var` */
+  input?: FlowInput;
+  /** kind=transfer — id do TIME do Chatwoot pra encaminhar a conversa (além do bot-off) */
+  transferTeamId?: number;
+  /**
+   * kind=transfer — resumo pro consultor como NOTA PRIVADA no Chatwoot (só o time vê, não vai pro
+   * lead) no momento da transferência. `true` = monta sozinho com os dados capturados no fluxo
+   * (variáveis do contato) + as etiquetas do funil aplicadas. String = modelo com `{{var}}`
+   * interpolado (ex.: "Nome: {{nome_completo}} · Cidade: {{cidade}}").
+   * Assim o consultor assume a conversa já com os dados capturados na mão.
+   */
+  resumo?: boolean | string;
+  /**
+   * kind=transfer — resumo QUALIFICADO: antes de postar a nota, o Jev lê os dados capturados +
+   * etiquetas e classifica a TEMPERATURA do lead (quente/morno/frio). A nota do consultor ganha
+   * esse cabeçalho (ex.: "🔥 QUENTE") além dos dados. Jev é julgamento, não texto:
+   * código monta a frase. Sem chave / baixa confiança → cai no resumo simples (nunca trava).
+   * Superset de `resumo` — quando ligado, dispensa o `resumo` (a nota já traz os dados).
+   */
+  qualificarIA?: boolean;
+  /** kind=goto — id do fluxo publicado para onde saltar (exige migration flow_ref) */
+  gotoFlowId?: string;
   /** kind=wait — pausa por tempo, sem esperar resposta */
   minutes?: number;
   /**
@@ -72,15 +168,78 @@ export type Flow = {
 
 /** Steps que param o fluxo aguardando o lead. `wait` pausa por tempo, não por resposta. */
 export function esperaResposta(step: FlowStep): boolean {
-  return step.kind === "buttons" || step.kind === "list";
+  return step.kind === "buttons" || step.kind === "list" ||
+    step.kind === "ai" || step.kind === "input";
 }
 
 export function stepById(flow: Flow, id: string): FlowStep | undefined {
   return flow.steps.find((s) => s.id === id);
 }
 
+/**
+ * Variáveis que ESTE fluxo captura (nós `input`), na ordem em que aparecem. É o allowlist do
+ * resumo pro consultor: só o que o fluxo perguntou — nada do lixo de perfil (avatar, channel_id,
+ * source_id…) que o sync grava em `contacts.attributes`.
+ */
+export function varsDeInput(flow: Flow): string[] {
+  const vistos = new Set<string>();
+  const out: string[] = [];
+  for (const s of flow.steps) {
+    const v = s.input?.var?.trim();
+    if (v && !vistos.has(v)) { vistos.add(v); out.push(v); }
+  }
+  return out;
+}
+
 export function primeiroStep(flow: Flow): FlowStep | undefined {
   return flow.startId ? stepById(flow, flow.startId) : flow.steps[0];
+}
+
+function normReply(s: string): string {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Opções do step em ORDEM (botões, depois linhas das seções). É a mesma ordem que o menu
+ * numerado em texto usa pra mostrar "1. … 2. …", pra o número que o lead digita casar certo.
+ */
+export function opcoesOrdenadas(step: FlowStep): { id: string; title: string }[] {
+  const out: { id: string; title: string }[] = [];
+  for (const b of step.buttons ?? []) out.push({ id: b.id, title: b.title ?? b.id });
+  for (const sec of step.sections ?? []) {
+    for (const row of sec.rows ?? []) out.push({ id: row.id, title: row.title ?? row.id });
+  }
+  return out;
+}
+
+/**
+ * Casa a resposta do lead com uma opção do step — por ID ou por TÍTULO. Existe porque a Uazapi,
+ * em algumas versões, devolve só o TÍTULO visível do botão/linha (não o id que mandamos). Sem
+ * isto, clicar num botão de fluxo data-driven não casava nenhum ramo e a conversa parava.
+ */
+function optionIdByReply(step: FlowStep, reply: string): string | null {
+  const r = normReply(reply);
+  for (const b of step.buttons ?? []) {
+    if (b.id === reply || normReply(b.title) === r) return b.id;
+  }
+  for (const sec of step.sections ?? []) {
+    for (const row of sec.rows ?? []) {
+      if (row.id === reply || normReply(row.title) === r) return row.id;
+    }
+  }
+  // Menu numerado em texto (fallback do interativo): o lead responde "2" → 2ª opção.
+  if (/^\d{1,2}$/.test(r)) {
+    const ops = opcoesOrdenadas(step);
+    const n = Number(r);
+    if (n >= 1 && n <= ops.length) return ops[n - 1].id;
+  }
+  return null;
+}
+
+/** Opção (id) que a resposta casa — por id, título normalizado OU número de posição; null se nenhuma. */
+export function matchOption(step: FlowStep, reply: string | null | undefined): string | null {
+  return reply == null ? null : optionIdByReply(step, reply);
 }
 
 /**
@@ -95,10 +254,36 @@ export function resolveNext(
   step: FlowStep,
   replyId: string | null,
 ): string | null {
-  if (replyId && step.branches?.[replyId]) return step.branches[replyId];
+  if (replyId) {
+    if (step.branches?.[replyId]) return step.branches[replyId];
+    // a Uazapi pode devolver o título em vez do id — tenta casar por título
+    const optId = optionIdByReply(step, replyId);
+    if (optId && step.branches?.[optId]) return step.branches[optId];
+  }
   if (replyId === null && step.fallbackNext) return step.fallbackNext;
-  // clicou num botão sem destino declarado: fallback antes de encerrar
+  // clicou/digitou sem destino declarado: fallback antes de encerrar
   return step.fallbackNext ?? step.next ?? null;
+}
+
+/**
+ * Avalia a regra de um nó de condição contra as variáveis do contato. Puro. Retorna o ramo
+ * ("sim"/"nao") — quem segue por `branches[ramo]` é o runner. Comparação sem acento/caixa.
+ */
+export function avaliarCondicao(step: FlowStep, vars: Record<string, string>): "sim" | "nao" {
+  const c = step.cond;
+  if (!c?.field) return "nao";
+  const norm = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+  const v = (vars[c.field.toLowerCase()] ?? "").trim();
+  const alvo = c.value ?? "";
+  let ok = false;
+  switch (c.op) {
+    case "existe": ok = v !== ""; break;
+    case "vazio": ok = v === ""; break;
+    case "igual": ok = norm(v) === norm(alvo); break;
+    case "diferente": ok = norm(v) !== norm(alvo); break;
+    case "contem": ok = alvo !== "" && norm(v).includes(norm(alvo)); break;
+  }
+  return ok ? "sim" : "nao";
 }
 
 /**
@@ -130,6 +315,16 @@ export function stepsUntilWait(
 
     if (atual.kind === "end") return { enviar, pararEm: atual, fim: true };
     if (atual.kind === "wait") return { enviar, pararEm: atual, fim: false };
+    // Nós de lógica que não enviam mensagem: param aqui e o runner age (avalia/executa) e
+    // depois segue. Condição ramifica; Ação mexe no contato; Chamada API chama HTTP; Ir-para
+    // salta pra outro fluxo. Nenhum deles empilha peça em `enviar`.
+    if (
+      atual.kind === "condition" || atual.kind === "action" ||
+      atual.kind === "api" || atual.kind === "goto"
+    ) return { enviar, pararEm: atual, fim: false };
+    // Transferir humano: manda a mensagem de handoff (se houver), aplica a etiqueta bot-off
+    // (via step.labels no onSent) e ENCERRA o fluxo — o atendente assume, o bot cala.
+    if (atual.kind === "transfer") { enviar.push(atual); return { enviar, pararEm: atual, fim: true }; }
 
     enviar.push(atual);
     if (esperaResposta(atual)) return { enviar, pararEm: atual, fim: false };
@@ -170,6 +365,14 @@ function proximoNaOrdem(flow: Flow, id: string): string | null {
   const proximo = flow.steps[i + 1];
   if (alvosDeRamificacao(flow).has(proximo.id)) return null;
   return proximo.id;
+}
+
+/**
+ * Próximo step depois de `step` quando ele não ramifica: `next` explícito ou a ordem da lista.
+ * Usado pelos nós sem mensagem (wait/action/api) para o runner saber por onde seguir.
+ */
+export function proximoDe(flow: Flow, step: FlowStep): string | null {
+  return step.next ?? proximoNaOrdem(flow, step.id);
 }
 
 export type FlowProblema = { stepId: string; problema: string };
@@ -220,22 +423,103 @@ export function validateFlow(flow: Flow): FlowProblema[] {
           problema: `${s.buttons?.length} botões; o WhatsApp aceita 3`,
         });
       }
+      // a Meta recusa títulos de botão repetidos no mesmo cartão
+      const titulos = (s.buttons ?? []).map((b) => (b.title ?? "").trim().toLowerCase());
+      if (new Set(titulos).size !== titulos.length) {
+        problemas.push({ stepId: s.id, problema: "títulos de botão repetidos — a Meta exige títulos únicos" });
+      }
+      // corpo da mensagem interativa: 1024 no WhatsApp
+      if ((s.text?.length ?? 0) > 1024) {
+        problemas.push({ stepId: s.id, problema: `texto com ${s.text!.length} caracteres; o limite do WhatsApp é 1024` });
+      }
     }
     if (s.kind === "list") {
-      for (const sec of s.sections ?? []) {
-        if (sec.rows.length > 10) {
-          problemas.push({
-            stepId: s.id,
-            problema: `seção "${sec.title}" com ${sec.rows.length} linhas; o limite é 10`,
-          });
-        }
+      const secs = s.sections ?? [];
+      // WhatsApp: até 10 seções e NO MÁXIMO 10 linhas somando TODAS as seções (não 10 por seção).
+      if (secs.length > 10) {
+        problemas.push({ stepId: s.id, problema: `${secs.length} seções; o WhatsApp aceita 10` });
+      }
+      if (!s.text?.trim()) {
+        problemas.push({ stepId: s.id, problema: "lista sem mensagem — escreva o texto antes de publicar" });
+      }
+      if (secs.some((sec) => !sec.title?.trim())) {
+        problemas.push({ stepId: s.id, problema: "lista com seção sem título" });
+      }
+      const rows = secs.flatMap((sec) => sec.rows ?? []);
+      if (rows.some((row) => !row.title?.trim())) {
+        problemas.push({ stepId: s.id, problema: "lista com item sem título" });
+      }
+      if (new Set(rows.map((row) => row.id)).size !== rows.length) {
+        problemas.push({ stepId: s.id, problema: "lista com IDs de item repetidos" });
+      }
+      const totalLinhas = secs.reduce((n, sec) => n + (sec.rows?.length ?? 0), 0);
+      if (totalLinhas === 0) {
+        problemas.push({ stepId: s.id, problema: "lista sem nenhuma linha" });
+      }
+      if (totalLinhas > 10) {
+        problemas.push({ stepId: s.id, problema: `${totalLinhas} linhas no total; o WhatsApp aceita 10 somando todas as seções` });
+      }
+      if ((s.text?.length ?? 0) > 1024) {
+        problemas.push({ stepId: s.id, problema: `texto com ${s.text!.length} caracteres; o limite do WhatsApp é 1024` });
       }
     }
     if (s.kind === "media" && !s.media?.url) {
       problemas.push({ stepId: s.id, problema: "media sem url" });
     }
+    if (s.kind === "condition") {
+      if (!s.cond?.field) problemas.push({ stepId: s.id, problema: "condição sem campo" });
+      if (s.cond && (s.cond.op === "igual" || s.cond.op === "diferente" || s.cond.op === "contem") && !s.cond.value?.trim()) {
+        problemas.push({ stepId: s.id, problema: "condição sem valor para comparar" });
+      }
+      if (!s.branches?.sim && !s.branches?.nao) {
+        problemas.push({ stepId: s.id, problema: "condição sem saída sim/não ligada" });
+      }
+    }
+    if (s.kind === "ai") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "agente IA sem a pergunta (texto)" });
+      const ops = s.ai?.opcoes ?? [];
+      if (ops.length < 2) problemas.push({ stepId: s.id, problema: "agente IA precisa de ao menos 2 opções" });
+      for (const o of ops) {
+        if (!o.id) problemas.push({ stepId: s.id, problema: "opção do agente IA sem id" });
+        else if (!s.branches?.[o.id]) problemas.push({ stepId: s.id, problema: `opção "${o.titulo ?? o.id}" sem ramo ligado` });
+      }
+      if (!s.branches?.fallback) problemas.push({ stepId: s.id, problema: "agente IA sem saída de fallback (baixa confiança) ligada" });
+    }
+    if (s.kind === "action") {
+      const a = s.contatoAcao;
+      const temAlgo = (a?.addLabels?.length ?? 0) > 0 || (a?.removeLabels?.length ?? 0) > 0 || !!a?.setNome?.trim();
+      if (!temAlgo) problemas.push({ stepId: s.id, problema: "ação de contato sem nada a fazer (etiqueta ou nome)" });
+    }
+    if (s.kind === "input") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "pergunta aberta sem a mensagem (texto)" });
+      if (!s.input?.var?.trim()) problemas.push({ stepId: s.id, problema: "pergunta aberta sem a variável onde guardar a resposta" });
+      else if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(s.input.var.trim())) {
+        problemas.push({ stepId: s.id, problema: `variável "${s.input.var}" inválida — use letras, números e _ (sem espaço/acento)` });
+      }
+      // precisa de saída: segue por next ou fallbackNext (não ramifica por resposta)
+      if (!s.next && !s.fallbackNext) problemas.push({ stepId: s.id, problema: "pergunta aberta sem próximo passo (next)" });
+    }
+    if (s.kind === "api") {
+      const u = s.api?.url?.trim() ?? "";
+      if (!u) problemas.push({ stepId: s.id, problema: "chamada API sem URL" });
+      else if (!/^https?:\/\//i.test(u)) problemas.push({ stepId: s.id, problema: "URL da chamada API deve começar com http:// ou https://" });
+    }
+    if (s.kind === "goto") {
+      if (!s.gotoFlowId?.trim()) problemas.push({ stepId: s.id, problema: "ir-para-fluxo sem fluxo de destino" });
+    }
+    if (s.kind === "cta") {
+      if (!s.text?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem mensagem" });
+      if (!s.ctaText?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem texto do botão" });
+      if (!s.ctaUrl?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem URL" });
+      else if (!/^https?:\/\//i.test(s.ctaUrl.trim())) {
+        problemas.push({ stepId: s.id, problema: "URL do botão deve começar com http:// ou https://" });
+      }
+    }
     if (s.kind === "text" && !s.text?.trim()) {
       problemas.push({ stepId: s.id, problema: "texto vazio" });
+    }
+    if (s.kind === "text" && (s.text?.length ?? 0) > 4096) {
+      problemas.push({ stepId: s.id, problema: `texto com ${s.text!.length} caracteres; o limite do WhatsApp é 4096` });
     }
     if (s.timeoutMin !== undefined && !s.onTimeout) {
       problemas.push({
@@ -260,7 +544,11 @@ function ciclosSemEspera(flow: Flow): FlowProblema[] {
     const visto = new Set<string>([inicio.id]);
     let atual: FlowStep | undefined = inicio;
     while (atual) {
-      if (esperaResposta(atual) || atual.kind === "wait" || atual.kind === "end") {
+      // goto sai do fluxo (como end): não continua a cadeia aqui.
+      if (
+        esperaResposta(atual) || atual.kind === "wait" ||
+        atual.kind === "end" || atual.kind === "goto"
+      ) {
         break;
       }
       const proximoId = atual.next ?? proximoNaOrdem(flow, atual.id);
@@ -278,4 +566,64 @@ function ciclosSemEspera(flow: Flow): FlowProblema[] {
     }
   }
   return achados;
+}
+
+// ── Variáveis / personalização ──────────────────────────────────────────────
+//
+// Textos do fluxo podem conter `{{chave}}` (ex.: `{{nome}}`, `{{primeiro_nome}}`). No envio,
+// cada chave é trocada pelo valor do contato. Chave desconhecida vira "" (string vazia) — nunca
+// sai `{{x}}` cru pro lead. Puro e serializável, como o resto deste módulo; quem fornece o mapa
+// de valores é o chamador (runner/pump), a partir do contato.
+
+const VAR_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
+
+/** Troca `{{chave}}` pelos valores de `vars` (case-insensitive na chave). Desconhecida → "". */
+export function interpolate(text: string | undefined, vars: Record<string, string>): string {
+  if (!text) return text ?? "";
+  if (!text.includes("{{")) return text;
+  const lower: Record<string, string> = {};
+  for (const k of Object.keys(vars)) lower[k.toLowerCase()] = vars[k];
+  return text.replace(VAR_RE, (_m, chave: string) => lower[chave.toLowerCase()] ?? "");
+}
+
+/** Chaves `{{...}}` usadas em todos os textos do fluxo — para o editor listar/avisar. */
+export function varsUsadas(flow: Flow): string[] {
+  const achadas = new Set<string>();
+  const scan = (t?: string) => {
+    if (!t) return;
+    for (const m of t.matchAll(VAR_RE)) achadas.add(m[1].toLowerCase());
+  };
+  for (const s of flow.steps) {
+    scan(s.text);
+    for (const b of s.buttons ?? []) scan(b.title);
+    for (const sec of s.sections ?? []) {
+      scan(sec.title);
+      for (const r of sec.rows ?? []) { scan(r.title); scan(r.description); }
+    }
+  }
+  return [...achadas];
+}
+
+/**
+ * Devolve uma CÓPIA do step com os textos interpolados pelos valores do contato. Ids, branches,
+ * next etc. ficam intactos (ramificação é por id de botão/linha, não por texto). Usado no envio.
+ */
+export function renderStep(step: FlowStep, vars: Record<string, string>): FlowStep {
+  if (!vars || !Object.keys(vars).length) return step;
+  const s: FlowStep = { ...step };
+  if (s.text !== undefined) s.text = interpolate(s.text, vars);
+  if (s.ctaText !== undefined) s.ctaText = interpolate(s.ctaText, vars);
+  if (s.buttons) s.buttons = s.buttons.map((b) => ({ ...b, title: interpolate(b.title, vars) }));
+  if (s.sections) {
+    s.sections = s.sections.map((sec) => ({
+      ...sec,
+      title: interpolate(sec.title, vars),
+      rows: sec.rows.map((r) => ({
+        ...r,
+        title: interpolate(r.title, vars),
+        description: r.description !== undefined ? interpolate(r.description, vars) : r.description,
+      })),
+    }));
+  }
+  return s;
 }
