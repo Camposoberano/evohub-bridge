@@ -47,6 +47,10 @@ import {
 import { pumpRecoveryChain } from "./shared/recovery-chain.ts";
 import { accountForChannel } from "./shared/accounts.ts";
 import { handle as metaTemplates } from "./handlers/meta-templates.ts";
+import { handle as flows } from "./handlers/flows.ts";
+import { handle as jevTest } from "./handlers/jev-test.ts";
+import { handle as audiences } from "./handlers/audiences.ts";
+import { handle as customerReconcile } from "./handlers/customer-reconcile.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import {
@@ -114,9 +118,11 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts } from "./shared/flow-inbound.ts";
+import { efeitosDoFluxo, flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts, pumpFlowWaits, varsDoContato } from "./shared/flow-inbound.ts";
+import { repairWhatsAppNamesStep } from "./shared/whatsapp-name-sync.ts";
+import { reconcileResponsePriorities } from "./shared/reply-priority.ts";
 import { pumpCampaignAutoVideos } from "./shared/campaign-auto-video.ts";
-import { PACE_PADRAO } from "./shared/campaign-pace.ts";
+import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   chooseCampaignRotation,
   ROTATION_CAMPAIGNS,
@@ -172,6 +178,10 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
   "/meta-templates": metaTemplates,
+  "/flows": flows,
+  "/jev-test": jevTest,
+  "/audiences": audiences,
+  "/customer-reconcile": customerReconcile,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
   "/channel-sync": channelSync,
@@ -1664,6 +1674,23 @@ function startCampaignQueueLoop() {
           }
 
           runFlowIniciado = true;
+          // Variáveis do contato: perfil + snapshot do público (migration 0030, se houver).
+          // Efeitos dos nós de lógica (ação/api/transfer). varsDoContato é tolerante: sem snapshot
+          // ou sem a tabela, cai nas vars de perfil (nome/primeiro_nome/telefone).
+          const vars = await varsDoContato(
+            db,
+            String(canal.id),
+            item.contact_key,
+            campaignId,
+          );
+          const efeitos = efeitosDoFluxo(
+            db,
+            canal as Record<string, unknown>,
+            item.contact_key,
+            vars,
+            null,
+            camp.flow,
+          );
           const r = await runFlow(
             camp.flow,
             ch,
@@ -1671,6 +1698,8 @@ function startCampaignQueueLoop() {
             null,
             checkedAt,
             gravador,
+            vars,
+            efeitos,
           );
           await saveFlowPosition(db, campaignId, item.contact_key, r.position, {
             channelId: String(canal.id),
@@ -1812,6 +1841,80 @@ function startFlowTimeoutLoop() {
   setTimeout(run, 90_000);
   setInterval(run, FLOW_TIMEOUT_INTERVAL_MS);
   console.log("flow-timeout loop ON (2min)");
+}
+
+// Sweeper dos nós `wait` (pausa por tempo): sem ele um fluxo parado num "espera 2 dias" fica
+// pendurado pra sempre. Gated FLOW_WAIT_ENABLED=true (default OFF — nós wait são opt-in).
+const FLOW_WAIT_INTERVAL_MS = 2 * 60_000;
+
+function startFlowWaitLoop() {
+  if (optionalEnv("FLOW_WAIT_ENABLED") !== "true") return;
+  // Trava de reentrância: este loop também envia (retoma o fluxo após a pausa).
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await pumpFlowWaits(admin());
+      if (r.seguiram > 0) console.log("flow-wait:", JSON.stringify(r));
+    } catch (e) {
+      console.error("flow-wait loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 100_000);
+  setInterval(run, FLOW_WAIT_INTERVAL_MS);
+  console.log("flow-wait loop ON (2min)");
+}
+
+// Reparo de nome de contato: busca o perfil na uazapi, confirma a inbox e escreve nome+avatar
+// de volta no Chatwoot (só na conta principal). Uma escrita por ciclo. Gated
+// WHATSAPP_NAME_REPAIR_ENABLED=true (default OFF — toca o Chatwoot, ligar só após validar).
+const WA_NAME_REPAIR_INTERVAL_MS = 3 * 60_000;
+
+function startWhatsAppNameRepairLoop() {
+  if (optionalEnv("WHATSAPP_NAME_REPAIR_ENABLED") !== "true") return;
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await repairWhatsAppNamesStep(admin());
+      if (r === "updated") console.log("whatsapp-name-sync: atualizou um contato");
+    } catch (e) {
+      console.error("whatsapp-name-sync loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 120_000);
+  setInterval(run, WA_NAME_REPAIR_INTERVAL_MS);
+  console.log("whatsapp-name-sync loop ON (3min)");
+}
+
+// Escala a Prioridade nativa do Chatwoot por tempo sem resposta humana (migration 0029). Gated
+// RESPONSE_PRIORITY_ENABLED=true (default OFF — toca prioridade no Chatwoot, ligar após validar).
+const RESPONSE_PRIORITY_INTERVAL_MS = 2 * 60_000;
+
+function startResponsePriorityLoop() {
+  if (optionalEnv("RESPONSE_PRIORITY_ENABLED") !== "true") return;
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await reconcileResponsePriorities(admin());
+      if (r.changed > 0) console.log("reply-priority:", JSON.stringify(r));
+    } catch (e) {
+      console.error("reply-priority loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 140_000);
+  setInterval(run, RESPONSE_PRIORITY_INTERVAL_MS);
+  console.log("reply-priority loop ON (2min)");
 }
 
 // Pedidos "Quero" recebidos fora do expediente: um PDF por minuto, somente 08h–20h.
@@ -1971,6 +2074,9 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
+  startFlowWaitLoop();
+  startWhatsAppNameRepairLoop();
+  startResponsePriorityLoop();
   startDeferredEmbrapaPdfLoop();
   startCampaignQueueLoop();
   startInboundWatchdogLoop();

@@ -12,6 +12,7 @@ import { sendMeta } from "../shared/hub.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
 import { windowState } from "../shared/window.ts";
 import { createConversationMessage } from "../shared/chatwoot.ts";
+import { markHumanReplyByConversation } from "../shared/reply-priority.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import {
   getDirectUazapiRoute,
@@ -633,6 +634,11 @@ export async function handleOutgoing(db: Db, p: Json) {
     });
     if (humanResponseError) {
       console.warn("sales-funnel human response:", String(humanResponseError).slice(0, 120));
+    }
+    // Zera a escalada de prioridade (reply-priority): o atendente respondeu. Gated e best-effort.
+    if (optionalEnv("RESPONSE_PRIORITY_ENABLED") === "true") {
+      try { await markHumanReplyByConversation(db, String(conv.id)); }
+      catch (e) { console.warn("reply-priority: markHumanReply falhou", String(e).slice(0, 120)); }
     }
   }
 

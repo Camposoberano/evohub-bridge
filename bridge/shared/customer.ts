@@ -1,4 +1,5 @@
 import type { DbClient } from "./supabase.ts";
+import { bestContactName } from "./contact-name.ts";
 
 type Json = Record<string, unknown>;
 
@@ -27,6 +28,9 @@ export async function ensureCustomer(
     name?: string | null;
     avatarUrl?: string | null;
     attributes?: Json;
+    // quando true, o nome passa por bestContactName: rejeita lixo (telefone/JID/mojibake) e
+    // nunca sobrescreve um nome bom já salvo (ex.: corrigido por humano).
+    validateName?: boolean;
   },
 ): Promise<string> {
   const identity = customerIdentityKey(
@@ -41,7 +45,9 @@ export async function ensureCustomer(
     identity_key: identity.key,
     canonical_phone: identity.normalizedPhone || existing?.canonical_phone ||
       null,
-    display_name: input.name || existing?.display_name || null,
+    display_name: input.validateName
+      ? bestContactName(existing?.display_name, [input.name])
+      : (input.name || existing?.display_name || null),
     avatar_url: input.avatarUrl || existing?.avatar_url || null,
     attributes: {
       ...((existing?.attributes as Json) ?? {}),

@@ -27,6 +27,16 @@ export function textoDoStep(step: FlowStep): string {
   return step.text?.trim() ?? "";
 }
 
+/**
+ * Canal NATIVO (integração direta Uazapi↔Chatwoot) → a saída do fluxo NÃO pode ser postada no
+ * Chatwoot: a integração nativa redispararia a mensagem (lead recebe duas). Decisão isolada e pura
+ * para teste; o gravador só repassa como `skipChatwoot`. (Coluna channels.native_chatwoot; ausente
+ * no EvoHub → sempre false, comportamento inalterado.)
+ */
+export function pularChatwootNativo(channel: Json): boolean {
+  return (channel as { native_chatwoot?: unknown }).native_chatwoot === true;
+}
+
 /** Tipo de mensagem equivalente, para o histórico ficar igual ao de qualquer outra saída. */
 export function msgTypeDoStep(step: FlowStep): string {
   if (step.kind === "media") return step.media?.type ?? "document";
@@ -46,7 +56,8 @@ export function gravadorDeFluxo(
   to: string,
   acct?: CwAcct,
 ): OnStepSent {
-  return async (step: FlowStep) => {
+  const nativo = pularChatwootNativo(channel);
+  return async (step: FlowStep, providerMessageId?: string) => {
     // Sem anexo de propósito: `InboundAttachment` exige os bytes, e baixar cada vídeo só
     // para registrar duplicaria o tráfego. O que resolve o problema do atendente é o TEXTO
     // — ele precisa ver a pergunta que gerou a resposta, não rever o vídeo no Chatwoot.
@@ -55,10 +66,10 @@ export function gravadorDeFluxo(
       msgType: msgTypeDoStep(step),
       content: textoDoStep(step),
       outgoing: true,
+      skipChatwoot: nativo,
+      metaMessageId: providerMessageId,
       acct,
       labels: step.labels,
-      // Sem id do provedor: `ingestInbound` cai na chave de dedupe por conteúdo, o que já
-      // impede a mesma peça de entrar duas vezes se o passo for reprocessado.
     });
   };
 }

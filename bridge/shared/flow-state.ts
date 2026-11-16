@@ -4,6 +4,7 @@
 // num fluxo interativo cada resposta é uma escrita — duas respostas simultâneas fariam a
 // segunda sobrescrever a primeira, e o lead perderia o lugar na conversa.
 import { publicTable, type DbClient } from "./supabase.ts";
+import { equivalentBrazilianPhoneKeys } from "./phone-keys.ts";
 import type { FlowPosition } from "./flow-runner.ts";
 
 export type FlowStateRow = {
@@ -30,9 +31,9 @@ export async function saveFlowPosition(
   campaignId: string,
   contact: string,
   position: FlowPosition,
-  extra?: { conversationId?: string | null; channelId?: string | null },
+  extra?: { conversationId?: string | null; channelId?: string | null; flowRef?: string | null },
 ): Promise<void> {
-  const { error } = await publicTable(db, "campaign_flow_state").upsert({
+  const row: Record<string, unknown> = {
     campaign_id: campaignId,
     contact_key: contactKey(contact),
     conversation_id: extra?.conversationId ?? null,
@@ -41,8 +42,104 @@ export async function saveFlowPosition(
     waiting_since: position.waitingSince ?? null,
     status: position.done || !position.stepId ? "done" : "waiting",
     updated_at: new Date().toISOString(),
+  };
+  // `flow_ref` (nó goto, migration 0018) só entra no upsert quando o chamador passa — e ele só
+  // passa com FLOW_GOTO_ENABLED (= migration já aplicada). Omitido → a coluna nem é referenciada,
+  // então o código roda normal antes da migration existir.
+  if (extra?.flowRef !== undefined) row.flow_ref = extra.flowRef;
+  const { error } = await publicTable(db, "campaign_flow_state")
+    .upsert(row, { onConflict: "campaign_id,contact_key" });
+  if (error) throw error;
+}
+
+/**
+ * Lê o `flow_ref` do contato (nó goto): qual fluxo publicado ele passou a seguir. Isolado e
+ * tolerante — se a coluna ainda não existe (migration 0018 não aplicada) devolve null em vez de
+ * quebrar. Só é chamado com FLOW_GOTO_ENABLED.
+ */
+export async function flowRefDoContato(
+  db: DbClient,
+  campaignId: string,
+  contact: string,
+): Promise<string | null> {
+  try {
+    const { data } = await publicTable(db, "campaign_flow_state")
+      .select("flow_ref")
+      .eq("campaign_id", campaignId)
+      .eq("contact_key", contactKey(contact))
+      .maybeSingle();
+    return (data?.flow_ref as string | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Gatilho de fluxo na resposta (migration 0023) ───────────────────────────
+// Campanha "modo gatilho" manda o 1º toque e ARMA aqui; a resposta do lead inicia o fluxo.
+
+/** Arma o gatilho pra (campanha, contato): após o 1º toque, a resposta vai iniciar o fluxo. */
+export async function armarGatilho(
+  db: DbClient,
+  campaignId: string,
+  channelId: string,
+  contact: string,
+): Promise<void> {
+  const { error } = await publicTable(db, "flow_triggers").upsert({
+    campaign_id: campaignId,
+    channel_id: channelId,
+    contact_key: contactKey(contact),
+    status: "armed",
+    armed_at: new Date().toISOString(),
+    fired_at: null,
   }, { onConflict: "campaign_id,contact_key" });
   if (error) throw error;
+}
+
+/** Gatilho armado pra (canal, contato), se houver — o mais recente. */
+export async function acharGatilhoArmado(
+  db: DbClient,
+  channelId: string,
+  contact: string,
+): Promise<{ id: string; campaignId: string } | null> {
+  const { data } = await publicTable(db, "flow_triggers")
+    .select("id,campaign_id")
+    .eq("channel_id", channelId)
+    .eq("contact_key", contactKey(contact))
+    .eq("status", "armed")
+    .order("armed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  return data ? { id: String(data.id), campaignId: String(data.campaign_id) } : null;
+}
+
+/** Dispara o gatilho uma vez só: armed→done atômico. Quem perde a corrida recebe false. */
+export async function claimGatilho(db: DbClient, id: string): Promise<boolean> {
+  const { data, error } = await publicTable(db, "flow_triggers")
+    .update({ status: "done", fired_at: new Date().toISOString() })
+    .eq("id", id)
+    .eq("status", "armed")
+    .select("id");
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
+/** Ignora a cópia de um segundo provedor da escolha do template depois que o gatilho disparou. */
+export async function gatilhoDisparadoRecentemente(
+  db: DbClient,
+  channelId: string,
+  contact: string,
+  seconds = 30,
+): Promise<boolean> {
+  const since = new Date(Date.now() - seconds * 1000).toISOString();
+  const { data, error } = await publicTable(db, "flow_triggers")
+    .select("id")
+    .eq("channel_id", channelId)
+    .eq("contact_key", contactKey(contact))
+    .eq("status", "done")
+    .gte("fired_at", since)
+    .limit(1);
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
 }
 
 /**
@@ -181,6 +278,7 @@ export async function cancelDeferredFlow(
 export async function findWaitingFlow(
   db: DbClient,
   contact: string,
+  channelId?: string | null,
 ): Promise<FlowStateRow | null> {
   const { data, error } = await publicTable(db, "campaign_flow_state")
     .select(
@@ -189,10 +287,57 @@ export async function findWaitingFlow(
     .eq("contact_key", contactKey(contact))
     .eq("status", "waiting")
     .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(10);
   if (error) throw error;
-  return (data as FlowStateRow | null) ?? null;
+  const rows = (data ?? []) as FlowStateRow[];
+  if (!rows.length) return null;
+  // Sem canal (chamada legada): mantém o comportamento antigo (o mais recente).
+  if (channelId == null) return rows[0];
+  // Com canal: SÓ avança o fluxo que pertence a ESTE canal — a resposta chegou por ele. Impede
+  // que a resposta num canal faça o próximo passo sair por outro número, ou roube o fluxo de
+  // outro canal (cenário multi-número). Linha legada sem channel_id gravado entra como fallback.
+  const doCanal = rows.find((r) => String(r.channel_id ?? "") === String(channelId));
+  if (doCanal) return doCanal;
+  return rows.find((r) => r.channel_id == null) ?? null;
+}
+
+/**
+ * Fluxo em espera neste canal cuja chave é uma VARIANTE de 9º dígito do número que respondeu.
+ *
+ * Por quê: a campanha pode ter gravado a espera com o número COM o 9º dígito (13) e a resposta
+ * chegar SEM ele (12), ou vice-versa — são o mesmo celular. `findWaitingFlow` casa exato e não
+ * encontra; o fluxo trava. O caminho LGT já reescreve a chave antes; aqui cobrimos os outros canais.
+ *
+ * SEGURANÇA — só casa quando é inequívoco: `equivalentBrazilianPhoneKeys` só gera par para celular
+ * BR válido (a variante é o próprio número ±9º dígito, nunca um número distinto), e a guarda de
+ * unicidade abaixo recusa se houver mais de uma chave em espera entre as variantes. O chamador
+ * deve REESCREVER o `from` para `contact_key` do fluxo devolvido, senão claim/save/vars não casam.
+ */
+export async function findWaitingFlowPorVariante(
+  db: DbClient,
+  contact: string,
+  channelId: string,
+): Promise<FlowStateRow | null> {
+  const variantes = equivalentBrazilianPhoneKeys(contact);
+  if (variantes.length < 2) return null; // não é celular BR com par de 9º dígito
+  const chaves = [...new Set(variantes.map((v) => contactKey(v)))];
+  const { data, error } = await publicTable(db, "campaign_flow_state")
+    .select(
+      "campaign_id,contact_key,conversation_id,channel_id,step_id,waiting_since,status",
+    )
+    .in("contact_key", chaves)
+    .eq("status", "waiting")
+    .order("updated_at", { ascending: false })
+    .limit(10);
+  if (error) throw error;
+  const rows = ((data ?? []) as FlowStateRow[])
+    .filter((r) => r.step_id && String(r.channel_id ?? "") === String(channelId));
+  if (!rows.length) return null;
+  // Guarda de unicidade: duas pessoas/campanhas distintas em espera entre as variantes → não
+  // adivinha (pior caso = o fluxo segue preso, nunca avança pela chave errada).
+  const chavesEmEspera = new Set(rows.map((r) => r.contact_key));
+  if (chavesEmEspera.size !== 1) return null;
+  return rows[0]; // mais recente (order by updated_at desc)
 }
 
 /**
