@@ -23,7 +23,7 @@ import {
 import { handle as funilControl } from "./funil-control.ts";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
 import { scheduleSevenDayPieces, scheduleSevenDayTestPieces } from "../shared/mega-sorgo-7d-schedule.ts";
-import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
 import { isSevenDayNightTest } from "../shared/mega-sorgo-7d-night-test.ts";
 
 type Json = Record<string, unknown>;
@@ -190,7 +190,8 @@ export function validateEnqueueBody(
   }
   if (action === "funil") {
     if (request.funnel_version === MEGA_SORGO_7D_VERSION) {
-      if (request.source !== "macro") {
+      // Macro (teste/manual) sempre; anúncio só no rollout ao vivo (auto-enroll de lead novo).
+      if (request.source !== "macro" && !(sevenDayLiveMode() && request.source === "ad")) {
         return { ok: false, error: "catálogo de teste de sete dias inválido" };
       }
       return { ok: true, value: body as EnqueueBody };
@@ -315,8 +316,8 @@ export async function handle(req: Request): Promise<Response> {
   const isSevenDayTest = body.request.funnel_version === MEGA_SORGO_7D_VERSION;
   if (!channel || (isSevenDayTest
     ? !isSevenDayWhatsAppChannel(channel) ||
-      body.request.source !== "macro" ||
-      !sevenDayTestConversationAllowed(body.request.chatwoot_conversation_id)
+      (body.request.source !== "macro" && !(sevenDayLiveMode() && body.request.source === "ad")) ||
+      !sevenDayConversationAllowed(body.request.chatwoot_conversation_id)
     : funnelVersionForChannel(channel) !== body.request.funnel_version)) {
     return json({ ok: false, error: "canal ou versão não autorizada", terminal: true }, 422);
   }

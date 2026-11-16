@@ -49,7 +49,7 @@ import {
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 import { resumeSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
 
 /**
@@ -143,7 +143,7 @@ export async function handle(req: Request): Promise<Response> {
   }
   const sevenDayTest = body.funnel_version === MEGA_SORGO_7D_VERSION;
   if (sevenDayTest && (!isSevenDayWhatsAppChannel(controlChannel) ||
-    !sevenDayTestConversationAllowed(cwConvId))) {
+    !sevenDayConversationAllowed(cwConvId))) {
     return json({ error: "conversa de teste não autorizada", terminal: true }, 422);
   }
   const funnelId = sevenDayTest ? MEGA_SORGO_7D_VERSION : mainFunnelForChannel(controlChannel);

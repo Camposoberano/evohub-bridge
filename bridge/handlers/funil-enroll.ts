@@ -51,6 +51,8 @@ import {
 import { socialLeadEntry, type SocialLeadEntry } from "../shared/social-lead-entry.ts";
 import { isLogisticaIntent } from "../shared/intent.ts";
 import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
+import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
+import { isSevenDayWhatsAppChannel, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
@@ -1250,6 +1252,52 @@ export async function enrollIfNew(
   if (!options.conversation && !conv) return "no_contact";
   if (!conv) return "no_conversation";
   if (!conv.chatwoot_conversation_id) return "no_conversation";
+
+  // Rollout do funil de 7 dias: com MEGA_SORGO_7D_LIVE=true, todo lead novo dos canais
+  // 5895/6836 entra no 7d em vez da régua restaurada de 30/09. O enqueue do 7d usa o
+  // catálogo interno (41 peças) e recusa a conversa que já tem outro funil ativo — então
+  // leads que já estão no funil antigo seguem nele até terminar. Import dinâmico porque
+  // n8n-action-enqueue importa deste módulo (evita ciclo estático).
+  if (sevenDayLiveMode() && isSevenDayWhatsAppChannel(channel)) {
+    const secret = optionalEnv("N8N_ACTION_SECRET");
+    if (!secret) throw new Error("N8N_ACTION_SECRET ausente para enroll do 7d");
+    const { handle: enqueueSevenDay } = await import("./n8n-action-enqueue.ts");
+    const response = await enqueueSevenDay(
+      new Request("http://internal/n8n-action-enqueue", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${secret}`,
+        },
+        body: JSON.stringify({
+          request: {
+            request_id: `7d-conversation:${conv.id}`,
+            source: options.manual ? "macro" : "ad",
+            chatwoot_conversation_id: Number(conv.chatwoot_conversation_id),
+            action: "funil",
+            funnel_version: MEGA_SORGO_7D_VERSION,
+          },
+          pieces: [],
+        }),
+      }),
+    );
+    const result = await response.json().catch(() => ({})) as Json;
+    // Conversa já em outro funil (antigo running) não migra: fica no que está.
+    if (result.error === "conversa já tem outro funil ativo") return "already";
+    if (!response.ok || result.ok === false) {
+      throw new Error(`enroll 7d: ${result.error ?? response.status}`);
+    }
+    console.log(
+      "enrollIfNew 7d:",
+      "conv",
+      conv.chatwoot_conversation_id,
+      result.duplicate ? "already" : "created",
+      "accepted",
+      result.accepted ?? 0,
+    );
+    return result.duplicate ? "already" : "created";
+  }
+
   const funnelId = mainFunnelForChannel(channel);
 
   // Toda porta de inscrição do 5895 (anúncio, macro, saudação e watchdog)

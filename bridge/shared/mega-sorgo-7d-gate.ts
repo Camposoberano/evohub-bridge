@@ -15,3 +15,22 @@ export function sevenDayTestConversationAllowed(
   if (!Number.isSafeInteger(chatwootConversationId) || chatwootConversationId <= 0) return false;
   return allowlist.split(",").some((raw) => raw.trim() === String(chatwootConversationId));
 }
+
+/**
+ * Rollout geral: com MEGA_SORGO_7D_LIVE=true o funil de 7 dias deixa de ser ensaio por
+ * allowlist e passa a valer para qualquer lead novo dos canais 5895/6836. Sem a flag,
+ * o comportamento "fail closed" por conversa de teste é mantido.
+ */
+export function sevenDayLiveMode(): boolean {
+  return (optionalEnv("MEGA_SORGO_7D_LIVE") ?? "") === "true";
+}
+
+/** Conversa autorizada a receber o 7d: ao vivo libera qualquer conversa real; senão só a allowlist. */
+export function sevenDayConversationAllowed(
+  chatwootConversationId: number,
+  allowlist = optionalEnv("MEGA_SORGO_7D_TEST_CONVERSATIONS") ?? "",
+): boolean {
+  if (!Number.isSafeInteger(chatwootConversationId) || chatwootConversationId <= 0) return false;
+  if (sevenDayLiveMode()) return true;
+  return sevenDayTestConversationAllowed(chatwootConversationId, allowlist);
+}

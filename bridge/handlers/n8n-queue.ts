@@ -12,7 +12,7 @@ import { handle as sendOutbound } from "./send-outbound.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "../shared/lead-block.ts";
 import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayTestConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 import { isSevenDaySendHour } from "../shared/mega-sorgo-7d-schedule.ts";
 import { isSevenDayNightTest, isSevenDayNightTestWindow } from "../shared/mega-sorgo-7d-night-test.ts";
 import { transitionSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
@@ -144,7 +144,7 @@ async function send(req: Request): Promise<Response> {
     return json({ ok: true, sent: false, not_due: true });
   }
   if (isSevenDay && ((!isSevenDaySendHour() && !nightTest) ||
-    !sevenDayTestConversationAllowed(Number(row.chatwoot_conversation_id)))) {
+    !sevenDayConversationAllowed(Number(row.chatwoot_conversation_id)))) {
     return json({ ok: true, sent: false, blocked: "teste-7d-nao-autorizado" });
   }
   const { data: conversation, error: conversationError } = await db.from("conversations")
