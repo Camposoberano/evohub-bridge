@@ -5,6 +5,9 @@ import {
   resolveActionMedia,
   validateEnqueueBody,
 } from "../handlers/n8n-action-enqueue.ts";
+import { SEVEN_DAY_CONTENT } from "../shared/mega-sorgo-7d-content.ts";
+import { scheduleSevenDayPieces } from "../shared/mega-sorgo-7d-schedule.ts";
+import { actionKey } from "../shared/n8n-action-contract.ts";
 
 const request = {
   request_id: "inbound-3509-1",
@@ -13,6 +16,40 @@ const request = {
   action: "funil" as const,
   funnel_version: "mega-sorgo-5895-20260930",
 };
+
+Deno.test("versão sete dias só aceita macro de teste e preserva identidade própria", async () => {
+  const seven = { ...request, source: "macro" as const,
+    funnel_version: "mega-sorgo-7d-v1" };
+  const parsed = validateEnqueueBody({ request: seven, pieces: [] });
+  assertEquals(parsed.ok, true);
+  assertEquals(validateEnqueueBody({ request: { ...seven, source: "ad" }, pieces: [] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: seven,
+    pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...seven, action: "preco" },
+    pieces: [{ day: 0, type: "text", payload: { content: "Preço" }, offset_seconds: 0 }] }).ok, false);
+  assertEquals(actionKey(seven).includes("mega-sorgo-7d-v1"), true);
+  if (!parsed.ok) return;
+  parsed.value.pieces = SEVEN_DAY_CONTENT.map((piece) => ({
+    code: piece.code, day: piece.day, type: piece.type,
+    payload: piece.payload, offset_seconds: 0,
+  }));
+  const rows = await buildActionRows(parsed.value, "conversation-test", Date.parse("2026-11-09T13:00:00Z"));
+  assertEquals(rows.length, 33);
+  assertEquals(rows[0].send_at, "2026-11-09T13:00:00.000Z");
+  assertEquals(rows.find((row) => row.day === 5)?.send_at,
+    scheduleSevenDayPieces(SEVEN_DAY_CONTENT, Date.parse("2026-11-09T13:00:00Z"))
+      .find((row) => row.day === 5)?.sendAt);
+  assertEquals(rows.every((row) => row.funnel === "mega-sorgo-7d-v1"), true);
+  const fast = validateEnqueueBody({ request: { ...seven, test_accelerated: true }, pieces: [] });
+  assertEquals(fast.ok, true);
+  if (fast.ok) {
+    fast.value.pieces = parsed.value.pieces;
+    const fastRows = await buildActionRows(fast.value, "conversation-test", Date.parse("2026-11-09T13:00:00Z"));
+    assertEquals(fastRows[1].send_at, "2026-11-09T13:05:00.000Z");
+  }
+  assertEquals(validateEnqueueBody({ request: { ...seven, source: "ad", test_accelerated: true }, pieces: [] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...request, test_accelerated: true }, pieces: [] }).ok, false);
+});
 
 Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
   assertEquals(validateEnqueueBody({ request: { ...request, funnel_version: "mega-sorgo-5895-v2" }, pieces: [] }).ok, false);

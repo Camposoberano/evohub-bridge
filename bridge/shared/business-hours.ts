@@ -1,9 +1,9 @@
 // Janela operacional do funil em horário de Brasília (UTC-3).
-// Fixada em 08:00–20:00 BRT (decisão do dono 2026-11-14): disparo frio não sai cedo demais
-// nem tarde demais. O corte cinco minutos antes das 20h deixa margem para a entrega terminar
-// dentro da janela, mesmo quando o envio demora ou a fila está processando um lote.
+// Fixada em 07:00–20:00 BRT (decisão do dono 2026-11-15): abre às 7h pra ganhar o começo da
+// manhã. O corte cinco minutos antes das 20h deixa margem para a entrega terminar dentro da
+// janela, mesmo quando o envio demora ou a fila está processando um lote.
 const BRT_OFFSET_MINUTES = 180;
-export const FUNNEL_OPEN_MINUTE = 8 * 60;
+export const FUNNEL_OPEN_MINUTE = 7 * 60;
 const CLOSE_MINUTE = 20 * 60;
 export const FUNNEL_CLOSE_BUFFER_MINUTES = 5;
 export const FUNNEL_CUTOFF_MINUTE = CLOSE_MINUTE - FUNNEL_CLOSE_BUFFER_MINUTES;
@@ -18,7 +18,7 @@ export function isWithinFunnelSendHours(at = Date.now()): boolean {
   return minute >= FUNNEL_OPEN_MINUTE && minute < FUNNEL_CUTOFF_MINUTE;
 }
 
-/** Próxima abertura às 08:00 BRT; se já passou do corte, usa o dia seguinte. */
+/** Próxima abertura às 07:00 BRT; se já passou do corte, usa o dia seguinte. */
 export function nextFunnelSendAt(at = Date.now()): number {
   const brt = new Date(at - BRT_OFFSET_MINUTES * 60_000);
   const minute = brt.getUTCHours() * 60 + brt.getUTCMinutes();

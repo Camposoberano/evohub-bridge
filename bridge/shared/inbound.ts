@@ -1,6 +1,6 @@
 // Ingestão comum de mensagens recebidas: cria contato/conversa no Chatwoot
 // e persiste a mensagem no Supabase com dedupe por meta_message_id.
-import { claimDelivery, type DbClient, releaseDelivery } from "./supabase.ts";
+import { claimDelivery, claimDeliveryWithTtl, type DbClient, releaseDelivery } from "./supabase.ts";
 import { ensureCustomer } from "./customer.ts";
 import {
   mergeLeadAttributes,
@@ -25,6 +25,9 @@ import {
 } from "./chatwoot.ts";
 import { resumeWindowHeldMessages } from "./social-window-hold.ts";
 import { autoPauseFunil } from "./funnel-state.ts";
+import { applySevenDayInboundState } from "./mega-sorgo-7d-state.ts";
+import { enqueueSevenDayVideos } from "./mega-sorgo-7d-videos.ts";
+import { sevenDayTestConversationAllowed } from "./mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -85,6 +88,7 @@ export type IngestInboundMessage = {
   referral?: Json; // CTWA/free entry point (ad_id, ctwa_clid, source_url...) -> origem='anuncio' (janela 72h)
   avatarUrl?: string; // foto fornecida pelo canal; WhatsApp pode completar no avatar-sync
   labels?: string[]; // etiquetas declarativas aplicadas após uma saída ser aceita
+  buttonClickId?: string | null; // clique de fluxo segue o ramo, sem pausa por texto livre
 };
 
 export async function ingestInbound(
@@ -254,9 +258,35 @@ async function ingestInboundClaimed(
   if (convQueryError) throw convQueryError;
 
   let conv = openConv as Json | null;
+  // Dois eventos diferentes do mesmo contato podem passar pela consulta acima
+  // antes de qualquer um inserir a conversa. Serializa só a criação, inclusive
+  // entre containers, usando a PK de deliveries.
+  let conversationClaim: string | null = null;
+  if (!conv) {
+    const key = `wa-conversation-${channel.id}-${contact.id}`;
+    let acquired = false;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      if (await claimDeliveryWithTtl(db, key, "conversation-create", 15 * 60_000)) {
+        acquired = true;
+        conversationClaim = key;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!acquired) throw new Error("conversa em criação; retentar webhook");
+    const { data: winner, error: winnerError } = await db.from("conversations")
+      .select("*").eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+    if (winnerError) {
+      await releaseDelivery(db, conversationClaim);
+      throw winnerError;
+    }
+    conv = winner as Json | null;
+  }
   const previouslyMarkedAsAd = conv?.origem === "anuncio";
-  const effectiveReferral = msg.referral ?? (openConv?.referral as Json | null) ?? null;
+  const effectiveReferral = msg.referral ?? (conv?.referral as Json | null) ?? null;
   const source = sourceSnapshot(channel, msg.from, effectiveReferral);
+  try {
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
     let cwConv: { id: number } | null = null;
@@ -322,6 +352,10 @@ async function ingestInboundClaimed(
       .update(sourceUpdate).eq("id", conv.id);
     if (sourceUpdateError) throw sourceUpdateError;
     conv = { ...conv, ...sourceUpdate };
+  }
+
+  } finally {
+    if (conversationClaim) await releaseDelivery(db, conversationClaim);
   }
 
   // A referência da Meta é o sinal de origem, independentemente do texto enviado.
@@ -590,6 +624,16 @@ async function ingestInboundClaimed(
   // renovada em cada mensagem; os roteadores podem promovê-la para espera humana sem prazo.
   if (!msg.outgoing) {
     try {
+      if (conv.chatwoot_conversation_id &&
+        sevenDayTestConversationAllowed(Number(conv.chatwoot_conversation_id))) {
+        await applySevenDayInboundState(db, String(conv.id), {
+          content: msg.content,
+          clickId: msg.buttonClickId,
+        });
+        if (msg.buttonClickId === "video_7d_sim") {
+          await enqueueSevenDayVideos(db, String(conv.id), Number(conv.chatwoot_conversation_id));
+        }
+      }
       const paused = await autoPauseFunil(
         String(conv.id),
         "resposta_cliente",

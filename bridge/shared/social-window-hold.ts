@@ -1,6 +1,7 @@
 import type { DbClient } from "./supabase.ts";
 import { RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
 import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
+import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
 import { windowState } from "./window.ts";
 
 type Json = Record<string, unknown>;
@@ -12,7 +13,8 @@ export function isN8nManagedFunnel(funnel: unknown): boolean {
   const value = String(funnel ?? "");
   return value === RESTORED_5895_FUNNEL ||
     value.startsWith(`${RESTORED_5895_FUNNEL}:`) ||
-    value === SOCIAL_N8N_FUNNEL || value.startsWith(`${SOCIAL_N8N_FUNNEL}:`);
+    value === SOCIAL_N8N_FUNNEL || value.startsWith(`${SOCIAL_N8N_FUNNEL}:`) ||
+    value === MEGA_SORGO_7D_VERSION || value.startsWith(`${MEGA_SORGO_7D_VERSION}:`);
 }
 
 export function rebaseWindowHeldRows(

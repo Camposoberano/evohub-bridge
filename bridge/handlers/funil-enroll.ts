@@ -37,11 +37,9 @@ import {
 import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 import {
-  canalAlvoFunil,
   deveEncaminharPerguntaDeAnuncio,
   deveIgnorarInscricaoHistorica,
   suprimirAberturaGenerica,
-  usaNovoFunilNoCanal,
 } from "../shared/funil-anuncio.ts";
 import {
   LEGACY_MAIN_FUNNEL,
@@ -56,9 +54,8 @@ import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
-const CANAL_ANUNCIO_ALVO = "5895";
-// Jornada estendida: os intervalos contam apenas dentro de 08h-19h55 BRT e começam no fim
-// da fase anterior. O corte às 19h55 protege o limite de 20h; às 08h continua o saldo.
+// Jornada estendida: os intervalos contam apenas dentro de 07h-19h55 BRT e começam no fim
+// da fase anterior. O corte às 19h55 protege o limite de 20h; às 07h continua o saldo.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
 export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
 // modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
@@ -482,10 +479,7 @@ export async function handle(req: Request): Promise<Response> {
   if (!funnelChannel) {
     return json({ error: "canal da conversa não encontrado" }, 500);
   }
-  const usaReguaDoCanal = usaNovoFunilNoCanal(
-    funnelChannel,
-    CANAL_ANUNCIO_ALVO,
-  );
+  const usaReguaDoCanal = funnelVersionForChannel(funnelChannel) === RESTORED_5895_FUNNEL;
   const funnelId = mainFunnelForChannel(funnelChannel);
   const fasesDaInscricao = usaReguaDoCanal ? FASES : FASES_FORA_DO_ANUNCIO;
   const duracaoDaFase = usaReguaDoCanal
@@ -1405,7 +1399,7 @@ export async function recoverEligibleFunnels(
     const channel = channelMap.get(String(conversation.channel_id)) as
       | Json
       | undefined;
-    if (!channel || !canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) continue;
+    if (!channel || funnelVersionForChannel(channel) !== RESTORED_5895_FUNNEL) continue;
     if ((inboundCounts.get(String(conversation.id)) ?? 0) > 1 &&
       conversation.origem !== "anuncio") continue;
     const content = latestInbound.get(String(conversation.id)) ?? "";

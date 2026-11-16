@@ -67,8 +67,14 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const since15m = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
   const since5m = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
   const overdue = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
+  const channelsResult = await db.from("channels").select(
+    "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
+  ).order("name");
+  if (channelsResult.error) throw channelsResult.error;
+  const channels = (channelsResult.data ?? []) as Json[];
+  const id5895 = String(channels.find((item) => item.name === "5895")?.id ?? "00000000-0000-0000-0000-000000000000");
+  const id6836 = String(channels.find((item) => item.name === "6836")?.id ?? "00000000-0000-0000-0000-000000000000");
   const [
-    channelsResult,
     failedMessages15m,
     failedMessages24h,
     overdueQueue,
@@ -78,9 +84,6 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     overdue5895Queue,
     media5895Result,
   ] = await Promise.all([
-    db.from("channels").select(
-      "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
-    ).order("name"),
     exactCount(
       db.from("messages").select("id", { count: "exact", head: true })
         .eq("status", "failed").gte("sent_at", since15m),
@@ -100,8 +103,9 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     )
       .eq("origem", "anuncio").gte("opened_at", since24h).limit(3000),
     db.from("scheduled_messages")
-        .select("chatwoot_conversation_id", { count: "exact" })
+        .select("chatwoot_conversation_id,conversations!inner(channel_id)", { count: "exact" })
         .eq("funnel", RESTORED_5895_FUNNEL).eq("type", "video")
+        .eq("conversations.channel_id", id5895)
         .eq("status", "failed")
         .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
         .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
@@ -109,24 +113,53 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
         .is("payload->__funnel_delivery->>followups_released_at", null)
         .limit(20),
     exactCount(
-      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+      db.from("scheduled_messages").select("id,conversations!inner(channel_id)", { count: "exact", head: true })
         .eq("status", "pending")
         .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+        .eq("conversations.channel_id", id5895)
         .lt("send_at", overdue),
     ),
     db.from("scheduled_messages")
-      .select("id,chatwoot_conversation_id,step,type,status,payload")
+      .select("id,chatwoot_conversation_id,step,type,status,payload,conversations!inner(channel_id)")
       .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+      .eq("conversations.channel_id", id5895)
       .eq("status", "failed")
       .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
       .limit(1000),
   ]);
-  if (channelsResult.error) throw channelsResult.error;
   if (recentContacts.error) throw recentContacts.error;
   if (adConversations.error) throw adConversations.error;
   if (unconfirmed5895VideosResult.error) throw unconfirmed5895VideosResult.error;
   if (media5895Result.error) throw media5895Result.error;
   const media5895Blocks = mediaBlocks5895((media5895Result.data ?? []) as Json[]);
+  const [unconfirmed6836VideosResult, overdue6836Queue, media6836Result] = await Promise.all([
+    db.from("scheduled_messages")
+      .select("chatwoot_conversation_id,conversations!inner(channel_id)", { count: "exact" })
+      .eq("funnel", RESTORED_5895_FUNNEL).eq("type", "video")
+      .eq("conversations.channel_id", id6836).eq("status", "failed")
+      .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+      .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
+      .lte("payload->__funnel_delivery->>last_attempt_at", since5m)
+      .is("payload->__funnel_delivery->>followups_released_at", null).limit(20),
+    exactCount(db.from("scheduled_messages")
+      .select("id,conversations!inner(channel_id)", { count: "exact", head: true })
+      .eq("status", "pending").like("funnel", `${RESTORED_5895_FUNNEL}%`)
+      .eq("conversations.channel_id", id6836).lt("send_at", overdue)),
+    db.from("scheduled_messages")
+      .select("id,chatwoot_conversation_id,step,type,status,payload,conversations!inner(channel_id)")
+      .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+      .eq("conversations.channel_id", id6836).eq("status", "failed")
+      .eq("payload->__funnel_delivery->>last_outcome", "uncertain").limit(1000),
+  ]);
+  if (unconfirmed6836VideosResult.error) throw unconfirmed6836VideosResult.error;
+  if (media6836Result.error) throw media6836Result.error;
+  const media6836Blocks = mediaBlocks5895((media6836Result.data ?? []) as Json[]);
+  const unconfirmed6836Videos = unconfirmed6836VideosResult.count ?? 0;
+  const unconfirmed6836Conversations = [...new Set(
+    ((unconfirmed6836VideosResult.data ?? []) as Json[])
+      .map((row) => Number(row.chatwoot_conversation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
   const unconfirmed5895Videos = unconfirmed5895VideosResult.count ?? 0;
   const unconfirmed5895Conversations = [...new Set(
     ((unconfirmed5895VideosResult.data ?? []) as Json[])
@@ -134,7 +167,6 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       .filter((id) => Number.isInteger(id) && id > 0),
   )];
 
-  const channels = (channelsResult.data ?? []) as Json[];
   const contacts = (recentContacts.data ?? []) as Json[];
   const ads = (adConversations.data ?? []) as Json[];
   const channelTypeById = new Map(
@@ -617,11 +649,17 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "warning",
       count: failedMessages24h,
     },
-    { key: "overdue_funnel_queue", severity: "critical", count: Math.max(0, overdueQueue - overdue5895Queue) },
+    { key: "overdue_funnel_queue", severity: "critical", count: Math.max(0, overdueQueue - overdue5895Queue - overdue6836Queue) },
+    { key: "funnel_overdue_6836", severity: "critical", count: overdue6836Queue },
     {
       key: "5895_media_blocked", severity: "critical",
       count: media5895Blocks.length,
       detail: mediaBlocks5895Detail(media5895Blocks),
+    },
+    {
+      key: "6836_media_blocked", severity: "critical",
+      count: media6836Blocks.length,
+      detail: mediaBlocks5895Detail(media6836Blocks),
     },
     {
       key: "funnel_delivery_failure_1h",
@@ -646,6 +684,13 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       count: unconfirmed5895Videos,
       detail: `vídeo sem confirmação de entrega há mais de 5 minutos; conversas: ${
         unconfirmed5895Conversations.map((id) => `#${id}`).join(", ") || "não identificadas"
+      }`,
+    },
+    {
+      key: "6836_video_receipt_overdue", severity: "critical",
+      count: unconfirmed6836Videos,
+      detail: `vídeo sem confirmação de entrega há mais de 5 minutos; conversas: ${
+        unconfirmed6836Conversations.map((id) => `#${id}`).join(", ") || "não identificadas"
       }`,
     },
     {
@@ -707,7 +752,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
 
   const entrega = await entregarAlertas(
     db,
-    issues.filter((issue) => !issue.key.startsWith("5895_")) as OperationalIssue[],
+    issues.filter((issue) => !issue.key.startsWith("5895_") && issue.key !== "6836_media_blocked") as OperationalIssue[],
     now,
   ).catch((e) => {
     console.error("operational-alert erro:", e);
@@ -726,11 +771,25 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       return { enviado: false, motivo: "excecao" };
     })
     : { enviado: false, motivo: "sem-bloqueio" };
+  const alerta6836 = media6836Blocks.length
+    ? await entregarAlertas(db, [{
+      key: "6836_media_blocked", severity: "critical",
+      count: media6836Blocks.length,
+      detail: mediaBlocks5895Detail(media6836Blocks),
+    }], now, {
+      dedupeKey: `6836:${await mediaBlocks5895Key(media6836Blocks)}`,
+      ttlMs: 7 * 24 * 60 * 60_000,
+    }).catch((e) => {
+      console.error("operational-alert 6836 erro:", e);
+      return { enviado: false, motivo: "excecao" };
+    })
+    : { enviado: false, motivo: "sem-bloqueio" };
 
   return {
     ok: !issues.some((issue) => issue.severity === "critical"),
     alerta: entrega,
     alerta_5895: alerta5895,
+    alerta_6836: alerta6836,
     checked_at: now.toISOString(),
     monitoring_window: monitoringWindow,
     ai: {
@@ -750,6 +809,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       ad_first_steps_unverified_24h: unverifiedAdFirstSteps,
       funnel_delivery_1h: funnelDeliveryByChannel,
       funnel_overdue_5895: overdue5895Queue,
+      funnel_overdue_6836: overdue6836Queue,
       funnel_media_timeouts_1h: mediaTimeouts,
       funnel_stale_attempts_1h: staleStartedAttempts,
       failed_messages_24h: failedMessages24h,

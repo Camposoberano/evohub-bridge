@@ -1,0 +1,82 @@
+-- 0019 — índice de expressão para o filtro `fromMe` do inbound-watchdog
+--
+-- PROBLEMA (medido em 01/11/2026, logo após religar AUTO_LOOPS_ENABLED):
+--   `inbound-watchdog erro: Error: events/raw: 57014` a cada poucos minutos.
+--   57014 = query_canceled (statement_timeout).
+--
+--   A consulta é a de `auditInboundIncidents` (bridge/shared/inbound-incidents.ts):
+--
+--     select id, received_at, payload from events
+--      where source = 'uazapi' and event_type = 'messages'
+--        and payload->'message'->>'fromMe' = 'false'
+--        and received_at >= now() - interval '72 hours'
+--      order by received_at desc limit 2000;
+--
+--   O índice `idx_events_type (source, event_type, received_at)` cobre as três primeiras
+--   condições, mas o filtro JSONB não tem índice: cada linha candidata precisa ter o
+--   `payload` desserializado (e destoastado) só para avaliar `fromMe`.
+--
+-- MEDIÇÃO por HTTP (VPS de 2 vCPU, 426.641 linhas em `events`, 1.926 eventos
+-- uazapi/messages na janela de 72h):
+--
+--   72h SEM o filtro JSONB, sem payload .... 278-414ms   estável
+--   72h COM o filtro JSONB, sem payload .... 277ms, 3.535ms e DOIS TIMEOUTS
+--   72h COM o filtro JSONB + payload ....... 739-1.104ms
+--   12h COM o filtro JSONB + payload ....... 457-593ms   estável
+--   0,5h COM o filtro JSONB + payload ...... 169-250ms   estável
+--
+--   Ou seja: quem instabiliza é o filtro, não o volume de payload trafegado. Sem índice,
+--   o custo é proporcional aos eventos da janela e, em pico de CPU (a VPS é uma caixa só,
+--   com 17 laços do bridge + Chatwoot + Supabase), passa do statement_timeout.
+--
+-- POR QUE ÍNDICE PARCIAL:
+--   Só interessa `source='uazapi' and event_type='messages'` — hoje uma fração da tabela.
+--   O índice parcial fica pequeno, e `received_at desc` como segunda coluna serve o
+--   `order by ... desc limit 2000` sem passo de ordenação.
+--
+-- CONCURRENTLY: constrói sem travar escrita; webhook e ingestão seguem funcionando.
+--   NÃO pode rodar dentro de bloco de transação.
+--
+--   ⚠️ O SQL Editor do Supabase Studio NÃO serve para CONCURRENTLY: ele envolve tudo num
+--   bloco de transação e devolve `25001: CREATE INDEX CONCURRENTLY cannot run inside a
+--   transaction block`. Caminhos que funcionam: `psql -c` (não abre transação), ou criar
+--   SEM o CONCURRENTLY aceitando o lock de escrita — aqui o índice parcial cobre só
+--   26.246 das 426.953 linhas, então o bloqueio é de segundos.
+--
+--   Também precisa de `set role supabase_admin`: o `postgres` não é dono de `events`
+--   neste self-host e devolve `must be owner of table events`.
+--
+-- APLICADO em 01/11/2026. Medido de fora logo depois, 5 execuções de cada:
+--
+--     72h sem payload .... 221-228ms estável   (antes: 277ms ~ TIMEOUT, 2 de 4 estouravam)
+--     72h com payload .... 585-1.424ms         (antes: 2.000-6.546ms)
+--     12h com payload .... 403-516ms
+--     0,5h com payload ... 182-196ms
+--
+--   Zero `57014` no log do bridge depois disso (antes: a cada poucos minutos), e o
+--   watchdog voltou a fazer o trabalho — `inbound_recovered 5895: 2`, duas entradas
+--   presas recuperadas. A janela de 72h a cada 15min NÃO precisou mudar: o índice
+--   resolveu na raiz, sem alterar código nem redeployar o bridge.
+--
+-- SE a janela larga voltar a pesar (ex.: muito mais volume uazapi), a saída de código é
+--   reduzir a auditoria de 15min para 12h em `runInboundWatchdog`
+--   (bridge/handlers/inbound-incidents.ts) e deixar 72h como varredura de 1x/dia, no
+--   mesmo padrão do uazapi-catchup. Não foi necessário em 01/11.
+--
+-- REVERSÍVEL: `drop index concurrently if exists idx_events_uazapi_inbound;`
+
+create index concurrently if not exists idx_events_uazapi_inbound
+  on events ((payload -> 'message' ->> 'fromMe'), received_at desc)
+  where source = 'uazapi' and event_type = 'messages';
+
+-- VERIFICAÇÃO (deve deixar de varrer e ficar em dezenas de ms):
+--
+--   explain analyze
+--   select id, received_at from events
+--    where source = 'uazapi' and event_type = 'messages'
+--      and payload->'message'->>'fromMe' = 'false'
+--      and received_at >= now() - interval '72 hours'
+--    order by received_at desc limit 2000;
+--
+-- Esperado no plano: `Index Scan using idx_events_uazapi_inbound`, sem `Seq Scan` em
+-- `events` e sem nó de `Sort`.

@@ -5,7 +5,7 @@ const BRT_OFFSET_MS = 3 * 60 * 60_000;
 const OPEN_HOUR = Math.floor(FUNNEL_OPEN_MINUTE / 60);
 const OPEN_MIN = FUNNEL_OPEN_MINUTE % 60;
 
-// Mantém o funil dentro da janela de business-hours (08:00–19:55 BRT); a noite não consome
+// Mantém o funil dentro da janela de business-hours (07:00–19:55 BRT); a noite não consome
 // intervalos. A abertura vem de FUNNEL_OPEN_MINUTE — não hardcodar a hora aqui.
 export function clampBusinessTime(ms: number, durationSec = 0): number {
   const brt = new Date(ms - BRT_OFFSET_MS);

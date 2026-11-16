@@ -2,6 +2,7 @@ import { capDoDia, dentroDaJanela, type PaceConfig } from "./campaign-pace.ts";
 
 export const ROTATION_GROUPS = [
   { number: "5895", campaigns: ["reativacao-5895-of", "reativacao-5895-uz"] },
+  { number: "5895", campaigns: ["black-friday-mega-sorgo-5895-2026-11-12"] },
   { number: "0595", campaigns: ["reativacao-0595-uz"] },
   { number: "6836", campaigns: ["reativacao-6836-uz"] },
 ] as const;

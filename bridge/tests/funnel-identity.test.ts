@@ -30,6 +30,13 @@ Deno.test("o canal 5895 usa um identificador próprio para a versão de 30/09", 
   assertEquals(mainFunnelForChannel(null), LEGACY_MAIN_FUNNEL);
 });
 
+Deno.test("6836 compartilha o conteúdo n8n do 5895 sem habilitar outros canais", () => {
+  assertEquals(mainFunnelForChannel({ name: "6836", type: "whatsapp" }), RESTORED_5895_FUNNEL);
+  assertEquals(mainFunnelForChannel({ phone_number: "+55 19 99971-6836", type: "whatsapp" }), RESTORED_5895_FUNNEL);
+  assertEquals(mainFunnelForChannel({ name: "0595", type: "whatsapp" }), LEGACY_MAIN_FUNNEL);
+  assertEquals(funnelVersionForChannel({ name: "6836", type: "facebook" }), null);
+});
+
 Deno.test("o funil social tem identidade própria somente em canal habilitado", () => {
   const enabled = new Set(["2e49dea3-9d93-4f5f-ad54-02882956d1ed"]);
   assertEquals(

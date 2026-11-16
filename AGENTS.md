@@ -9,7 +9,48 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Mega Sorgo 7 dias: vídeos curtos editados são para redes sociais, não para a conversa.**
+  O dono avaliou que a narração recortada com trilha soa sem contexto no atendimento.
+  A cadência do WhatsApp não inclui vídeos; os cinco vídeos oficiais com som saem somente
+  após o botão “Sim, quero ver”. Os áudios 04/05 não devem prometer vídeo imediato.
+- **Mega Sorgo 7 dias: abrir com áudio do Cícero, depois foto real.**
+  O dono rejeitou a saudação automática em texto “bom dia, vida boa” como primeira peça.
+  Depois rejeitou o texto `01`, que repetia rebrote e vários cortes já falados no áudio.
+  A peça `01` foi retirada; a próxima é a foto real `18.jpg`. Não voltar a acrescentar
+  uma paráfrase do áudio logo após a abertura.
+- **Imagens do funil são fotos reais do acervo.** Não gerar lavoura, colheita ou
+  embalagem por IA. Legendas podem ser redigidas com IA, mas só descrevem o que
+  a foto mostra; não atribuir produtividade, clima, frete ou entrega à foto sem prova.
+- **Mega Sorgo 7 dias: não enviar `[nome]` literal nem PDF automático.** O ensaio de 08/11
+  marcou 34/34 peças como enviadas nos dois números, mas as peças finais continham o
+  marcador literal e o PDF saiu sem pedido. O dia 5 oferece o material por texto;
+  o arquivo só sai após `menu_isca_silagem`, com deduplicação diária existente.
+  A agenda real é o padrão; cinco minutos entre peças só com `test_accelerated=true`
+  numa macro da versão isolada e em conversa da allowlist.
+- **UazAPI devolve às vezes só o título do botão.** No convite dos cinco vídeos
+  oficiais, mapear `Sim, quero ver 🎬` para `video_7d_sim`. A recusa usa título
+  exclusivo `Sem vídeos agora` para não colidir com `Agora não` da isca PDF.
+  Sem isso, o aceite era interpretado como `menu_depoimento` e os vídeos oficiais
+  não entravam na fila.
+- **Retomada do Mega Sorgo preserva a cadência original.** Sequência real pausada
+  volta com os dias restantes espaçados pelo número do dia; somente uma inscrição
+  explicitamente `test_accelerated=true` retoma em intervalos de cinco minutos.
+  Comprimir a sequência real na retomada causaria uma rajada de mensagens.
+
 Regras duras. Cada uma já custou um incidente — não refazer o erro.
+
+- **Vídeo de funil com narração: conferir stream de áudio no arquivo final, não só HTTP 200.**
+  Em 07/11/2026 os cinco ganchos de 12–13 s do Mega Sorgo foram cadastrados e enviados
+  com `video:h264` mas sem stream de áudio já na origem. HEAD/Content-Type e recibo `sent`
+  não detectam vídeo mudo. Antes de cadastrar MP4 narrado, executar `ffprobe` e exigir
+  `audio:aac`; confirmar um envio no aparelho. Os cinco vídeos oficiais tinham áudio;
+  somente os ganchos foram substituídos por cópias narradas em caminhos novos.
+
+- **6836 compartilha o conteúdo n8n do funil completo do 5895, mas mantém canal, fila e recibos próprios.**
+  `mega-sorgo-5895-20260930` é uma versão histórica de conteúdo, não a identidade do número
+  remetente. Resolver o canal pela conversa; filtrar reconciliação e alertas por `channel_id` e
+  confirmar o recibo apenas na instância uazapi desse canal. Não copiar workflows nem reinscrever
+  conversas antigas em lote.
 
 - **Chatwoot filter = 1 condição `equal_to` com todos os valores (IN), nunca N condições
   `equal_to` OR'd.** 16 OR levavam ~15s e estouravam timeout na VPS (HTTP 500 no
@@ -25,6 +66,37 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
 - **VPS é uma caixa só** (`136.248.116.231`, 2 vCPU): Supabase + Chatwoot + bridge + fazer-ai
   + Grafana no mesmo IP. CPU é o gargalo. Operações pesadas (drain, scans) a **≤3 workers** +
   pausa, senão 100% CPU derruba as queries de todo mundo.
+- **O n8n JÁ RODA nesta mesma VPS — a "Fase 0 (infra)" do plano de migração está FEITA.**
+  `https://automacao.soberano.pro` (`/healthz` → `{"status":"ok"}`, container `10.0.5.2`), com
+  **41 workflows, 20 ativos**, e o **funil Soberano 5895 já despacha por cron do n8n** — o n8n
+  está no caminho crítico HOJE, não é um futuro. Consequências para o planejamento:
+  1. Migrar **não** é somar uma carga nova à caixa: é **mover** carga do bridge pro n8n. O
+     delta pode ser **negativo** (pior), porque uma execução de workflow custa mais que um
+     laço Deno — medir os dois lados antes de afirmar ganho.
+  2. Antes da Fase 1, **inventariar o que já está no n8n**. Sem isso a migração duplica
+     lógica que já existe, e 21 dos 41 workflows são cópias/testes que dão para limpar.
+  3. `N8N_API_KEY` foi encontrada no `.env` local em 07/11/2026 e funcionou na API oficial.
+     `/api/v1/workflows` exige o header `X-N8N-API-KEY`; nunca imprimir a chave. Conferir
+     sua validade antes de diagnosticar falha de acesso. A chave anterior exposta no chat
+     permanece na fila de rotação até confirmação de que esta é outra chave.
+- **Observabilidade — onde ver CPU (e por que um agente NÃO consegue ver hoje).**
+  `https://grafana.soberano.pro` (Grafana 13.x, `/api/health` responde sem auth e serve de
+  ping). Serviço Coolify `mbc0rqqk3kn47uxkw8mufuuu` = Grafana + Prometheus + Alertmanager +
+  node-exporter + cAdvisor; configs em `/data/observ`; publicado em `127.0.0.1:3001:3000`
+  (porta de host fixa — correção durável de 31/10, ver `nginx-ip-container-quebra`).
+  Prometheus e Alertmanager **não têm vhost válido** (`prometheus.`/`alertas.soberano.pro`
+  dão erro de certificado), então só se chega às métricas **através do Grafana**, e
+  `/api/datasources` responde `401`. O login é `admin` com senha trocada no 1º acesso — o
+  agente **não tem** credencial.
+  **Para um agente poder medir CPU:** criar em Grafana → Administration → Service accounts um
+  token de papel **Viewer** e gravá-lo no `.env` como `GRAFANA_TOKEN` (nunca no chat). Com ele,
+  a leitura é pelo proxy de datasource:
+  `GET /api/datasources/proxy/<id>/api/v1/query?query=...` com `Authorization: Bearer`.
+  Queries úteis: `100-(avg(rate(node_cpu_seconds_total{mode="idle"}[5m]))*100)` (CPU%),
+  `node_load1`, e por container `rate(container_cpu_usage_seconds_total[5m])`.
+  Alerta já fechado no sentido inverso: Prometheus → Alertmanager → `POST /grafana-alert` no
+  bridge → WhatsApp (`bridge/handlers/grafana-alert.ts`, auth `GRAFANA_ALERT_SECRET` ou
+  `AI_GATE_SECRET`, destino `ALERT_WHATSAPP_TO`).
 - **Lane de IA (fazer.ai): flag `AI_LANE_ENABLED` default OFF; o estado é a label `ai-vendas`;
   o `/ai-gate` é fail-closed.** Ligar a flag sem o wiring externo (agente bindado + `AI_GATE_SECRET`
   + contactAuth apontando pro `/ai-gate`) = lead no vácuo. Ver `docs/ai-lane-funil-agro.md`.
@@ -52,6 +124,78 @@ Regras duras. Cada uma já custou um incidente — não refazer o erro.
   do `ctx_execute` (segredo lido do `.env`, nunca impresso).
 - **Não colar segredo no chat** — vai pro `.env`/Coolify/Chatwoot. Segredo exposto no chat
   entra na lista de rotação do handoff.
+- **Divergência `master` ↔ `main`: RESOLVIDA em 02/11/2026** (`main` == `master`, e o
+  `AGENTS.md` passou a viver no `main`). O que fica como regra: **publicar é cherry-pick
+  pontual pro `main`, nunca merge de uma branch velha** — em 01/11 o `master` estava 149
+  commits atrás e **sem** os dois fixes de 30-31/10 (`095c415` filtro IN, `a31803d` guard de
+  eco), então um merge os reverteria. E **compare CONTEÚDO (diff two-dot) antes de concluir
+  que algo "só existe" numa branch**: em 01/11 o código já estava cherry-pickado e só 7 docs
+  estavam presos de fato.
+  ⚠️ Branch de trabalho não é lugar de guardar documentação: 5 commits de doc + 1 migration da
+  sessão de 01/11 ficaram **fora do `main`** porque a divergência foi resolvida por outra
+  sessão, pelo outro lado. Levar doc pro `main` no mesmo dia em que é escrita.
+- **Canal `0595`: DISPARO AUTOMÁTICO suspenso por decisão do dono (02/11/2026); atendimento na
+  mão SEGUE LIBERADO.** A instância está **conectada** na uazapi — não foi queda, foi decisão,
+  por risco de bloqueio (o número já caiu dias antes). O canal fica
+  **`channels.status = active`** de propósito: a suspensão mora em `campaign_flow_state` +
+  `campaigns.json`, nunca no status ([[instancia-uazapi-trava-fila]]).
+  🔴 **Suspender canal NÃO é só `channels.status` + filas: existe disparo que não vem de fila
+  nenhuma.** Em 02/11, horas depois da suspensão, o 0595 continuou mandando vídeo a cada
+  **10 minutos exatos**. Todas as filas estavam zeradas (`campaign_queue` 0 `pending`,
+  `scheduled_messages` 0, `sales_sequences` 0), e mesmo assim saía. O culpado era
+  `pumpCampaignAutoVideos` (`bridge/shared/campaign-auto-video.ts`, laço de `GAP_MS = 10min`):
+  ele **não lê fila** — varre `campaign_flow_state` com `step_id='abertura'` e
+  `status='waiting'` e manda o vídeo para quem não respondeu a abertura depois de
+  `autoVideoAfterMin`. Não filtra `channels.status`, não gera `funnel_delivery_attempt`, e
+  grava `messages` com `funnel = NULL` — por isso não aparece em nenhuma auditoria de funil.
+  Havia **188 contatos** represados aí, ~2,5 dias de disparo pela frente.
+  **Parar de verdade exige as duas camadas** (ambas em dado/config, sem deploy — dá para
+  aplicar dentro da janela 8-20h):
+  1. estoque → `campaign_flow_state` da campanha: `status` `waiting` → `paused`;
+  2. torneira → `campaigns.json` no bucket `soberano-config`: `autoVideoAfterMin` → `0`
+     (o laço só pesca com `>= 5`). `readCampaigns()` **não cacheia** — baixa do bucket a cada
+     tick, então vale na hora, sem restart.
+  Reverter = `autoVideoAfterMin = 60` + `paused` → `waiting`. Backup do JSON em
+  `soberano-config/backups/campaigns-antes-parada-0595-20261102.json`.
+  **Antes de dizer que um canal está parado, procure os disparadores que não são fila**:
+  `grep -rn "status\", \"waiting\"" bridge/shared/`.
+  🔴 **NUNCA use `channels.status = inactive` para suspender campanha — isso MATA o envio
+  manual do atendente, em silêncio.** `handlers/sync-chatwoot-out.ts:41` seleciona
+  `.eq("type","whatsapp").eq("status","active")`. Esse laço é o **fallback de saída** que
+  existe porque o webhook do Chatwoot vive dando 502/503 ([[webhook-chatwoot-instavel]]):
+  com o canal `inactive` ele pula o canal, e a mensagem que o atendente digita no Chatwoot
+  **não é despachada por ninguém** — sem erro, sem `status failed`, sem rastro no banco.
+  Em 02/11 isso derrubou o atendimento do 0595 por horas; o dono percebeu porque "mandei
+  preço e vídeo e não foi". O envio pelo **aparelho** continuava funcionando (não passa pelo
+  bridge, só ecoa depois), o que faz o sintoma parecer aleatório.
+  `inactive` é suspensão **documental**: não bloqueia `/send` (o envio uazapi resolve a rota
+  por nome da instância — `getDirectUazapiRoute` → `tokenForInstance`,
+  `bridge/shared/hybrid.ts:174`, sem olhar `channels.status`) e não bloqueia a entrada (acha o
+  canal por `external_id`/`name`). Ou seja: **não impede o que você quer impedir e quebra o que
+  você quer preservar.** Para suspender campanha, use as duas camadas acima e deixe o
+  `status = active`. O `channel-sync` não reverte status sozinho (só varre canais com
+  `hub_channel_id` não nulo; o 0595 tem nulo), então um `inactive` posto na mão fica lá até
+  alguém tirar.
+- **DDL no self-host: o SQL Editor do Studio NÃO aceita `CREATE INDEX CONCURRENTLY`** — ele
+  envolve tudo num bloco de transação e devolve `25001: cannot run inside a transaction
+  block`. E o `postgres` **não é dono** das tabelas: sem `set role supabase_admin` vem
+  `must be owner of table`. Caminhos que funcionam: `psql -c` (não abre transação) ou criar
+  sem `CONCURRENTLY` quando o lock couber (medir quantas linhas o índice cobre antes).
+  O bridge **não serve** para DDL — só fala PostgREST — e `SUPABASE_DB_URL` está vazio no
+  `.env`, então não há caminho automatizado: DDL é sempre ação manual do dono.
+- **Antes de culpar índice ausente, MEÇA.** Em 01/11 diagnostiquei `events/raw: 57014` como
+  falta do `idx_events_received_at` — errado, ele existe e funciona (`order received_at` em
+  524ms sobre 426k linhas, retenção drenando: a tabela caiu de 1,7M para 426k). A causa real
+  era o filtro `payload->'message'->>'fromMe'` **sem índice de expressão**: cada candidato
+  precisava ter o payload desserializado. Decompor a consulta por partes achou o culpado em
+  minutos — sem filtro JSONB 278-414ms estável, com filtro 277ms até TIMEOUT. Fix em
+  `supabase/migrations/0019_events_fromme_expression_index.sql`; nenhuma linha de código
+  mudou.
+- **Token de canal social (FB/IG) se testa no proxy, não no Graph.**
+  `GET $EVOLUTION_HUB_URL/meta/me?fields=id,name` com `Authorization: Bearer <channel_token>`.
+  O `channel_token` é credencial do **EVO Hub**, não access token do Graph: batendo em
+  `graph.facebook.com` os 5 canais devolvem o mesmo `400 Cannot parse access token` e parecem
+  todos expirados. Em 01/11 isso gerou um falso "5 canais quebrados" — pelo caminho certo era 1.
 
 ---
 

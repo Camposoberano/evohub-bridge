@@ -21,6 +21,7 @@ import {
   SOCIAL_N8N_FUNNEL,
 } from "./funnel-identity.ts";
 import { WINDOW_HOLD_FLAG } from "./social-window-hold.ts";
+import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
 
 type Json = Record<string, unknown>;
 
@@ -167,6 +168,7 @@ export async function pumpFunnelQueue(
         // enviaram o mesmo vídeo do #3402; o bridge cuida apenas da rota adiada.
         .not("funnel", "like", `${RESTORED_5895_FUNNEL}%`)
         .not("funnel", "like", `${SOCIAL_N8N_FUNNEL}%`)
+        .not("funnel", "like", `${MEGA_SORGO_7D_VERSION}%`)
         .lte("send_at", now)
         .order("send_at", { ascending: true })
         .limit(limit),

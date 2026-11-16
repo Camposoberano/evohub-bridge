@@ -6,6 +6,7 @@ Deno.test("a fila n8n reconhece somente versões publicadas e ações derivadas"
   assertEquals(queueBaseVersion("mega-sorgo-5895-20260930:preco"), "mega-sorgo-5895-20260930");
   assertEquals(queueBaseVersion("mega-sorgo-social-20260930"), "mega-sorgo-social-20260930");
   assertEquals(queueBaseVersion("mega-sorgo-social-20260930:video"), "mega-sorgo-social-20260930");
+  assertEquals(queueBaseVersion("mega-sorgo-7d-v1"), "mega-sorgo-7d-v1");
   assertEquals(queueBaseVersion("mega-sorgo-social-20260930-extra"), null);
   assertEquals(queueBaseVersion("mega-sorgo"), null);
 });

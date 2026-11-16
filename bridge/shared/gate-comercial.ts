@@ -21,7 +21,7 @@
 //    venda ganha. Não saber se o cliente comprou é motivo para não mandar.
 import type { DbClient } from "./supabase.ts";
 import { consultaEmLotes } from "./lotes.ts";
-import { deriveOutcome, isClosedOutcome, type Outcome } from "./outcome-labels.ts";
+import { canonize, deriveOutcome, isClosedOutcome, type Outcome } from "./outcome-labels.ts";
 
 type Json = Record<string, unknown>;
 
@@ -111,4 +111,71 @@ export async function bloqueioPorContato(
     if (b === "lost") lost = "lost";
   }
   return lost;
+}
+
+/** Etiquetas de exclusão adicionais usadas somente na campanha Black Friday. */
+export async function etiquetaBlackFridayPorContato(
+  db: DbClient,
+  channelId: string,
+  phoneValue: string,
+): Promise<string | null> {
+  const digits = String(phoneValue).replace(/\D/g, "");
+  const variants = [digits, "+" + digits];
+  const [byExternalId, byPhone] = await Promise.all([
+    db.from("contacts").select("id,attributes")
+      .eq("channel_id", channelId).in("external_contact_id", variants),
+    db.from("contacts").select("id,attributes")
+      .eq("channel_id", channelId).in("phone", variants),
+  ]);
+  if (byExternalId.error) throw byExternalId.error;
+  if (byPhone.error) throw byPhone.error;
+  const contacts = new Map<string, Json>();
+  for (const row of [...(byExternalId.data ?? []), ...(byPhone.data ?? [])] as Json[]) {
+    contacts.set(String(row.id), row);
+  }
+
+  const exclusions = new Map([
+    ["pago", "pago"],
+    ["pagamento feito", "pago"],
+    ["safrinha", "safrinha"],
+    ["safinha", "safrinha"],
+    ["nao compra", "não compra"],
+  ]);
+  const findExclusion = (raw: string): string | null => {
+    const bare = raw.trim().replace(/^wa:/i, "");
+    return exclusions.get(canonize(bare)) ?? null;
+  };
+  const strings = (value: unknown): string[] => {
+    if (Array.isArray(value)) return value.flatMap(strings);
+    if (typeof value === "string") return [value];
+    if (value && typeof value === "object") {
+      const row = value as Json;
+      return [row.name, row.label, row.title].filter(
+        (item): item is string => typeof item === "string",
+      );
+    }
+    return [];
+  };
+
+  for (const contact of contacts.values()) {
+    for (const [key, value] of Object.entries((contact.attributes ?? {}) as Json)) {
+      if (!/labels?|etiquetas?|tags?/i.test(key)) continue;
+      for (const label of strings(value)) {
+        const match = findExclusion(label);
+        if (match) return match;
+      }
+    }
+    const { data: conversations, error } = await db.from("conversations")
+      .select("labels")
+      .eq("contact_id", contact.id)
+      .eq("channel_id", channelId);
+    if (error) throw error;
+    for (const conversation of (conversations ?? []) as Json[]) {
+      for (const label of strings(conversation.labels)) {
+        const match = findExclusion(label);
+        if (match) return match;
+      }
+    }
+  }
+  return null;
 }

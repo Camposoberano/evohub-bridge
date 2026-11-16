@@ -138,6 +138,7 @@ import {
   marcarResultadoIncerto,
   pausarCampanha,
   pendentesElegiveis,
+  reservarProximoItem,
   reservarProximoItemRotacao,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
@@ -148,6 +149,7 @@ import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
 import {
   bloqueioPorContato,
+  etiquetaBlackFridayPorContato,
   motivoDoBloqueio,
 } from "./shared/gate-comercial.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
@@ -209,7 +211,10 @@ const port = Number(Deno.env.get("PORT") ?? "8000");
 const version = {
   app: "evohub-bridge",
   features: [
+    "wa-6836-n8n-shared-funnel",
     "sync-facebook",
+    "social-outgoing-activity-bounded",
+    "wa-conversation-create-claim",
     "sync-instagram",
     "auto-sync-loop",
     "whatsapp-media",
@@ -224,6 +229,8 @@ const version = {
     "media-retention-bucket",
     "meta-templates",
     "campaign-gated",
+    "bf-rotating-image-buttons",
+    "bf-uazapi-only-flow",
     "outbound-media-caption-fix",
     "template-header-media",
     "audio-ptt-ogg",
@@ -401,8 +408,9 @@ const version = {
     "funil-5895-logistica-sem-pausa",
     "funil-5895-resposta-logistica-adiada",
     "funnel-queue-stale-head-of-line-fix",
+    "stop-price-sequence",
   ],
-  build: "2026-11-01-funnel-queue-stale-head-of-line-fix",
+  build: "2026-11-12-bf-rotating-images",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -794,6 +802,7 @@ async function purgeOldEventsInBatches(
   while (Date.now() < DEADLINE) {
     const { data: rows, error } = await db.from("events")
       .select("id").lt("received_at", cutoff)
+      .neq("source", "marketing-consent")
       .order("received_at", { ascending: true }).limit(BATCH);
     // Erro do PostgREST é objeto plano; embrulha em Error com a causa legível (senão o catch
     // do loop logava "[object Object]" e o 57014/timeout ficava invisível).
@@ -856,6 +865,7 @@ const CMD_LABELS: Record<string, string> = {
   "cmd-funil-resume": "resume",
   "cmd-iniciar-funil": "funil",
   "cmd-enviar-preco": "preco",
+  "cmd-parar-preco": "stop-preco",
   "cmd-enviar-video": "video",
   "cmd-enviar-plantio": "plantio",
   "cmd-enviar-nutricao": "nutricao",
@@ -1506,6 +1516,7 @@ async function runRecoveryChain() {
 // O intervalo global ocupa a janela restante e encurta quando um número está atrasado.
 // Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
 const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
+const BLACK_FRIDAY_5895_CAMPAIGN_ID = "black-friday-mega-sorgo-5895-2026-11-12";
 
 function startCampaignQueueLoop() {
   if (optionalEnv("CAMPAIGN_QUEUE_ENABLED") === "false") return;
@@ -1550,7 +1561,9 @@ function startCampaignQueueLoop() {
         const camp = state.campaigns.find((c) => c.id === campaignId);
         if (!camp?.flow) continue;
 
-        const item = await reservarProximoItemRotacao(db, campaignId);
+        const item = campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID
+          ? await reservarProximoItem(db, campaignId)
+          : await reservarProximoItemRotacao(db, campaignId);
         if (!item) continue;
 
         let runFlowIniciado = false;
@@ -1586,6 +1599,17 @@ function startCampaignQueueLoop() {
           // 224 conversas em 12/09, 6 delas com venda ganha.
           let bloqueioComercial;
           try {
+            if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+              const exclusao = await etiquetaBlackFridayPorContato(
+                db,
+                String(canal.id),
+                item.contact_key,
+              );
+              if (exclusao) {
+                await marcarPulado(db, item.id, "etiqueta-" + exclusao);
+                continue;
+              }
+            }
             bloqueioComercial = await bloqueioPorContato(
               db,
               String(canal.id),
@@ -1609,6 +1633,9 @@ function startCampaignQueueLoop() {
           }
 
           const ch = await flowChannelFor(db, canal as Record<string, unknown>);
+          if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+            ch.uazapiOnly = true;
+          }
           let preflight;
           try {
             preflight = await validarContatoAntesDaCampanha({
@@ -1617,6 +1644,7 @@ function startCampaignQueueLoop() {
               channelName: String(canal.name ?? ""),
               phone: item.contact_key,
               route: ch.route,
+              allowOpenAndRecent: campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID,
             });
           } catch (error) {
             const motivo = error instanceof Error

@@ -1,7 +1,6 @@
 import { autoEnrollFunil } from "../handlers/funil-enroll.ts";
 import { sendFirstAdFunnelPieceNow } from "./ad-opening.ts";
-import { canalAlvoFunil } from "./funil-anuncio.ts";
-import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
+import { funnelVersionForChannel, RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "./lead-block.ts";
 import { admin } from "./supabase.ts";
 
@@ -13,12 +12,25 @@ export async function reconcileNewAdFunnels(
 ): Promise<{ scanned: number; missing: number; attempted: number; confirmed: number }> {
   const db = admin();
   const { data: channels, error: channelError } = await db.from("channels")
-    .select("id,name,external_id,phone_number").limit(200);
+    .select("id,name,type,external_id,phone_number").limit(200);
   if (channelError) throw channelError;
-  const channel = ((channels ?? []) as Json[]).find((item) =>
-    canalAlvoFunil(item, "5895")
+  const targets = ((channels ?? []) as Json[]).filter((item) =>
+    funnelVersionForChannel(item) === RESTORED_5895_FUNNEL
   );
-  if (!channel) return { scanned: 0, missing: 0, attempted: 0, confirmed: 0 };
+  const totals = { scanned: 0, missing: 0, attempted: 0, confirmed: 0 };
+  for (const channel of targets) {
+    const result = await reconcileAdChannel(db, channel, now);
+    totals.scanned += result.scanned;
+    totals.missing += result.missing;
+    totals.attempted += result.attempted;
+    totals.confirmed += result.confirmed;
+  }
+  return totals;
+}
+
+async function reconcileAdChannel(
+  db: ReturnType<typeof admin>, channel: Json, now: number,
+): Promise<{ scanned: number; missing: number; attempted: number; confirmed: number }> {
   const since = new Date(now - 24 * 60 * 60_000).toISOString();
   const { data: conversations, error: conversationError } = await db.from(
     "conversations",

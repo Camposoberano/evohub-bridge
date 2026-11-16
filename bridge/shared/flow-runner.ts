@@ -71,6 +71,8 @@ export type FlowPosition = {
 export type FlowChannel = {
   /** rota não-oficial; null força tudo pelo oficial */
   route: HybridRoute | null;
+  /** Quando true, não usa a Meta como fallback se a rota UAZAPI falhar. */
+  uazapiOnly?: boolean;
   /** token do canal oficial (fallback) */
   token?: string;
   /** phone_number_id do canal oficial (fallback) */
@@ -104,6 +106,18 @@ export type RunResult = {
  * (envia).
  */
 export type OnStepSent = (step: FlowStep, providerMessageId?: string) => Promise<void>;
+
+/** Seleciona sempre a mesma arte para o mesmo contato, inclusive em nova tentativa. */
+function imagemRotativa(step: FlowStep, to: string): string | undefined {
+  const urls = (step.imageUrls ?? []).map((url) => url.trim()).filter(Boolean);
+  if (!urls.length) return step.imageUrl;
+  const digits = to.replace(/\D/g, "");
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < digits.length; i++) {
+    hash = Math.imul(hash ^ digits.charCodeAt(i), 0x01000193);
+  }
+  return urls[(hash >>> 0) % urls.length];
+}
 
 /**
  * Envia um step. Devolve true se saiu por qualquer rota.
@@ -140,12 +154,13 @@ async function enviarStep(
 ): Promise<{ ok: boolean; providerMessageId?: string }> {
   // Personaliza os textos ({{nome}} etc.) antes de enviar. Ids/branches ficam intactos.
   step = renderStep(step, vars);
+  const buttonImage = step.kind === "buttons" ? imagemRotativa(step, to) : undefined;
   // Abridor oficial de janela fria: template NUNCA sai pela uazapi. É um conceito do
   // WhatsApp oficial (Meta Cloud) e é a ÚNICA coisa que a Meta aceita fora da janela de 24h
   // — texto/mídia/botão interativo são recusados até o lead responder. Por isso ignora a
   // rota híbrida e vai direto no oficial; sem token oficial, não há como abrir.
   if (step.kind === "template") {
-    if (!ch.token || !ch.phoneNumberId || !step.template?.name) return { ok: false };
+    if (ch.uazapiOnly || !ch.token || !ch.phoneNumberId || !step.template?.name) return { ok: false };
     const components: Json[] = [];
     const hm = step.template.headerMedia;
     if (hm?.url) {
@@ -196,7 +211,7 @@ async function enviarStep(
     } else if (step.kind === "buttons" && step.buttons?.length) {
       r = interativoComoTexto()
         ? await hybridSendText(ch.route, to, menuTexto(step))
-        : await hybridSendMenu(ch.route, to, step.text ?? "", step.buttons, step.imageUrl);
+        : await hybridSendMenu(ch.route, to, step.text ?? "", step.buttons, buttonImage ?? step.imageUrl);
     } else if (step.kind === "list" && listSections.length) {
       r = interativoComoTexto()
         ? await hybridSendText(ch.route, to, menuTexto(step))
@@ -212,6 +227,7 @@ async function enviarStep(
     }
   }
 
+  if (ch.uazapiOnly) return { ok: false };
   if (!ch.token || !ch.phoneNumberId) return { ok: false };
   const path = `${ch.phoneNumberId}/messages`;
   let body: Json | null = null;
@@ -243,6 +259,9 @@ async function enviarStep(
       type: "interactive",
       interactive: {
         type: "button",
+        ...(buttonImage ? {
+          header: { type: "image", image: { link: buttonImage } },
+        } : {}),
         body: { text: step.text ?? "" },
         action: {
           buttons: step.buttons.slice(0, 3).map((b) => ({
@@ -317,6 +336,7 @@ export async function runFlow(
   }
 
   const { enviar, pararEm, fim } = stepsUntilWait(flow, inicio.id);
+  const flowChannel = flow.uazapiOnly ? { ...ch, uazapiOnly: true } : ch;
   let enviados = 0, falhas = 0;
   let pedirHumano = false;
   let handoffContexto: Record<string, unknown> | undefined;
@@ -328,7 +348,7 @@ export async function runFlow(
     if (step.delaySeg && step !== enviar[0]) {
       await new Promise((r) => setTimeout(r, step.delaySeg! * 1000));
     }
-    const sent = await enviarStep(ch, to, step, vars);
+    const sent = await enviarStep(flowChannel, to, step, vars);
     if (sent.ok) {
       enviados++;
       // Só marca o handoff depois que a peça saiu: prometer "o Cícero te chama" sem a

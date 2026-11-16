@@ -1,5 +1,6 @@
 /** Contrato estável das macros comerciais do Hub Soberano. */
 import { SOCIAL_N8N_FUNNEL } from "./funnel-identity.ts";
+import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
 export const SOBERANO_ACTIONS = [
   "funil",
   "preco",
@@ -28,6 +29,8 @@ export type ActionRequest = {
   funnel_version: string;
   /** Repair a reserved main sequence only when no delivery evidence exists. */
   repair_missing_opening?: boolean;
+  /** Explicitly compress an allowlisted seven-day macro test to five minutes per piece. */
+  test_accelerated?: boolean;
   /** Botão de detalhe dentro do fluxo de preço, plantio ou nutrição. */
   selection?: string;
   /** Resultado do registro de cotação; usado só em preco_cotar_*. */
@@ -41,9 +44,12 @@ export function isSoberanoAction(value: string): value is SoberanoAction {
 export function actionKey(request: ActionRequest): string {
   return [
     "soberano-action",
-    ...(request.funnel_version === SOCIAL_N8N_FUNNEL ? [SOCIAL_N8N_FUNNEL] : []),
+    ...([SOCIAL_N8N_FUNNEL, MEGA_SORGO_7D_VERSION].includes(request.funnel_version)
+      ? [request.funnel_version] : []),
     request.chatwoot_conversation_id,
     request.action,
+    ...(request.funnel_version === MEGA_SORGO_7D_VERSION
+      ? [request.test_accelerated === true ? "accelerated" : "real"] : []),
     encodeURIComponent(request.request_id),
   ].join(":");
 }
