@@ -87,6 +87,7 @@ import {
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
 import { flowChannelFor, pumpFlowTimeouts, pumpFlowWaits } from "./shared/flow-inbound.ts";
+import { repairWhatsAppNamesStep } from "./shared/whatsapp-name-sync.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   campanhasComFila,
@@ -1618,6 +1619,31 @@ function startFlowWaitLoop() {
   console.log("flow-wait loop ON (2min)");
 }
 
+// Reparo de nome de contato: busca o perfil na uazapi, confirma a inbox e escreve nome+avatar
+// de volta no Chatwoot (só na conta principal). Uma escrita por ciclo. Gated
+// WHATSAPP_NAME_REPAIR_ENABLED=true (default OFF — toca o Chatwoot, ligar só após validar).
+const WA_NAME_REPAIR_INTERVAL_MS = 3 * 60_000;
+
+function startWhatsAppNameRepairLoop() {
+  if (optionalEnv("WHATSAPP_NAME_REPAIR_ENABLED") !== "true") return;
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await repairWhatsAppNamesStep(admin());
+      if (r === "updated") console.log("whatsapp-name-sync: atualizou um contato");
+    } catch (e) {
+      console.error("whatsapp-name-sync loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 120_000);
+  setInterval(run, WA_NAME_REPAIR_INTERVAL_MS);
+  console.log("whatsapp-name-sync loop ON (3min)");
+}
+
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
@@ -1725,6 +1751,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
   startFlowWaitLoop();
+  startWhatsAppNameRepairLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
   startUazapiCatchupLoop();
