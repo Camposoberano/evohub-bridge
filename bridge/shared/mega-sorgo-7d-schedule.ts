@@ -26,19 +26,31 @@ function atLocalMinute(dayUtc: number, minute: number): number {
   return dayUtc + minute * MINUTE_MS + OFFSET_MS;
 }
 
-/** Primeiro bloco só começa quando TODAS as suas peças cabem na janela. */
+/**
+ * Slots de 5 min dentro de 08h–20h: começa na entrada (ou nas 08h se entrou antes) e,
+ * quando a próxima peça cruzaria as 20h, pula pro 08h do dia seguinte. Assim a abertura
+ * SAI NA HORA e só o excedente que não cabe na janela de hoje é adiado — nunca o bloco todo.
+ */
+function sequentialWindowSlots(enteredAt: number, count: number): number[] {
+  const slots: number[] = [];
+  let slot = enteredAt;
+  for (let i = 0; i < count; i++) {
+    const day = localDayUtc(slot);
+    const minute = minuteOfLocalDay(slot);
+    if (minute < OPEN_MINUTE) slot = atLocalMinute(day, OPEN_MINUTE);
+    else if (minute >= CLOSE_MINUTE) slot = atLocalMinute(day + DAY_MS, OPEN_MINUTE);
+    slots.push(slot);
+    slot += PIECE_GAP_MINUTES * MINUTE_MS;
+  }
+  return slots;
+}
+
+/** Instante da 1ª peça do dia 1: na hora da entrada (encaixada na janela), nunca adia o bloco todo. */
 export function sevenDayFirstStart(enteredAt: number, firstDayCount: number): number {
   if (!Number.isFinite(enteredAt) || !Number.isInteger(firstDayCount) || firstDayCount < 1) {
     throw new Error("entrada ou número de peças inválido");
   }
-  let day = localDayUtc(enteredAt);
-  const start = Math.max(enteredAt, atLocalMinute(day, OPEN_MINUTE));
-  if (start + (firstDayCount - 1) * PIECE_GAP_MINUTES * MINUTE_MS >=
-    atLocalMinute(day, CLOSE_MINUTE)) {
-    day += DAY_MS;
-    return atLocalMinute(day, OPEN_MINUTE);
-  }
-  return start;
+  return sequentialWindowSlots(enteredAt, 1)[0];
 }
 
 export type SevenDayPiece = { code: string; day: number };
@@ -62,24 +74,22 @@ export function scheduleSevenDayPieces(
       throw new Error(`dia ${day} não cabe na janela`);
     }
   }
-  const first = sevenDayFirstStart(enteredAt, counts.get(1)!);
-  const firstLocalDay = localDayUtc(first);
+  const day1Slots = sequentialWindowSlots(enteredAt, counts.get(1)!);
+  const firstLocalDay = localDayUtc(day1Slots[0]);
   const used = new Map<number, number>();
   return pieces.map((piece, position) => {
     const index = used.get(piece.day) ?? 0;
     used.set(piece.day, index + 1);
-    const timestamp = piece.day === 1
-      ? first + index * PIECE_GAP_MINUTES * MINUTE_MS
-      : atLocalMinute(firstLocalDay + (piece.day - 1) * DAY_MS,
-        9 * 60 + index * PIECE_GAP_MINUTES);
+    if (piece.day === 1) {
+      // Dia 1 já vem encaixado na janela (excedente rolado pra manhã seguinte).
+      return { ...piece, position, sendAt: new Date(day1Slots[index]).toISOString() };
+    }
+    const timestamp = atLocalMinute(firstLocalDay + (piece.day - 1) * DAY_MS,
+      9 * 60 + index * PIECE_GAP_MINUTES);
     if (minuteOfLocalDay(timestamp) >= CLOSE_MINUTE) {
       throw new Error(`dia ${piece.day} fora da janela`);
     }
-    return {
-      ...piece,
-      position,
-      sendAt: new Date(timestamp).toISOString(),
-    };
+    return { ...piece, position, sendAt: new Date(timestamp).toISOString() };
   });
 }
 
@@ -90,8 +100,8 @@ export function scheduleSevenDayRemainingPieces(
   if (!pieces.length) return [];
   const firstDay = Math.min(...pieces.map((piece) => piece.day));
   const firstCount = pieces.filter((piece) => piece.day === firstDay).length;
-  const first = sevenDayFirstStart(enteredAt, firstCount);
-  const firstLocalDay = localDayUtc(first);
+  const firstDaySlots = sequentialWindowSlots(enteredAt, firstCount);
+  const firstLocalDay = localDayUtc(firstDaySlots[0]);
   const used = new Map<number, number>();
   const codes = new Set<string>();
   return pieces.map((piece, position) => {
@@ -100,10 +110,11 @@ export function scheduleSevenDayRemainingPieces(
     codes.add(piece.code);
     const index = used.get(piece.day) ?? 0;
     used.set(piece.day, index + 1);
-    const timestamp = piece.day === firstDay
-      ? first + index * PIECE_GAP_MINUTES * MINUTE_MS
-      : atLocalMinute(firstLocalDay + (piece.day - firstDay) * DAY_MS,
-        9 * 60 + index * PIECE_GAP_MINUTES);
+    if (piece.day === firstDay) {
+      return { ...piece, position, sendAt: new Date(firstDaySlots[index]).toISOString() };
+    }
+    const timestamp = atLocalMinute(firstLocalDay + (piece.day - firstDay) * DAY_MS,
+      9 * 60 + index * PIECE_GAP_MINUTES);
     if (minuteOfLocalDay(timestamp) >= CLOSE_MINUTE) throw new Error(`dia ${piece.day} fora da janela`);
     return { ...piece, position, sendAt: new Date(timestamp).toISOString() };
   });

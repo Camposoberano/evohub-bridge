@@ -20,6 +20,7 @@ import { isBotMutedForContact } from "../shared/bot-mute.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { getConversationLabels } from "../shared/chatwoot.ts";
 import { hasAiLaneLabel } from "../shared/ai-lane.ts";
+import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
 
 type Json = Record<string, unknown>;
 
@@ -78,6 +79,14 @@ export async function handle(req: Request): Promise<Response> {
     if (phone && await isBotMutedForContact(db, String(channel.id), phone)) {
       return deny("bot_off");
     }
+
+    // Lead em funil de 7 dias: o funil é dono da conversa (abre, nutre, fecha). O agente
+    // não entra enquanto a sequência está "running" — volta sozinho quando ela sai de running
+    // (terminou/pausou/cancelou), aí o /ai-gate libera de novo pela label.
+    const { data: seq7d } = await db.from("sales_sequences").select("status")
+      .eq("chatwoot_conversation_id", cwConversationId)
+      .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "running").maybeSingle();
+    if (seq7d) return deny("em_funil_7d");
 
     // A lane é a label no Chatwoot (fonte da verdade, visível pro operador).
     const acct = await accountForChannel(String(channel.id));

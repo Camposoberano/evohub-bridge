@@ -29,10 +29,21 @@ Deno.test("ensaio percorre o catálogo a cada 5 minutos sem envio após 20h", ()
   ]);
 });
 
-Deno.test("entrada tarde desloca o bloco inteiro para a manhã seguinte", () => {
+Deno.test("abertura sai na hora: 1ª peça na entrada e só o excedente rola pra manhã seguinte", () => {
+  // 2026-11-09T22:50:00Z = 19:50 BRT, perto do fim da janela.
+  const rows = scheduleSevenDayPieces(
+    Array.from({ length: 12 }, (_, i) => ({ code: String(i + 1), day: 1 })),
+    Date.parse("2026-11-09T22:50:00Z"),
+  );
+  // 1ª e 2ª saem hoje (19:50 e 19:55 BRT); a partir das 20h rola pro 08h do dia seguinte.
+  assertEquals(rows[0].sendAt, "2026-11-09T22:50:00.000Z");
+  assertEquals(rows[1].sendAt, "2026-11-09T22:55:00.000Z");
+  assertEquals(rows[2].sendAt, "2026-11-10T11:00:00.000Z");
+  assertEquals(rows[3].sendAt, "2026-11-10T11:05:00.000Z");
+  // firstStart agora é a própria entrada, não a manhã seguinte.
   assertEquals(
-    new Date(sevenDayFirstStart(Date.parse("2026-11-09T22:30:00Z"), 12)).toISOString(),
-    "2026-11-10T11:00:00.000Z",
+    new Date(sevenDayFirstStart(Date.parse("2026-11-09T22:50:00Z"), 12)).toISOString(),
+    "2026-11-09T22:50:00.000Z",
   );
 });
 
