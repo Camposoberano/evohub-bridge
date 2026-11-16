@@ -36,6 +36,7 @@ import { handle as metaTemplates } from "./handlers/meta-templates.ts";
 import { handle as flows } from "./handlers/flows.ts";
 import { handle as jevTest } from "./handlers/jev-test.ts";
 import { handle as audiences } from "./handlers/audiences.ts";
+import { handle as customerReconcile } from "./handlers/customer-reconcile.ts";
 import { handle as campaign } from "./handlers/campaign.ts";
 import { handle as chatwootAccounts } from "./handlers/chatwoot-accounts.ts";
 import {
@@ -132,6 +133,7 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/flows": flows,
   "/jev-test": jevTest,
   "/audiences": audiences,
+  "/customer-reconcile": customerReconcile,
   "/campaign": campaign,
   "/chatwoot-accounts": chatwootAccounts,
   "/channel-sync": channelSync,
