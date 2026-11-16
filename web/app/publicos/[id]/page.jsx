@@ -34,6 +34,11 @@ export default function PublicoTabela() {
   const [nova, setNova] = useState({ phone: "", name: "", attributes: {} });
   const [msg, setMsg] = useState("");
   const [exportBusy, setExportBusy] = useState(false);
+  const [verifyChannels, setVerifyChannels] = useState([]);
+  const [verifyChannelId, setVerifyChannelId] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyProgress, setVerifyProgress] = useState(0);
+  const [verifySummary, setVerifySummary] = useState(null);
 
   async function authH() {
     const { data: { session } } = await supabase.auth.getSession();
@@ -47,15 +52,16 @@ export default function PublicoTabela() {
   const carregar = useCallback(async () => {
     const h = await authH();
     const p = new URLSearchParams({ id: String(id), limit: "50", offset: String(pagina * 50), q: busca, sort: ordem, desc: desc ? "1" : "0" });
+    if (verifyChannelId) p.set("verification_channel_id", verifyChannelId);
     const b = await fetch(`${BRIDGE_URL}/audiences?${p}`, { headers: h }).then((r) => r.json()).catch(() => ({}));
     if (b.error || !b.audience) { setMsg(b.error || "público não encontrado"); return; }
     setAud(b.audience);
     setCols((b.audience.column_schema ?? []).filter((c) => c.active !== false).sort((a, z) => a.ordinal - z.ordinal));
-    const next = (b.contacts ?? []).map((c) => ({ phone: c.phone, name: c.name ?? "", attributes: c.attributes ?? {} }));
+    const next = (b.contacts ?? []).map((c) => ({ phone: c.phone, name: c.name ?? "", attributes: c.attributes ?? {}, verification: c.verification ?? null }));
     setRows(next);
     setSavedRows(Object.fromEntries(next.map((row) => [row.phone, structuredClone(row)])));
     setTotal(b.total ?? next.length);
-  }, [id, pagina, busca, ordem, desc]);
+  }, [id, pagina, busca, ordem, desc, verifyChannelId]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -136,6 +142,50 @@ export default function PublicoTabela() {
     carregar();
   }
 
+  // Canais WhatsApp ativos para a verificação (lê direto via RLS, igual à página de fluxos).
+  useEffect(() => {
+    if (!pronto) return;
+    supabase.from("channels").select("id,name,phone_number,external_id")
+      .eq("type", "whatsapp").eq("status", "active").order("name")
+      .then(({ data }) => setVerifyChannels((data ?? []).filter((c) => c.external_id)))
+      .catch(() => setVerifyChannels([]));
+  }, [pronto]);
+
+  useEffect(() => {
+    if (!pronto || !verifyChannelId) { setVerifySummary(null); return; }
+    authH().then((h) => fetch(`${BRIDGE_URL}/audiences?id=${encodeURIComponent(String(id))}&verification_summary_channel_id=${encodeURIComponent(verifyChannelId)}`, { headers: h }))
+      .then((r) => r.json()).then((data) => setVerifySummary(data.verification_summary ?? null))
+      .catch(() => setVerifySummary(null));
+  }, [id, pronto, verifyChannelId]);
+
+  async function verificarPublico(refresh = false) {
+    if (!verifyChannelId || verifyBusy) return;
+    setVerifyBusy(true); setVerifyProgress(0); setMsg("");
+    let after = "";
+    let checked = 0;
+    const counts = { confirmed: 0, not_found: 0, unconfirmed: 0 };
+    try {
+      for (;;) {
+        const result = await post({ action: "verify-batch", id, channel_id: verifyChannelId, after_phone: after, refresh: refresh === true });
+        if (!result.ok) throw new Error(result.error ?? "consulta falhou");
+        checked += Number(result.checked ?? 0);
+        counts.confirmed += Number(result.confirmed ?? 0);
+        counts.not_found += Number(result.not_found ?? 0);
+        counts.unconfirmed += Number(result.unconfirmed ?? 0);
+        setVerifyProgress(checked);
+        if (result.paused) { setMsg("A consulta do WhatsApp ficou indisponível. Os resultados anteriores foram salvos; clique em Continuar verificação mais tarde."); break; }
+        if (result.done) break;
+        if (!result.after_phone || result.after_phone === after) throw new Error("verificação sem avanço");
+        after = result.after_phone;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      setVerifySummary(counts);
+      if (!counts.unconfirmed) setMsg(`Verificados ${checked} número(s). Nenhuma mensagem foi enviada.`);
+      await carregar();
+    } catch (error) { setMsg(`erro: ${error.message}`); }
+    finally { setVerifyBusy(false); }
+  }
+
   async function exportarCsv() {
     if (exportBusy) return;
     setExportBusy(true); setMsg("");
@@ -144,6 +194,7 @@ export default function PublicoTabela() {
       const all = [];
       for (let offset = 0;; offset += 100) {
         const p = new URLSearchParams({ id: String(id), limit: "100", offset: String(offset), sort: "phone" });
+        if (verifyChannelId) p.set("verification_channel_id", verifyChannelId);
         const res = await fetch(`${BRIDGE_URL}/audiences?${p}`, { headers: h });
         const page = await res.json();
         if (!res.ok || page.error) throw new Error(page.error ?? "consulta falhou");
@@ -181,6 +232,27 @@ export default function PublicoTabela() {
           <button className="btn-ghost mini" onClick={exportarCsv} disabled={exportBusy}>{exportBusy ? "Exportando…" : "Exportar CSV"}</button>
         </div>
 
+        <div className="card" style={{ padding: 16, marginBottom: 12 }}>
+          <strong>Verificar números do público</strong>
+          <p style={{ fontSize: 13, color: "var(--text-faint)", margin: "6px 0 10px" }}>
+            Consulta o WhatsApp sem enviar mensagens. “Confirmado” indica presença no momento da consulta; entrega e leitura dependem dos recibos.
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <select value={verifyChannelId} onChange={(e) => setVerifyChannelId(e.target.value)} disabled={verifyBusy}>
+              <option value="">Escolha uma instância conectada</option>
+              {verifyChannels.map((channel) => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
+            </select>
+            <button className="btn-ghost mini" onClick={() => verificarPublico()} disabled={!verifyChannelId || verifyBusy}>
+              {verifyBusy ? `Verificando… ${verifyProgress}` : "Continuar verificação"}
+            </button>
+            <button className="btn-ghost mini" onClick={() => verificarPublico(true)} disabled={!verifyChannelId || verifyBusy}>Reverificar todos</button>
+          </div>
+          {verifySummary && <p style={{ fontSize: 13, margin: "10px 0 0" }}>
+            Confirmados: {verifySummary.confirmed} · Não encontrados: {verifySummary.not_found} ·
+            Não confirmados: {verifySummary.unconfirmed} · Ainda não verificados: {Math.max(0, (aud.contact_count ?? total) - verifySummary.confirmed - verifySummary.not_found - verifySummary.unconfirmed)}
+          </p>}
+        </div>
+
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
           <input value={busca} onChange={(e) => { setBusca(e.target.value); setPagina(0); }} placeholder="Buscar em nomes, telefones e colunas…" aria-label="Buscar contatos" style={{ fontSize: 13, padding: "7px 10px", borderRadius: 9, flex: "1 1 200px" }} />
           <input value={novaCol} onChange={(e) => setNovaCol(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addColuna()} placeholder="Nova coluna" aria-label="Título da nova coluna" style={{ fontSize: 13, padding: "7px 10px", borderRadius: 9, width: 180 }} />
@@ -200,6 +272,7 @@ export default function PublicoTabela() {
                     {editandoColuna?.id === c.id ? <span><input autoFocus aria-label="Novo cabeçalho" value={editandoColuna.title} onChange={(e) => setEditandoColuna({ id: c.id, title: e.target.value })} onKeyDown={(e) => e.key === "Enter" && renomearColuna(c)} style={{ width: 130 }} /><button className="btn-ghost mini" onClick={() => renomearColuna(c)}>Salvar</button><button className="btn-ghost mini" onClick={() => setEditandoColuna(null)}>Cancelar</button></span> : <span>{c.title} <button className="btn-ghost mini" onClick={() => setEditandoColuna({ id: c.id, title: c.title })} title={`Renomear ${c.title}`}>Editar</button><button className="btn-ghost mini" onClick={() => removerColuna(c)} title={`Ocultar ${c.title}`}>×</button></span>}
                   </th>
                 ))}
+                <th style={th}>WhatsApp</th>
                 <th style={th}>Ações</th>
               </tr></thead>
               <tbody>
@@ -208,6 +281,7 @@ export default function PublicoTabela() {
                   <td style={cell}><input value={nova.name} onChange={(e) => setNova({ ...nova, name: e.target.value })} placeholder="novo nome" style={cin} /></td>
                   <td style={cell}><input value={nova.phone} onChange={(e) => setNova({ ...nova, phone: e.target.value })} onKeyDown={(e) => e.key === "Enter" && adicionarPessoa()} placeholder="telefone" style={cin} /></td>
                   {cols.map((c) => (<td key={c.id} style={cell}><input aria-label={`${c.title} da nova pessoa`} value={nova.attributes[c.key] ?? ""} onChange={(e) => setNova({ ...nova, attributes: { ...nova.attributes, [c.key]: e.target.value } })} style={cin} /></td>))}
+                  <td style={cell}>—</td>
                   <td style={cell}><button className="btn-ghost mini" onClick={adicionarPessoa} title="Adicionar">+</button></td>
                 </tr>
                 {rows.map((r) => {
@@ -219,6 +293,7 @@ export default function PublicoTabela() {
                       <td style={cell}><input aria-label={`Nome de ${r.phone}`} value={r.name} onChange={(e) => editarCelula(i, "name", e.target.value)} style={cin} />{temErroTexto && <small style={{ color: "var(--red)", display: "block" }}>Texto com �; conferir original</small>}</td>
                       <td style={{ ...cell, color: "var(--text-faint)", fontSize: 13, padding: "6px 8px" }}>{r.phone}</td>
                       {cols.map((c) => (<td key={c.id} style={cell}><input aria-label={`${c.title} de ${r.phone}`} value={r.attributes?.[c.key] ?? r.attributes?.[c.legacy_title] ?? ""} onChange={(e) => editarCelula(i, c.key, e.target.value)} style={cin} /></td>))}
+                      <td style={{ ...cell, fontSize: 12 }}>{r.verification?.status === "confirmed" ? "Confirmado" : r.verification?.status === "not_found" ? "Não encontrado" : r.verification?.status === "unconfirmed" ? "Não confirmado" : "Não verificado"}</td>
                       <td style={cell}><div style={{ display: "flex", gap: 4 }}><button className="btn-ghost mini" disabled={!sujo || temErroTexto} onClick={() => salvarLinha(r)}>Salvar</button><button className="btn-ghost mini" disabled={!sujo} onClick={() => cancelarLinha(r.phone)}>Cancelar</button><button className="btn-ghost mini" onClick={() => abrirHistorico(r.phone)}>Histórico</button><button className="btn-ghost mini" style={{ color: "var(--red)" }} onClick={() => removerLinha(r.phone)} title="Remover">×</button></div></td>
                     </tr>
                   );

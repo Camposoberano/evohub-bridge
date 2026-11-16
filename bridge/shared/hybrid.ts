@@ -179,6 +179,46 @@ export async function getDirectUazapiRoute(
   return { provider: "uazapi", instance: instanceName, token, channelId };
 }
 
+// Rota uazapi por external_id (nome da instância) com allowlist. Portado do hub CECAPE: usado
+// pela verificação de públicos (checar presença no WhatsApp). Instância só é liberada se estiver
+// no allowlist OU for external_id de um canal nosso — barra sair por instância de outro cliente
+// na uazapi compartilhada.
+export async function getUazapiRouteByExternalId(
+  channelId: string,
+  externalId: string | undefined,
+): Promise<HybridRoute | null> {
+  if (!externalId) return null;
+  if (!uazapiConfigured()) return null;
+  const x = externalId.toLowerCase();
+  const liberado = hybridPolicy().instanceAllowlist.has(x) ||
+    (await externalIdsDosCanais()).has(x);
+  if (!liberado) return null;
+  return await getDirectUazapiRoute(channelId, externalId);
+}
+
+// Conjunto de external_id dos canais WhatsApp (nossa tabela). Cache curto pra não bater no banco
+// a cada chamada; `invalidarCacheCanais()` zera na hora após provisionar um canal.
+let _canaisCache: { set: Set<string>; at: number } | null = null;
+export function invalidarCacheCanais(): void {
+  _canaisCache = null;
+}
+async function externalIdsDosCanais(): Promise<Set<string>> {
+  if (_canaisCache && Date.now() - _canaisCache.at < 60_000) return _canaisCache.set;
+  try {
+    const { data } = await admin().from("channels")
+      .select("external_id").eq("type", "whatsapp").not("external_id", "is", null);
+    const set = new Set(
+      ((data ?? []) as { external_id: string }[])
+        .map((r) => String(r.external_id).toLowerCase()).filter(Boolean),
+    );
+    _canaisCache = { set, at: Date.now() };
+    return set;
+  } catch {
+    // Falha de leitura NÃO deve liberar tudo: devolve o que tem em cache, ou vazio.
+    return _canaisCache?.set ?? new Set();
+  }
+}
+
 export type SendResult = {
   ok: boolean;
   status: number;

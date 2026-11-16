@@ -13,6 +13,11 @@ import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { type AudienceColumn, hasCorruptedAudienceText, makeAudienceColumn, validAudienceColumns } from "../shared/audience-columns.ts";
+import { assertEligibleCampaignChannel } from "../shared/campaign-channel-availability.ts";
+import { getUazapiRouteByExternalId } from "../shared/hybrid.ts";
+import { checarProntidao } from "../shared/hybrid-extra.ts";
+import { instPost } from "../shared/uazapi.ts";
+import { mapAudienceCheckResponse } from "../shared/audience-check-response.ts";
 
 type Json = Record<string, unknown>;
 
@@ -91,6 +96,20 @@ export async function handle(req: Request): Promise<Response> {
         .select("id,name,tag,contact_count,columns,column_schema,schema_version,created_at").eq("id", id).maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!aud) return json({ error: "público não encontrado" }, 404);
+      const summaryChannelId = params.get("verification_summary_channel_id");
+      if (summaryChannelId) {
+        if (!/^[0-9a-f-]{36}$/i.test(summaryChannelId)) return json({ error: "canal inválido" }, 400);
+        const statuses = ["confirmed", "not_found", "unconfirmed"];
+        const counts = await Promise.all(statuses.map((status) =>
+          db.from("audience_whatsapp_checks").select("phone", { count: "exact", head: true })
+            .eq("audience_id", id).eq("channel_id", summaryChannelId).eq("status", status)
+            .gte("checked_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString())
+        ));
+        if (counts.some((result) => result.error)) return json({ error: "falha ao resumir verificação" }, 500);
+        return json({ audience: aud, verification_summary: Object.fromEntries(
+          statuses.map((status, index) => [status, counts[index].count ?? 0])
+        ) });
+      }
       if (params.has("limit")) {
         const limit = Number(params.get("limit"));
         const offset = Number(params.get("offset") ?? 0);
@@ -106,7 +125,19 @@ export async function handle(req: Request): Promise<Response> {
         });
         if (pageError) return json({ error: "falha ao consultar contatos" }, 500);
         const rows = (page ?? []) as Json[];
-        return json({ audience: aud, contacts: rows.map(({ total_count: _count, ...contact }) => contact),
+        const channelId = params.get("verification_channel_id");
+        let checks: Record<string, Json> = {};
+        if (channelId && rows.length) {
+          if (!/^[0-9a-f-]{36}$/i.test(channelId)) return json({ error: "canal inválido" }, 400);
+          const { data: found, error: checkError } = await db.from("audience_whatsapp_checks")
+            .select("phone,status,reason,checked_at").eq("audience_id", id)
+            .eq("channel_id", channelId).in("phone", rows.map((row) => String(row.phone)))
+            .gte("checked_at", new Date(Date.now() - 24 * 60 * 60_000).toISOString());
+          if (checkError) return json({ error: "falha ao consultar verificação" }, 500);
+          checks = Object.fromEntries((found ?? []).map((row: Json) => [String(row.phone), row]));
+        }
+        return json({ audience: aud, contacts: rows.map(({ total_count: _count, ...contact }) =>
+          ({ ...contact, verification: checks[String(contact.phone)] ?? null })),
           total: Number(rows[0]?.total_count ?? 0), offset, limit });
       }
       const { data: contatos, error: contactsError } = await db.from("audience_contacts")
@@ -125,6 +156,65 @@ export async function handle(req: Request): Promise<Response> {
 
   const body = await req.json().catch(() => ({})) as Json;
   const action = String(body.action ?? "");
+
+  if (action === "verify-batch") {
+    const id = String(body.id ?? "");
+    const channelId = String(body.channel_id ?? "");
+    const afterPhone = String(body.after_phone ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(id) || !/^[0-9a-f-]{36}$/i.test(channelId) ||
+        afterPhone && !/^55\d{10,11}$/.test(afterPhone)) {
+      return json({ error: "público, canal ou cursor inválido" }, 400);
+    }
+    const { data: aud, error: audError } = await db.from("audiences")
+      .select("id").eq("id", id).maybeSingle();
+    if (audError || !aud) return json({ error: "público não encontrado" }, 404);
+    try {
+      await assertEligibleCampaignChannel(channelId, db);
+      const { data: channel, error: channelError } = await db.from("channels")
+        .select("external_id").eq("id", channelId).maybeSingle();
+      if (channelError || !channel?.external_id) return json({ error: "instância sem vínculo" }, 409);
+      const route = await getUazapiRouteByExternalId(channelId, String(channel.external_id));
+      if (!route) return json({ error: "instância indisponível" }, 409);
+      const ready = await checarProntidao(route);
+      if (!ready.pronta) return json({ error: "instância desconectada" }, 409);
+      let query = db.from("audience_contacts").select("phone").eq("audience_id", id)
+        .order("phone", { ascending: true }).limit(20);
+      if (afterPhone) query = query.gt("phone", afterPhone);
+      const { data: contacts, error: contactsError } = await query;
+      if (contactsError) return json({ error: "falha ao ler público" }, 500);
+      const phones: string[] = (contacts ?? []).map((row: Json) => String(row.phone));
+      if (!phones.length) return json({ ok: true, done: true, checked: 0 });
+      const refresh = body.refresh === true;
+      const freshAfter = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+      const { data: previous, error: previousError } = await db.from("audience_whatsapp_checks")
+        .select("phone,status,reason,checked_at").eq("audience_id", id).eq("channel_id", channelId)
+        .in("phone", phones).gte("checked_at", freshAfter);
+      if (previousError) return json({ error: "falha ao retomar verificação" }, 500);
+      const reusable = new Map((previous ?? []).filter((row: Json) =>
+        row.status === "confirmed" || row.status === "not_found"
+      ).map((row: Json) => [String(row.phone), row]));
+      const toCheck = refresh ? phones : phones.filter((phone) => !reusable.has(phone));
+      const response = toCheck.length ? await instPost("/chat/check", route.token, { numbers: toCheck }) : null;
+      const now = new Date().toISOString();
+      const checked = response ? mapAudienceCheckResponse(toCheck, response.ok, response.data)
+        .map((row) => ({ audience_id: id, channel_id: channelId, ...row, checked_at: now })) : [];
+      const newByPhone = new Map(checked.map((row) => [row.phone, row]));
+      const results = phones.map((phone) => newByPhone.get(phone) ?? reusable.get(phone)).filter(Boolean) as Json[];
+      if (checked.length) {
+        const { error: saveError } = await db.from("audience_whatsapp_checks")
+          .upsert(checked, { onConflict: "audience_id,channel_id,phone" });
+        if (saveError) return json({ error: "falha ao salvar verificação" }, 500);
+      }
+      return json({ ok: true, done: phones.length < 20, paused: response?.ok === false,
+        after_phone: phones.at(-1),
+        checked: phones.length, confirmed: results.filter((r) => r.status === "confirmed").length,
+        not_found: results.filter((r) => r.status === "not_found").length,
+        unconfirmed: results.filter((r) => r.status === "unconfirmed").length });
+    } catch (error) {
+      console.error("audience verification:", error);
+      return json({ error: "verificação indisponível; tente novamente mais tarde" }, 503);
+    }
+  }
 
   if (action === "save") {
     const name = String(body.name ?? "").trim();
