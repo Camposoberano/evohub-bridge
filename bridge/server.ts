@@ -86,7 +86,7 @@ import {
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { flowChannelFor, pumpFlowTimeouts, pumpFlowWaits } from "./shared/flow-inbound.ts";
+import { efeitosDoFluxo, flowChannelFor, pumpFlowTimeouts, pumpFlowWaits, varsDoContato } from "./shared/flow-inbound.ts";
 import { repairWhatsAppNamesStep } from "./shared/whatsapp-name-sync.ts";
 import { reconcileResponsePriorities } from "./shared/reply-priority.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
@@ -1455,6 +1455,23 @@ function startCampaignQueueLoop() {
           }
 
           runFlowIniciado = true;
+          // Variáveis do contato: perfil + snapshot do público (migration 0030, se houver).
+          // Efeitos dos nós de lógica (ação/api/transfer). varsDoContato é tolerante: sem snapshot
+          // ou sem a tabela, cai nas vars de perfil (nome/primeiro_nome/telefone).
+          const vars = await varsDoContato(
+            db,
+            String(canal.id),
+            item.contact_key,
+            campaignId,
+          );
+          const efeitos = efeitosDoFluxo(
+            db,
+            canal as Record<string, unknown>,
+            item.contact_key,
+            vars,
+            null,
+            camp.flow,
+          );
           const r = await runFlow(
             camp.flow,
             ch,
@@ -1462,6 +1479,8 @@ function startCampaignQueueLoop() {
             null,
             checkedAt,
             gravador,
+            vars,
+            efeitos,
           );
           await saveFlowPosition(db, campaignId, item.contact_key, r.position, {
             channelId: String(canal.id),

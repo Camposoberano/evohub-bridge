@@ -16,6 +16,7 @@ import { checarProntidao } from "../shared/hybrid-extra.ts";
 import { type Flow, validateFlow } from "../shared/flow.ts";
 import { type FlowChannel, runFlow } from "../shared/flow-runner.ts";
 import { gravadorDeFluxo } from "../shared/flow-record.ts";
+import { snapshotVariaveisDoPublico } from "../shared/flow-inbound.ts";
 import { saveFlowPosition } from "../shared/flow-state.ts";
 import { validarContatoAntesDaCampanha } from "../shared/campaign-preflight.ts";
 import {
@@ -691,6 +692,13 @@ export async function handle(req: Request): Promise<Response> {
     await writeCampaigns(state);
 
     const enfileirados = await enfileirar(admin(), camp.id, numbers, ch.id);
+    // Personalização por coluna de Público: congela as variáveis de cada contato (migration 0030).
+    // O pump lê de volta pra interpolar {{coluna}} no fluxo. Best-effort — não derruba o disparo.
+    const audienceId = String(body.audience_id ?? "").trim();
+    if (audienceId) {
+      const n = await snapshotVariaveisDoPublico(admin(), camp.id, audienceId, numbers);
+      if (n > 0) console.log("campaign-vars:", camp.id, `snapshot de ${n} contato(s) do público`);
+    }
     const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
     return json({
       ok: true,

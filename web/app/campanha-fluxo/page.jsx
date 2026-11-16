@@ -19,6 +19,7 @@ export default function CampanhaFluxo() {
   const [canalId, setCanalId] = useState("");
   const [nome, setNome] = useState("");
   const [publicoNums, setPublicoNums] = useState([]);
+  const [publicoId, setPublicoId] = useState("");
   const [manual, setManual] = useState("");
   const [lancando, setLancando] = useState(false);
   const [campanha, setCampanha] = useState(null);
@@ -80,6 +81,7 @@ export default function CampanhaFluxo() {
       action: "agendar-fluxo",
       name: nome.trim() || `${flowName} — ${new Date().toLocaleDateString("pt-BR")}`,
       channel_id: canalId, numbers: numeros, flow: grafo,
+      audience_id: publicoId || undefined,
     });
     setLancando(false);
     if (r.error) { setMsg(`erro: ${r.error}${r.problemas ? " — " + r.problemas.map((p) => p.problema).join("; ") : ""}`); return; }
@@ -138,7 +140,7 @@ export default function CampanhaFluxo() {
 
           <div style={card}>
             <label style={labelUp}>2. Audiência <span style={{ color: "var(--mint)" }}>({numeros.length})</span></label>
-            <SeletorPublico onNums={setPublicoNums} />
+            <SeletorPublico onNums={setPublicoNums} onSelect={(s) => setPublicoId(s?.id ?? "")} />
             <details style={{ marginTop: 12 }}>
               <summary style={{ cursor: "pointer", fontSize: 12, color: "var(--text-faint)" }}>Ou colar números manualmente</summary>
               <textarea value={manual} onChange={(e) => setManual(e.target.value)} placeholder={"5519999999999\n5511888888888"} style={{ width: "100%", marginTop: 8, minHeight: 60, fontSize: 13, padding: 10, borderRadius: 10, resize: "vertical" }} />

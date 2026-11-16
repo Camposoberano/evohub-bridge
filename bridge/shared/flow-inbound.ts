@@ -130,13 +130,16 @@ export async function varsDoContato(
   try {
     let snapshot: Record<string, string> = {};
     if (campaignId) {
-      const { data: stored, error: snapshotError } = await db.from("campaign_contact_variables")
-        .select("variable_values").eq("campaign_id", campaignId)
-        .eq("contact_key", contactKey).maybeSingle();
-      if (snapshotError) throw snapshotError;
-      if (stored?.variable_values && typeof stored.variable_values === "object") {
-        snapshot = stored.variable_values as Record<string, string>;
-      }
+      // Snapshot é opcional: se a migration 0030 não foi aplicada (tabela ausente) ou não há linha
+      // pra este contato, degrada pra sem-snapshot em vez de derrubar o disparo.
+      try {
+        const { data: stored } = await db.from("campaign_contact_variables")
+          .select("variable_values").eq("campaign_id", campaignId)
+          .eq("contact_key", contactKey).maybeSingle();
+        if (stored?.variable_values && typeof stored.variable_values === "object") {
+          snapshot = stored.variable_values as Record<string, string>;
+        }
+      } catch { /* tabela ausente / erro de leitura: segue sem snapshot */ }
     }
     const { data } = await db.from("contacts")
       .select("name,attributes")
@@ -161,8 +164,7 @@ export async function varsDoContato(
       primeiro_nome: snapshot.primeiro_nome || nome.split(/\s+/)[0] || "",
       telefone: String(contactKey).replace(/\D/g, ""),
     };
-  } catch (error) {
-    if (campaignId) throw error;
+  } catch {
     return {};
   }
 }
@@ -320,6 +322,60 @@ export async function dispararPrimeiroToque(
   const efeitos = efeitosDoFluxo(db, channel, to, vars, null);
   const r = await runFlow(toque, ch, to, null, now, onSent, vars, efeitos);
   return r.enviados > 0;
+}
+
+/**
+ * Congela as variáveis de cada contato do Público numa campanha (migration 0030). O pump lê de
+ * volta via varsDoContato(campaignId) pra interpolar {{coluna}}/{{coluna_N}} no fluxo. Best-effort:
+ * falha (ex.: tabela ausente) não derruba o disparo — a campanha só não personaliza por coluna.
+ */
+export async function snapshotVariaveisDoPublico(
+  db: DbClient,
+  campaignId: string,
+  audienceId: string,
+  contactKeys: string[],
+): Promise<number> {
+  if (!audienceId || !contactKeys.length) return 0;
+  try {
+    const { data: aud } = await db.from("audiences")
+      .select("name,schema_version,column_schema").eq("id", audienceId).maybeSingle();
+    if (!aud) return 0;
+    const schema = ((aud.column_schema as Array<{ key: string; ordinal: number; active?: boolean; legacy_title?: string | null }>) ?? [])
+      .filter((c) => c.active !== false);
+    const keySet = new Set(contactKeys.map((k) => String(k).replace(/\D/g, "")));
+    const { data: contatos } = await db.from("audience_contacts")
+      .select("phone,name,attributes").eq("audience_id", audienceId);
+    const rows: Record<string, unknown>[] = [];
+    for (const c of (contatos ?? []) as Array<{ phone: string; name: string | null; attributes: Record<string, unknown> | null }>) {
+      const key = String(c.phone).replace(/\D/g, "");
+      if (!keySet.has(key)) continue;
+      const attrs = c.attributes ?? {};
+      const nome = String(c.name ?? "").trim();
+      const vars: Record<string, string> = {
+        nome, primeiro_nome: nome.split(/\s+/)[0] ?? "", telefone: key,
+      };
+      for (const col of schema) {
+        const val = String(attrs[col.key] ?? attrs[col.legacy_title ?? ""] ?? "");
+        vars[col.key] = val;
+        vars[`coluna_${col.ordinal}`] = val;
+      }
+      rows.push({
+        campaign_id: campaignId, contact_key: key, audience_id: audienceId,
+        audience_name: String(aud.name ?? ""), schema_version: Number(aud.schema_version ?? 1),
+        variable_values: vars,
+      });
+    }
+    if (!rows.length) return 0;
+    for (let i = 0; i < rows.length; i += 500) {
+      const { error } = await db.from("campaign_contact_variables")
+        .upsert(rows.slice(i, i + 500), { onConflict: "campaign_id,contact_key" });
+      if (error) throw error;
+    }
+    return rows.length;
+  } catch (e) {
+    console.warn("snapshot-vars: falhou (segue sem personalização):", String(e).slice(0, 140));
+    return 0;
+  }
 }
 
 export { casaPalavra, normalizarTexto } from "./keyword-listeners.ts";
