@@ -88,6 +88,7 @@ import {
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
 import { flowChannelFor, pumpFlowTimeouts, pumpFlowWaits } from "./shared/flow-inbound.ts";
 import { repairWhatsAppNamesStep } from "./shared/whatsapp-name-sync.ts";
+import { reconcileResponsePriorities } from "./shared/reply-priority.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
   campanhasComFila,
@@ -1644,6 +1645,30 @@ function startWhatsAppNameRepairLoop() {
   console.log("whatsapp-name-sync loop ON (3min)");
 }
 
+// Escala a Prioridade nativa do Chatwoot por tempo sem resposta humana (migration 0029). Gated
+// RESPONSE_PRIORITY_ENABLED=true (default OFF — toca prioridade no Chatwoot, ligar após validar).
+const RESPONSE_PRIORITY_INTERVAL_MS = 2 * 60_000;
+
+function startResponsePriorityLoop() {
+  if (optionalEnv("RESPONSE_PRIORITY_ENABLED") !== "true") return;
+  let rodando = false;
+  const run = async () => {
+    if (rodando) return;
+    rodando = true;
+    try {
+      const r = await reconcileResponsePriorities(admin());
+      if (r.changed > 0) console.log("reply-priority:", JSON.stringify(r));
+    } catch (e) {
+      console.error("reply-priority loop erro:", e);
+    } finally {
+      rodando = false;
+    }
+  };
+  setTimeout(run, 140_000);
+  setInterval(run, RESPONSE_PRIORITY_INTERVAL_MS);
+  console.log("reply-priority loop ON (2min)");
+}
+
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
@@ -1752,6 +1777,7 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startFlowTimeoutLoop();
   startFlowWaitLoop();
   startWhatsAppNameRepairLoop();
+  startResponsePriorityLoop();
   startCampaignQueueLoop();
   startOperationalMonitorLoop();
   startUazapiCatchupLoop();
