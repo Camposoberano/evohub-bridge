@@ -32,6 +32,27 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Funil 7d GO-LIVE = feature de modo-ao-vivo, NUNCA "só config" (2026-11-16, commit `066915b`).**
+  Por 3 dias tentou-se "botar o 7d pra rodar" mexendo em config e nunca rodava: o único gate que
+  existia era a allowlist de TESTE (`MEGA_SORGO_7D_TEST_CONVERSATIONS`, fail-closed) + enroll que
+  roteava 5895/6836 pro funil ANTIGO (`mega-sorgo-5895-20260930`). Pôr no ar exigiu CÓDIGO:
+  (a) flag `MEGA_SORGO_7D_LIVE=true` + `sevenDayLiveMode()`/`sevenDayConversationAllowed()`/
+  `isSevenDayWhatsAppChannel()` em `shared/mega-sorgo-7d-gate.ts`; (b) um ramo no TOPO de
+  `enrollIfNew` (`handlers/funil-enroll.ts`) que, em modo ao vivo + canal 5895/6836, faz o enqueue
+  7d (`source="ad"`) em vez do funil antigo; (c) `n8n-action-enqueue` aceitar `source="ad"` só quando
+  live. **Regra:** enroll é o ÚNICO ponto de convergência (autoEnroll/hub-webhook/funil-control/
+  recoverEligible passam por `enrollIfNew`) — roteia o 7d LÁ, nunca em `mainFunnelForChannel`
+  (deixar intocado faz lead que já está no funil antigo TERMINAR nele, sem corte no meio). Provado
+  ao vivo 16/11: 6 leads orgânicos entraram sozinhos (5×5895 + 1×6836), 12 peças entregues cada nos
+  4 primeiros, 0 colateral. Ver [[funil-7d-golive-modo-ao-vivo]].
+- **Deploy do SERVIDOR DENTRO de 8-20h, se risco aceito: pausar o dispatcher n8n durante o
+  restart/deploy (2026-11-16).** O auto-pause da campanha dispara quando um envio fica incerto, e
+  restart no meio de envio é a causa clássica. Mitigação comprovada: `POST /deactivate` no workflow
+  n8n "Funil Mega Sorgo - Fila (cron 1min)" (`pQFCtRhzQTKqXTjS`) ANTES do `/deploy`|`/restart`,
+  reativar (`/activate`) só quando o container novo subir (`uptime_s` baixo no `/version`). Zero
+  peça em voo → zero `send_uncertain` → zero `campaign_auto_paused`. Verificado nos 2 deploys do dia.
+  **Regra:** a trava das 8-20h continua valendo; só fure com OK explícito do dono E com o dispatcher
+  pausado na janela do restart.
 - **Eco de deleção/edição/reação do aparelho NÃO se reenvia — vira loop (2026-10-30).**
   Deletar/editar/reagir a uma msg no WhatsApp → a uazapi espelha no Chatwoot como texto de SAÍDA
   ("🗑️ [ Mensagem deletada ]", "👍🏻 [ reação ]") SEM `source_id`, escapando do `isProviderEchoOutgoing`.
