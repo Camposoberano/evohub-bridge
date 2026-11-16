@@ -3,6 +3,12 @@ import { addBusinessSeconds, clampBusinessTime } from "./business-time.ts";
 import { isClosedOutcome } from "./outcome-labels.ts";
 import { applyCompletionLabel } from "./completion-label.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
+import {
+  LEGACY_MAIN_FUNNEL,
+  MAIN_FUNNELS,
+  mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
+} from "./funnel-identity.ts";
 
 type Json = Record<string, unknown>;
 
@@ -57,24 +63,40 @@ export function rebasePausedSchedule(
 export async function resumeSequenceRebased(
   db: DbClient,
   conversationId: string,
-  funnel = "mega-sorgo",
+  funnel?: string,
   now = Date.now(),
 ): Promise<number> {
+  const funnelId = funnel ?? await (async () => {
+    const { data: conversation, error: conversationError } = await db
+      .from("conversations").select("channel_id").eq("id", conversationId)
+      .maybeSingle();
+    if (conversationError) throw conversationError;
+    if (!conversation?.channel_id) return LEGACY_MAIN_FUNNEL;
+    const { data: channel, error: channelError } = await db.from("channels")
+      .select("name,external_id,phone_number")
+      .eq("id", conversation.channel_id).maybeSingle();
+    if (channelError) throw channelError;
+    return mainFunnelForChannel(channel);
+  })();
   const { data: paused, error } = await db.from("scheduled_messages")
-    .select("id,send_at")
+    .select("id,send_at,type")
     .eq("conversation_id", conversationId)
-    .eq("funnel", funnel)
+    .eq("funnel", funnelId)
     .eq("status", "paused")
     .order("send_at", { ascending: true })
     .limit(500);
   if (error) throw error;
-  const rows = (paused ?? []) as Json[];
-  if (!rows.length) return 0;
-
-  const rebased = rebasePausedSchedule(
-    rows.map((row) => String(row.send_at)),
-    now + 60_000,
+  const rows = ((paused ?? []) as Json[]).filter((row) =>
+    row.type !== "deferred_intent"
   );
+  const deferredRoutes = ((paused ?? []) as Json[]).filter((row) =>
+    row.type === "deferred_intent"
+  );
+  if (!rows.length && !deferredRoutes.length) return 0;
+
+  const rebased = rows.length
+    ? rebasePausedSchedule(rows.map((row) => String(row.send_at)), now + 60_000)
+    : [];
   for (let index = 0; index < rows.length; index++) {
     await db.from("scheduled_messages").update({
       status: "pending",
@@ -83,9 +105,9 @@ export async function resumeSequenceRebased(
   }
   await db.from("sales_sequences").update({ status: "running" })
     .eq("conversation_id", conversationId)
-    .eq("funnel", funnel)
+    .eq("funnel", funnelId)
     .eq("status", "paused");
-  return rows.length;
+  return rows.length + deferredRoutes.length;
 }
 
 export function canAutoResume(input: {
@@ -94,11 +116,13 @@ export function canAutoResume(input: {
   lastActivityAt: number;
   lastInboundAt: number;
   pauseType: string;
+  comPrazo?: boolean;
   outcome?: string | null;
 }): boolean {
   // isClosedOutcome, não `!outcome`: conversations.outcome é NOT NULL com default 'open',
   // então `!outcome` era falso pra TODA conversa e o auto-resume parou de existir.
-  return input.pauseType === "auto_paused" && !isClosedOutcome(input.outcome) &&
+  return input.pauseType === "auto_paused" && input.comPrazo !== false &&
+    !isClosedOutcome(input.outcome) &&
     input.now - input.pauseAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastActivityAt >= AUTO_RESUME_AFTER_MS &&
     input.now - input.lastInboundAt <= MAX_AUTO_RESUME_INBOUND_AGE_MS;
@@ -115,10 +139,13 @@ export function canAutoResume(input: {
 export function stillBlocksCompletion(
   row: { status?: unknown; send_at?: unknown; sent_at?: unknown },
   now: number,
+  funnel?: string,
 ): boolean {
   const status = String(row.status ?? "");
   if (status === "pending" || status === "paused") return true;
   if (status !== "failed") return false;
+  // A restauração não pode ser concluída com uma peça multimídia perdida.
+  if (funnel === RESTORED_5895_FUNNEL) return true;
   // send_at primeiro: quem falhou nunca chegou a ter sent_at.
   const at = Date.parse(String(row.send_at ?? row.sent_at ?? ""));
   return !Number.isFinite(at) || now - at < FAILED_GRACE_MS;
@@ -154,20 +181,59 @@ export async function maintainFunnels(
   const result = { scanned: 0, completed: 0, resumed: 0, followups: 0 };
   const { data: sequences, error } = await db.from("sales_sequences")
     .select("id,conversation_id,chatwoot_conversation_id,funnel,status")
-    .eq("funnel", "mega-sorgo")
+    .in("funnel", MAIN_FUNNELS)
     .in("status", ["running", "paused"])
     .limit(500);
   if (error) throw error;
   if (!sequences?.length) return result;
 
-  const conversationIds = sequences.map((item: Json) => String(item.conversation_id))
+  const conversationIds = sequences.map((item: Json) =>
+    String(item.conversation_id)
+  )
     .filter(Boolean);
   const idBatches = batches(conversationIds, POSTGREST_ID_BATCH_SIZE);
+  const identityConversationBatches = await Promise.all(
+    idBatches.map((ids) =>
+      db.from("conversations").select("id,channel_id,outcome").in("id", ids)
+    ),
+  );
+  for (const response of identityConversationBatches) {
+    if (response.error) throw response.error;
+  }
+  const identityConversations = identityConversationBatches.flatMap((
+    response,
+  ) => response.data ?? []) as Json[];
+  const channelIds = [
+    ...new Set(
+      identityConversations.map((item) => String(item.channel_id ?? "")).filter(
+        Boolean,
+      ),
+    ),
+  ];
+  const channelBatches = await Promise.all(
+    batches(channelIds, POSTGREST_ID_BATCH_SIZE).map((ids) =>
+      db.from("channels").select("id,name,external_id,phone_number").in(
+        "id",
+        ids,
+      )
+    ),
+  );
+  for (const response of channelBatches) {
+    if (response.error) throw response.error;
+  }
+  const channels = channelBatches.flatMap((response) =>
+    response.data ?? []
+  ) as Json[];
+  const channelById = new Map(channels.map((channel) => [
+    String(channel.id),
+    channel,
+  ]));
+  const conversationById = new Map(identityConversations.map((item) => [
+    String(item.id),
+    item,
+  ]));
   const since = new Date(now - 48 * 60 * 60_000).toISOString();
-  const [conversationBatches, pauseEventsResult, catalogStateBatches] = await Promise.all([
-    Promise.all(idBatches.map((ids) => db.from("conversations")
-      .select("id,channel_id,outcome")
-      .in("id", ids))),
+  const [pauseEventsResult, catalogStateBatches] = await Promise.all([
     db.from("events")
       .select("event_type,received_at,payload")
       .eq("source", "funil")
@@ -175,18 +241,22 @@ export async function maintainFunnels(
       .gte("received_at", since)
       .order("received_at", { ascending: false })
       .limit(2_000),
-    Promise.all(idBatches.map((ids) => db.from("catalog_nav_state")
-      .select("conversation_id")
-      .in("conversation_id", ids)
-      .eq("journey", "catalogo"))),
+    Promise.all(idBatches.map((ids) =>
+      db.from("catalog_nav_state")
+        .select("conversation_id")
+        .in("conversation_id", ids)
+        .eq("journey", "catalogo")
+    )),
   ]);
-  for (const response of [...conversationBatches, ...catalogStateBatches]) {
+  for (const response of [...catalogStateBatches]) {
     if (response.error) throw response.error;
   }
   if (pauseEventsResult.error) throw pauseEventsResult.error;
-  const conversations = conversationBatches.flatMap((response) => response.data ?? []);
+  const conversations = identityConversations;
   const pauseEvents = pauseEventsResult.data;
-  const catalogStates = catalogStateBatches.flatMap((response) => response.data ?? []);
+  const catalogStates = catalogStateBatches.flatMap((response) =>
+    response.data ?? []
+  );
   const conversationMap = new Map(
     (conversations ?? []).map((item: Json) => [String(item.id), item]),
   );
@@ -209,11 +279,30 @@ export async function maintainFunnels(
   for (const sequence of sequences as Json[]) {
     result.scanned++;
     const conversationId = String(sequence.conversation_id);
+    const identityConversation = conversationById.get(conversationId);
+    const channel = identityConversation
+      ? channelById.get(String(identityConversation.channel_id ?? ""))
+      : null;
+    const expectedFunnel = mainFunnelForChannel(channel);
+    if (sequence.funnel !== expectedFunnel) {
+      const { error: cancelRowsError } = await db
+        .from("scheduled_messages").update({ status: "cancelled" })
+        .eq("conversation_id", conversationId)
+        .eq("funnel", String(sequence.funnel ?? LEGACY_MAIN_FUNNEL))
+        .neq("type", "deferred_intent")
+        .in("status", ["pending", "paused"]);
+      if (cancelRowsError) throw cancelRowsError;
+      const { error: cancelSequenceError } = await db
+        .from("sales_sequences").update({ status: "cancelled" })
+        .eq("id", sequence.id).in("status", ["running", "paused"]);
+      if (cancelSequenceError) throw cancelSequenceError;
+      continue;
+    }
     if (muted.has(conversationId)) continue;
     const { data: queue, error: queueError } = await db.from(
       "scheduled_messages",
     )
-      .select("id,day,status,send_at,sent_at")
+      .select("id,day,status,send_at,sent_at,type")
       .eq("conversation_id", conversationId)
       .eq("funnel", String(sequence.funnel ?? "mega-sorgo"))
       .order("send_at", { ascending: true })
@@ -221,11 +310,14 @@ export async function maintainFunnels(
     if (queueError) throw queueError;
     const rows = (queue ?? []) as Json[];
     const sentRows = rows.filter((row) => row.status === "sent");
-    const remaining = rows.filter((row) => stillBlocksCompletion(row, now));
+    const remaining = rows.filter((row) =>
+      stillBlocksCompletion(row, now, String(sequence.funnel ?? ""))
+    );
     // Falhas velhas deixaram de segurar o funil, mas o lead não recebeu essas mensagens:
     // registrar quantas para o evento não sugerir uma entrega completa.
     const abandoned = rows.filter((row) =>
-      String(row.status) === "failed" && !stillBlocksCompletion(row, now)
+      String(row.status) === "failed" &&
+      !stillBlocksCompletion(row, now, String(sequence.funnel ?? ""))
     );
 
     if (sentRows.length > 0 && remaining.length === 0) {
@@ -264,8 +356,13 @@ export async function maintainFunnels(
 
     if (sequence.status !== "paused") continue;
     if (catalogConversationIds.has(conversationId)) continue;
-    const pausedRows = rows.filter((row) => row.status === "paused");
-    if (!pausedRows.length) continue;
+    const deferredRoutes = rows.filter((row) =>
+      row.status === "paused" && row.type === "deferred_intent"
+    );
+    const pausedRows = rows.filter((row) =>
+      row.status === "paused" && row.type !== "deferred_intent"
+    );
+    if (!pausedRows.length && !deferredRoutes.length) continue;
     const pause = latestPause.get(conversationId);
     if (!pause) continue;
     const activity = await latestActivity(db, conversationId);
@@ -280,14 +377,17 @@ export async function maintainFunnels(
         lastActivityAt: activity.lastActivityAt,
         lastInboundAt: activity.lastInboundAt,
         pauseType: String(pause.event_type),
+        comPrazo: (pause.payload as Json | undefined)?.com_prazo !== false,
         outcome: String(conversation?.outcome ?? "") || null,
       })
     ) continue;
 
-    const rebased = rebasePausedSchedule(
-      pausedRows.map((row) => String(row.send_at)),
-      now + 60_000,
-    );
+    const rebased = pausedRows.length
+      ? rebasePausedSchedule(
+        pausedRows.map((row) => String(row.send_at)),
+        now + 60_000,
+      )
+      : [];
     for (let index = 0; index < pausedRows.length; index++) {
       await db.from("scheduled_messages").update({
         status: "pending",
@@ -304,6 +404,7 @@ export async function maintainFunnels(
         chatwoot_conversation_id: sequence.chatwoot_conversation_id,
         reason: "90min-sem-atividade",
         resumed_messages: pausedRows.length,
+        resumed_deferred_routes: deferredRoutes.length,
       },
     });
     result.resumed++;
@@ -342,24 +443,29 @@ async function scheduleSilentFollowup(
     .order("received_at", { ascending: false }).limit(2_000);
   if (humanRequestError) throw humanRequestError;
   const humanRequested = (humanRequests ?? []).some((event: Json) =>
-    String((event.payload as Json | undefined)?.conversation_id ?? "") === conversationId
+    String((event.payload as Json | undefined)?.conversation_id ?? "") ===
+      conversationId
   );
 
   const activity = await latestActivity(db, conversationId);
-  if (!canSendSilentFollowup({
-    now,
-    lastInboundAt: activity.lastInboundAt,
-    lastMainOutAt: lastSentAt,
-    assignee: conversation.data.assignee,
-    humanRequested,
-    outcome: conversation.data.outcome as string | null,
-  })) return false;
+  if (
+    !canSendSilentFollowup({
+      now,
+      lastInboundAt: activity.lastInboundAt,
+      lastMainOutAt: lastSentAt,
+      assignee: conversation.data.assignee,
+      humanRequested,
+      outcome: conversation.data.outcome as string | null,
+    })
+  ) return false;
   if (
     (activity.lastActivityAt && activity.lastActivityAt > lastSentAt)
   ) {
     return false;
   }
-  const { data: existing, error: existingError } = await db.from("scheduled_messages")
+  const { data: existing, error: existingError } = await db.from(
+    "scheduled_messages",
+  )
     .select("id")
     .eq("conversation_id", conversationId)
     .eq("funnel", FOLLOW_UP_FUNNEL)

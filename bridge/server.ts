@@ -11,7 +11,10 @@ import {
   confereSegredo,
   segredoParaChamadaInterna,
 } from "./shared/segredo-bridge.ts";
-import { handle as hubWebhook } from "./handlers/hub-webhook.ts";
+import {
+  dispatchDeferredFunnelIntent,
+  handle as hubWebhook,
+} from "./handlers/hub-webhook.ts";
 import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
 import { handle as connectUazapi } from "./handlers/connect-uazapi.ts";
@@ -20,8 +23,19 @@ import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
 import { handle as uazapiWebhook } from "./handlers/uazapi-webhook.ts";
-import { janelaProfunda, recuperarEntradaUazapi } from "./shared/catchup-uazapi.ts";
+import {
+  handle as inboundIncidents,
+  runInboundWatchdog,
+} from "./handlers/inbound-incidents.ts";
+import {
+  janelaProfunda,
+  recuperarEntradaUazapi,
+} from "./shared/catchup-uazapi.ts";
 import { handle as sendOutbound } from "./handlers/send-outbound.ts";
+import { handle as n8nActionEnqueue } from "./handlers/n8n-action-enqueue.ts";
+import { handle as n8nActionSendNow } from "./handlers/n8n-action-send-now.ts";
+import { handle as n8nQueue } from "./handlers/n8n-queue.ts";
+import { handle as n8nReconcile5895 } from "./handlers/n8n-reconcile-5895.ts";
 import {
   handle as funilEnroll,
   recoverEligibleFunnels,
@@ -63,14 +77,27 @@ import { handle as hybridOps } from "./handlers/hybrid-ops.ts";
 import { handle as funnelOps } from "./handlers/funnel-ops.ts";
 import { handle as repairOfficial5895 } from "./handlers/repair-official-5895.ts";
 import { handle as funnelQueuePump } from "./handlers/funil-queue-pump.ts";
+import { handle as aiGate } from "./handlers/ai-gate.ts";
+import { handle as grafanaAlert } from "./handlers/grafana-alert.ts";
 import {
   handle as operationalHealth,
   runOperationalAudit,
 } from "./handlers/operational-health.ts";
 import { env, optionalEnv } from "./shared/env.ts";
+import {
+  clearMacroRequestId,
+  currentMacroRequestId,
+} from "./shared/macro-command-id.ts";
 import { timingSafeEqual } from "./shared/hmac.ts";
 import { agendarLoop } from "./shared/loop-guard.ts";
-import { admin, claimDelivery, publicTable, releaseDelivery } from "./shared/supabase.ts";
+import { describeError } from "./shared/error-detail.ts";
+import {
+  admin,
+  claimDelivery,
+  claimDeliveryWithTtl,
+  publicTable,
+  releaseDelivery,
+} from "./shared/supabase.ts";
 import { tokenForInstance, uazapiConfigured } from "./shared/uazapi.ts";
 import { enrichStep } from "./shared/enrich.ts";
 import { avatarStep } from "./shared/avatar-sync.ts";
@@ -80,27 +107,38 @@ import {
   setConversationLabels,
 } from "./shared/chatwoot.ts";
 import { pumpFunnelQueue } from "./shared/funnel-queue.ts";
-import { limparPausa, pausasVencidas, podeRetomar } from "./shared/funil-pausa.ts";
+import { reconcileNewAdFunnels } from "./shared/ad-funnel-watchdog.ts";
+import {
+  limparPausa,
+  pausasVencidas,
+  podeRetomar,
+} from "./shared/funil-pausa.ts";
 import {
   maintainFunnels,
   resumeSequenceRebased,
 } from "./shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL, reconcileBotMute } from "./shared/bot-mute.ts";
-import { efeitosDoFluxo, flowChannelFor, pumpFlowTimeouts, pumpFlowWaits, varsDoContato } from "./shared/flow-inbound.ts";
+import { efeitosDoFluxo, flowChannelFor, pumpDeferredEmbrapaPdf, pumpFlowTimeouts, pumpFlowWaits, varsDoContato } from "./shared/flow-inbound.ts";
 import { repairWhatsAppNamesStep } from "./shared/whatsapp-name-sync.ts";
 import { reconcileResponsePriorities } from "./shared/reply-priority.ts";
+import { pumpCampaignAutoVideos } from "./shared/campaign-auto-video.ts";
 import { PACE_PADRAO, podeEnviarAgora } from "./shared/campaign-pace.ts";
 import {
-  campanhasComFila,
+  chooseCampaignRotation,
+  ROTATION_CAMPAIGNS,
+  type CampaignRotationSnapshot,
+} from "./shared/campaign-rotation.ts";
+import {
   devolverReserva,
   enviadosHoje,
   marcarEnviado,
   marcarFalha,
-  marcarPulado,
   marcarProcessamentosAbandonados,
+  marcarPulado,
   marcarResultadoIncerto,
   pausarCampanha,
-  reservarProximoItem,
+  pendentesElegiveis,
+  reservarProximoItemRotacao,
   ultimoEnvioAt,
 } from "./shared/campaign-queue.ts";
 import { validarContatoAntesDaCampanha } from "./shared/campaign-preflight.ts";
@@ -108,7 +146,10 @@ import { runFlow } from "./shared/flow-runner.ts";
 import { gravadorDeFluxo } from "./shared/flow-record.ts";
 import { saveFlowPosition } from "./shared/flow-state.ts";
 import { isBotMutedForContact } from "./shared/bot-mute.ts";
-import { bloqueioPorContato, motivoDoBloqueio } from "./shared/gate-comercial.ts";
+import {
+  bloqueioPorContato,
+  motivoDoBloqueio,
+} from "./shared/gate-comercial.ts";
 import { readCampaigns } from "./shared/campaigns.ts";
 import { runDeclineGuard } from "./shared/decline-guard.ts";
 
@@ -128,7 +169,12 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
   "/uazapi-webhook": uazapiWebhook,
+  "/inbound-incidents": inboundIncidents,
   "/send-outbound": sendOutbound,
+  "/n8n-action-enqueue": n8nActionEnqueue,
+  "/n8n-action-send-now": n8nActionSendNow,
+  "/n8n-queue": n8nQueue,
+  "/n8n-reconcile-5895": n8nReconcile5895,
   "/funil-enroll": funilEnroll,
   "/funil-control": funilControl,
   "/meta-templates": metaTemplates,
@@ -155,6 +201,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/repair-official-5895": repairOfficial5895,
   "/funil-queue-pump": funnelQueuePump,
   "/operational-health": operationalHealth,
+  "/ai-gate": aiGate,
+  "/grafana-alert": grafanaAlert,
 };
 
 const port = Number(Deno.env.get("PORT") ?? "8000");
@@ -344,8 +392,17 @@ const version = {
     "pediu-humano-pausa-e-alerta",
     "isca-digital-fim-funil",
     "isca-oferta-imagem-sim-nao",
+    "ai-lane-contact-auth-gate",
+    "funil-anuncios-5895-cinco-momentos",
+    "funil-completo-5895-30-09",
+    "funil-botoes-historicos-roteados",
+    "funil-espelho-eco-sem-duplicidade",
+    "funil-5895-despacho-unico-n8n",
+    "funil-5895-logistica-sem-pausa",
+    "funil-5895-resposta-logistica-adiada",
+    "funnel-queue-stale-head-of-line-fix",
   ],
-  build: "2026-10-06-funil-comercial-ramificado",
+  build: "2026-11-01-funnel-queue-stale-head-of-line-fix",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam
@@ -357,35 +414,33 @@ const STARTED_AT = new Date().toISOString();
 // Messenger). /sync-facebook é o único caminho de entrada pro IG, então roda em loop
 // interno aqui — sem depender de cron externo no Coolify. Pra Facebook é só redundância
 // (a entrada já chega por webhook); duplicados são ignorados pelo dedup do próprio sync.
-const SYNC_LOOP_INTERVAL_MS = 30_000;
 function startSyncLoop() {
   const token = segredoParaChamadaInterna();
   // since_minutes curto (10min) descartava pra sempre msg de conversa parada antes da Graph
   // entregar webhook (sem cursor persistente). Dedup é por meta_message_id, então janela
   // larga não duplica nada -- só evita descarte. 1440 (24h) cobre qualquer gap/instabilidade.
-  const url = `http://internal/sync-facebook?token=${
-    encodeURIComponent(token)
-  }&since_minutes=1440`;
-
-  let running = false;
-  setInterval(async () => {
-    if (running) return;
-    running = true;
-    try {
+  // IG-inbound é o ÚNICO caminho de entrada do Instagram (sem webhook), então a latência de
+  // entrada = o intervalo. Ficava em 10s, mas numa VPS de 2 vCPU isso é ~6 ticks/min de chamada
+  // Graph + um evento `sync_completed` por tick (heartbeat lido por operational-health). 30s corta
+  // ~3x o volume e a latência de DM continua ok. TETO: operational-health alerta
+  // `instagramSyncStale` se o último sync_completed inbound tem >2min — manter o intervalo < 2min.
+  for (const [channelType, mode, intervaloMs] of [
+    ["instagram", "inbound", 30_000],
+    ["instagram", "outgoing", 30_000],
+    ["facebook", "both", 30_000],
+  ] as const) {
+    const url = `http://internal/sync-facebook?token=${
+      encodeURIComponent(token)
+    }&since_minutes=1440&channel_type=${channelType}&mode=${mode}`;
+    agendarLoop(`sync-${channelType}-${mode}`, async () => {
       const res = await syncFacebook(new Request(url));
       const body = await res.json();
-      if (
-        body.errors?.length || body.inserted > 0 || body.outgoing_sent > 0 ||
-        body.media_repaired > 0
-      ) {
-        console.log("sync-facebook (auto):", JSON.stringify(body));
+      if (!res.ok || body.errors?.length || body.inserted > 0 ||
+        body.outgoing_sent > 0 || body.media_repaired > 0) {
+        console.log(`sync-${channelType}-${mode} (auto):`, JSON.stringify(body));
       }
-    } catch (e) {
-      console.error("sync-facebook (auto) erro:", e);
-    } finally {
-      running = false;
-    }
-  }, SYNC_LOOP_INTERVAL_MS);
+    }, { intervaloMs, primeiraEmMs: 1_000, travaMaximaMs: 90_000 });
+  }
 }
 
 // Comentários de posts/anúncios (FB Pages + Instagram) — fallback por pull (Graph) a cada
@@ -723,18 +778,47 @@ function startAvatarLoop() {
 }
 
 // Limpeza de events e deliveries antigos (>30 dias). Roda 1x/dia, 3min após subir.
+// Apaga `events` antigos EM LOTES. Um único DELETE do passivo (1,1M linhas medidas em
+// 29/08, ver migration 0013) estoura o statement_timeout (57014): o delete nunca completa,
+// a limpeza registrava `events=null`, a tabela só crescia e as consultas do monitor
+// passaram a estourar também (o 57014 do operational-monitor). Lote pequeno porque `.in()`
+// com muitos ids estoura a URL (414/502, ver memória `in-sem-lote-url-estoura`). Teto de
+// tempo por rodada pra não segurar o loop; o resto drena na rodada seguinte.
+async function purgeOldEventsInBatches(
+  db: ReturnType<typeof admin>,
+  cutoff: string,
+): Promise<number> {
+  const BATCH = 300;
+  const DEADLINE = Date.now() + 120_000;
+  let total = 0;
+  while (Date.now() < DEADLINE) {
+    const { data: rows, error } = await db.from("events")
+      .select("id").lt("received_at", cutoff)
+      .order("received_at", { ascending: true }).limit(BATCH);
+    // Erro do PostgREST é objeto plano; embrulha em Error com a causa legível (senão o catch
+    // do loop logava "[object Object]" e o 57014/timeout ficava invisível).
+    if (error) throw new Error(`purge events select: ${describeError(error)}`);
+    const ids = ((rows ?? []) as Array<{ id: unknown }>).map((r) => r.id);
+    if (ids.length === 0) break;
+    const { error: delErr } = await db.from("events").delete().in("id", ids);
+    if (delErr) throw new Error(`purge events delete: ${describeError(delErr)}`);
+    total += ids.length;
+    if (ids.length < BATCH) break;
+  }
+  return total;
+}
+
 function startDataCleanupLoop() {
   const run = async () => {
     const db = admin();
     const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
     try {
-      const { count: evDel } = await db.from("events").delete({
-        count: "exact",
-      }).lt("received_at", cutoff);
+      const evDel = await purgeOldEventsInBatches(db, cutoff);
+      // deliveries é pequena (um dia ~1,7k linhas) e o delete único não estoura.
       const { count: dlDel } = await db.from("deliveries").delete({
         count: "exact",
       }).lt("received_at", cutoff);
-      if ((evDel ?? 0) > 0 || (dlDel ?? 0) > 0) {
+      if (evDel > 0 || (dlDel ?? 0) > 0) {
         console.log(
           `data-cleanup: events=${evDel} deliveries=${dlDel} (antes de ${
             cutoff.slice(0, 10)
@@ -742,7 +826,7 @@ function startDataCleanupLoop() {
         );
       }
     } catch (e) {
-      console.error("data-cleanup erro:", e);
+      console.error("data-cleanup erro:", describeError(e));
     }
   };
   agendarLoop("data-cleanup", run, {
@@ -757,6 +841,15 @@ function startDataCleanupLoop() {
 // qualquer cmd-* label, executa funil-control e remove a label.
 // Kill-switch: MACRO_POLL_ENABLED=false.
 const MACRO_POLL_INTERVAL_MS = 15_000;
+// Trava do laço: quando o destino responde "não-terminal" (ex.: n8n devolve HTTP 200 fora
+// do contrato), a etiqueta ficava e o loop retentava a cada 15s PARA SEMPRE — em 23/10 a
+// conv 3509 (já paga) ficou presa em `cmd-enviar-plantio`, 4 chamadas por tick sem fim,
+// martelando n8n e Chatwoot. Agora conta as falhas por (conversa+etiqueta) no processo e,
+// passado o teto, para de retentar essa combinação (registra evento 1x; etiqueta fica para
+// revisão humana). O contador zera em sucesso/terminal e some no redeploy.
+const MACRO_MAX_ATTEMPTS = 6;
+const macroFailstreak = new Map<string, number>();
+const macroGivenUp = new Set<string>();
 const CMD_LABELS: Record<string, string> = {
   "cmd-funil-pause": "pause",
   "cmd-funil-stop": "stop",
@@ -779,14 +872,21 @@ const CMD_LABELS: Record<string, string> = {
 };
 const CMD_LABEL_KEYS = Object.keys(CMD_LABELS);
 
-// Payload do filter API — OR de todos os cmd labels.
+// Payload do filter API — conversas com QUALQUER cmd label.
+//
+// Uma única condição `equal_to` com todos os valores (o Chatwoot traduz values[]
+// de equal_to pra `tags.name IN (...)`), em vez de 16 condições `equal_to` OR'd.
+// Mesma semântica, fração do custo: o OR de 16 condições fazia o Chatwoot levar
+// ~15s e estourar o timeout (500) nesta VPS sobrecarregada — 100% das chamadas
+// falhavam e o controle por etiqueta ficava morto. Medido no container:
+// 16-OR = 15s/500 (10/10); 1-cond-IN = 143ms-1,3s e 200 (10/10).
 const CMD_FILTER_PAYLOAD = JSON.stringify({
-  payload: CMD_LABEL_KEYS.map((label, i) => ({
+  payload: [{
     attribute_key: "labels",
     filter_operator: "equal_to",
-    values: [label],
-    query_operator: i < CMD_LABEL_KEYS.length - 1 ? "OR" : null,
-  })),
+    values: CMD_LABEL_KEYS,
+    query_operator: null,
+  }],
 });
 
 function startMacroCommandLoop() {
@@ -822,9 +922,51 @@ function startMacroCommandLoop() {
         if (!cmdLabel) continue;
         const cwConvId = conv.id as number;
         const action = CMD_LABELS[cmdLabel];
+        const macroKey = `${cwConvId}:${cmdLabel}`;
         console.log("macro-poll:", cmdLabel, "conv", cwConvId, "->", action);
 
+        // Combinação que já esgotou as tentativas neste processo: não martela mais.
+        if (macroGivenUp.has(macroKey)) continue;
+
         try {
+          const macroDb = admin();
+
+          // Conversa já encerrada (paga/perdida) não roda comando de funil — só limpa a
+          // etiqueta presa (caso 3509, que estava `won`). Mata o loop na origem, sem
+          // depender do teto de tentativas.
+          const { data: convRow } = await macroDb.from("conversations")
+            .select("outcome").eq("chatwoot_conversation_id", cwConvId)
+            .maybeSingle();
+          if (
+            convRow && (convRow.outcome === "won" || convRow.outcome === "lost")
+          ) {
+            console.warn(
+              "macro-poll: conversa",
+              cwConvId,
+              "já",
+              convRow.outcome,
+              "- limpando etiqueta",
+              cmdLabel,
+            );
+            try {
+              const fresh = await getConversationLabels(cwConvId, acct);
+              const cleaned = fresh.filter((l) => l !== cmdLabel);
+              if (cleaned.length !== fresh.length) {
+                await setConversationLabels(cwConvId, cleaned, acct);
+              }
+              await clearMacroRequestId(macroDb, cwConvId, cmdLabel);
+            } catch (e) {
+              console.warn("macro-poll cleanup(won):", String(e).slice(0, 120));
+            }
+            macroFailstreak.delete(macroKey);
+            continue;
+          }
+
+          const requestId = await currentMacroRequestId(
+            macroDb,
+            cwConvId,
+            cmdLabel,
+          );
           const r = await fetch(
             `http://localhost:${port}/funil-control?token=${
               encodeURIComponent(secret)
@@ -835,6 +977,7 @@ function startMacroCommandLoop() {
               body: JSON.stringify({
                 action,
                 chatwoot_conversation_id: cwConvId,
+                request_id: requestId,
               }),
             },
           );
@@ -851,13 +994,57 @@ function startMacroCommandLoop() {
                 "conv",
                 cwConvId,
               );
+              macroFailstreak.delete(macroKey);
             } else {
-              console.warn(
-                "macro-poll: comando mantido para nova tentativa",
-                cmdLabel,
-                "conv",
-                cwConvId,
-              );
+              const streak = (macroFailstreak.get(macroKey) ?? 0) + 1;
+              macroFailstreak.set(macroKey, streak);
+              if (streak >= MACRO_MAX_ATTEMPTS) {
+                // Teto estourado: o destino nunca confirma (provável n8n fora do contrato,
+                // "n8n HTTP 200"). Para de retentar esta combinação neste processo e deixa
+                // a etiqueta para revisão humana. Um evento (NÃO alerta de WhatsApp),
+                // deduplicado por 6h, avisa quem investiga.
+                macroGivenUp.add(macroKey);
+                macroFailstreak.delete(macroKey);
+                console.error(
+                  "macro-poll: comando travado após",
+                  streak,
+                  "tentativas — parando de retentar",
+                  cmdLabel,
+                  "conv",
+                  cwConvId,
+                );
+                try {
+                  const marca = `macro-stuck-${cwConvId}-${cmdLabel}`;
+                  if (
+                    await claimDeliveryWithTtl(
+                      macroDb,
+                      marca,
+                      "macro-stuck",
+                      6 * 60 * 60_000,
+                    )
+                  ) {
+                    await macroDb.from("events").insert({
+                      source: "macro-command-poll",
+                      event_type: "macro_command_stuck",
+                      payload: {
+                        chatwoot_conversation_id: cwConvId,
+                        label: cmdLabel,
+                        action,
+                        attempts: streak,
+                        last_error: String(result.error ?? "").slice(0, 160),
+                      },
+                    }).then(() => {}, () => {});
+                  }
+                } catch { /* best effort */ }
+              } else {
+                console.warn(
+                  "macro-poll: comando mantido para nova tentativa",
+                  cmdLabel,
+                  "conv",
+                  cwConvId,
+                  `(tentativa ${streak}/${MACRO_MAX_ATTEMPTS})`,
+                );
+              }
               continue;
             }
           }
@@ -866,15 +1053,15 @@ function startMacroCommandLoop() {
           // Em falha, ela permanece e o próximo tick tenta novamente.
           try {
             const freshLabels = await getConversationLabels(cwConvId, acct);
-            const cleaned = freshLabels.filter((l) =>
-              !CMD_LABEL_KEYS.includes(l)
-            );
+            const cleaned = freshLabels.filter((l) => l !== cmdLabel);
             if (cleaned.length !== freshLabels.length) {
               await setConversationLabels(cwConvId, cleaned, acct);
             }
+            await clearMacroRequestId(macroDb, cwConvId, cmdLabel);
           } catch (e) {
             console.warn("macro-poll cleanup:", String(e).slice(0, 120));
           }
+          macroFailstreak.delete(macroKey);
         } catch (e) {
           console.error("macro-poll exec erro:", e);
         }
@@ -986,13 +1173,14 @@ const OUTCOME_LABELS: Record<string, string> = {
   "nao-compra": "marcar-nao-compra",
 };
 const OUTCOME_LABEL_KEYS = Object.keys(OUTCOME_LABELS);
+// Uma condição `labels IN (...)` (ver CMD_FILTER_PAYLOAD): mesma semântica, mais barato.
 const OUTCOME_FILTER_PAYLOAD = JSON.stringify({
-  payload: OUTCOME_LABEL_KEYS.map((label, i) => ({
+  payload: [{
     attribute_key: "labels",
     filter_operator: "equal_to",
-    values: [label],
-    query_operator: i < OUTCOME_LABEL_KEYS.length - 1 ? "OR" : null,
-  })),
+    values: OUTCOME_LABEL_KEYS,
+    query_operator: null,
+  }],
 });
 
 function startOutcomeLabelLoop() {
@@ -1210,7 +1398,13 @@ function startFunnelResumeLoop() {
       for (const id of conversas) {
         const { data: conv } = await db.from("conversations")
           .select("outcome,bot_muted_at").eq("id", id).maybeSingle();
-        if (!podeRetomar(conv as { outcome?: string | null; bot_muted_at?: string | null } | null)) {
+        if (
+          !podeRetomar(
+            conv as
+              | { outcome?: string | null; bot_muted_at?: string | null }
+              | null,
+          )
+        ) {
           // Já comprou, desistiu ou está com o bot travado: some o marcador, não a conversa.
           await limparPausa(db, id);
           puladas++;
@@ -1247,7 +1441,7 @@ function startFunnelQueueLoop() {
     if (rodando) return;
     rodando = true;
     try {
-      const result = await pumpFunnelQueue(10);
+      const result = await pumpFunnelQueue(10, dispatchDeferredFunnelIntent);
       if (result.found) {
         console.log("funnel-queue-pump:", JSON.stringify(result));
       }
@@ -1260,6 +1454,27 @@ function startFunnelQueueLoop() {
   setTimeout(run, 20_000);
   setInterval(run, 30_000);
   console.log("funnel-queue-pump loop ON (30s)");
+}
+
+function startAdFunnelWatchdogLoop() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await reconcileNewAdFunnels();
+      if (result.missing > 0) {
+        console.log("ad-funnel-watchdog:", JSON.stringify(result));
+      }
+    } catch (error) {
+      console.error("ad-funnel-watchdog erro:", error);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, 10_000);
+  setInterval(tick, 20_000);
+  console.log("ad-funnel-watchdog loop ON (20s)");
 }
 
 // Cadeia automática de recuperação (1·2·4·7 dias). DESLIGADA por padrão: ligar significa
@@ -1287,11 +1502,8 @@ async function runRecoveryChain() {
   );
 }
 
-// Fila de campanha — entrega UM contato por vez, no ritmo configurado.
-//
-// O loop roda de minuto em minuto, mas quem decide se manda é `podeEnviarAgora`: janela de
-// horário, teto do dia (que sobe pela rampa) e intervalo desde o último envio. Um contato por
-// tick no máximo — é o que espalha 200 mensagens por 14 horas em vez de despejá-las juntas.
+// Rotação das campanhas 5895, 0595 e 6836: um contato por vez, com teto por número.
+// O intervalo global ocupa a janela restante e encurta quando um número está atrasado.
 // Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
 const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
 
@@ -1302,8 +1514,8 @@ function startCampaignQueueLoop() {
   // folga. Duas rodadas simultâneas liam `enviadosHoje` e `ultimoEnvioAt` antes de qualquer
   // uma gravar, as duas decidiam "pode enviar", e o ritmo virava rajada.
   //
-  // A reserva transacional impede duas réplicas de pegar contatos da mesma campanha. Este
-  // bloqueio local também evita ticks sobrepostos e mantém o loop serial dentro do processo.
+  // A reserva transacional impede duas réplicas de processar qualquer uma das quatro filas
+  // ao mesmo tempo. Este bloqueio local também evita ticks sobrepostos no processo.
   let rodando = false;
   const run = async () => {
     if (rodando) return;
@@ -1317,25 +1529,28 @@ function startCampaignQueueLoop() {
           idAbandonada,
         );
       }
-      const campanhas = await campanhasComFila(db);
-      if (!campanhas.length) return;
-
       const state = await readCampaigns();
+      const rotationSnapshots = await Promise.all(ROTATION_CAMPAIGNS.map(async (campaignId) => {
+        const camp = state.campaigns.find((c) => c.id === campaignId);
+        if (!camp?.flow) throw new Error(`campanha da rotação ausente: ${campaignId}`);
+        const [pending, sentToday, lastSentAt] = await Promise.all([
+          pendentesElegiveis(db, campaignId),
+          enviadosHoje(db, campaignId),
+          ultimoEnvioAt(db, campaignId),
+        ]);
+        return {
+          campaignId, pending, sentToday, lastSentAt,
+          createdAt: Date.parse(camp.paceStartAt ?? camp.createdAt),
+          pace: { ...PACE_PADRAO, ...(camp.pace ?? {}) },
+        } satisfies CampaignRotationSnapshot;
+      }));
+      const rotation = chooseCampaignRotation(rotationSnapshots, Date.now());
+      const campanhas = rotation ? [rotation.campaignId] : [];
       for (const campaignId of campanhas) {
         const camp = state.campaigns.find((c) => c.id === campaignId);
         if (!camp?.flow) continue;
 
-        const cfg = { ...PACE_PADRAO, ...(camp.pace ?? {}) };
-        const decisao = podeEnviarAgora({
-          cfg,
-          inicioCampanha: Date.parse(camp.createdAt),
-          enviadosHoje: await enviadosHoje(db, campaignId),
-          ultimoEnvioAt: await ultimoEnvioAt(db, campaignId),
-          now: Date.now(),
-        });
-        if (!decisao.enviar) continue;
-
-        const item = await reservarProximoItem(db, campaignId);
+        const item = await reservarProximoItemRotacao(db, campaignId);
         if (!item) continue;
 
         let runFlowIniciado = false;
@@ -1377,11 +1592,19 @@ function startCampaignQueueLoop() {
               item.contact_key,
             );
           } catch (e) {
-            await marcarFalha(db, item, `etiqueta indisponível: ${String(e).slice(0, 120)}`);
+            await marcarFalha(
+              db,
+              item,
+              `etiqueta indisponível: ${String(e).slice(0, 120)}`,
+            );
             continue;
           }
           if (bloqueioComercial) {
-            await marcarPulado(db, item.id, motivoDoBloqueio(bloqueioComercial));
+            await marcarPulado(
+              db,
+              item.id,
+              motivoDoBloqueio(bloqueioComercial),
+            );
             continue;
           }
 
@@ -1399,18 +1622,13 @@ function startCampaignQueueLoop() {
             const motivo = error instanceof Error
               ? error.message
               : String(error);
-            await pausarCampanha(db, campaignId);
-            const { error: holdError } = await publicTable(db, "campaign_queue")
-              .update({
-                status: "paused",
-                last_error: `revalidação indisponível: ${motivo}`.slice(0, 300),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", item.id)
-              .eq("status", "processing");
-            if (holdError) throw holdError;
+            // Falha TRANSITÓRIA de revalidação (ex.: rota uazapi piscou por um tick, instância
+            // flapou) devolve só este item pra fila e tenta no próximo tick — NÃO pausa a campanha
+            // inteira. Pausar tudo por um hiccup deixou 1.183 contatos do 0595 parados até retomar
+            // na mão (21/10), mesmo com a instância "connected". A rampa/janela já limitam o ritmo.
+            await devolverReserva(db, item.id);
             console.warn(
-              "campaign-preflight: fila pausada por falha na validação",
+              "campaign-preflight: revalidação indisponível, item devolvido à fila",
               campaignId,
               item.contact_key.slice(-4),
               motivo,
@@ -1437,19 +1655,20 @@ function startCampaignQueueLoop() {
           // A decisão inicial evita reservar quando já sabemos que é cedo. Revalidamos
           // depois da reserva e do preflight: outra réplica pode ter concluído um envio
           // enquanto este worker aguardava chamadas externas.
-          const [enviadosRecentes, ultimoEnvioRecente] = await Promise.all([
-            enviadosHoje(db, campaignId),
-            ultimoEnvioAt(db, campaignId),
-          ]);
+          const freshSnapshots = await Promise.all(ROTATION_CAMPAIGNS.map(async (id) => {
+            const source = rotationSnapshots.find((snapshot) => snapshot.campaignId === id)!;
+            const [pending, sentToday, lastSentAt] = await Promise.all([
+              pendentesElegiveis(db, id), enviadosHoje(db, id), ultimoEnvioAt(db, id),
+            ]);
+            return {
+              ...source,
+              pending: pending + (id === campaignId ? 1 : 0),
+              sentToday, lastSentAt,
+            };
+          }));
           const checkedAt = Date.now();
-          const decisaoAtual = podeEnviarAgora({
-            cfg,
-            inicioCampanha: Date.parse(camp.createdAt),
-            enviadosHoje: enviadosRecentes,
-            ultimoEnvioAt: ultimoEnvioRecente,
-            now: checkedAt,
-          });
-          if (!decisaoAtual.enviar) {
+          const decisionNow = chooseCampaignRotation(freshSnapshots, checkedAt);
+          if (decisionNow?.campaignId !== campaignId) {
             await devolverReserva(db, item.id);
             continue;
           }
@@ -1530,7 +1749,7 @@ function startCampaignQueueLoop() {
   };
   setTimeout(run, 120_000);
   setInterval(run, CAMPAIGN_QUEUE_INTERVAL_MS);
-  console.log("campaign-queue loop ON (1min, ritmo por campanha)");
+  console.log("campaign-queue loop ON (1min, rotação por número)");
 }
 
 const DECLINE_GUARD_INTERVAL_MS = 5 * 60_000;
@@ -1559,7 +1778,9 @@ function startDeclineGuardLoop() {
 function startFunnelRecoveryLoop() {
   const run = async () => {
     try {
-      const result = await recoverEligibleFunnels(admin(), 48);
+      // Só recuperar uma abertura muito recente perdida pelo webhook. Evita que o deploy
+      // reinscreva uma fila histórica de anúncios; mensagens novas entram pelo webhook.
+      const result = await recoverEligibleFunnels(admin(), 0.25);
       const maintenance = await maintainFunnels(admin());
       const chain = await runRecoveryChain();
       if (
@@ -1599,9 +1820,17 @@ function startFlowTimeoutLoop() {
     if (rodando) return;
     rodando = true;
     try {
-      const r = await pumpFlowTimeouts(admin());
-      if (r.seguiram > 0) {
-        console.log("flow-timeout:", JSON.stringify(r));
+      try {
+        const r = await pumpFlowTimeouts(admin());
+        if (r.seguiram > 0) {
+          console.log("flow-timeout:", JSON.stringify(r));
+        }
+      } catch (e) {
+        console.error("flow-timeout loop erro:", e);
+      }
+      const videos = await pumpCampaignAutoVideos(admin());
+      if (videos.sent || videos.failed) {
+        console.log("campaign-auto-video:", JSON.stringify(videos));
       }
     } catch (e) {
       console.error("flow-timeout loop erro:", e);
@@ -1688,10 +1917,34 @@ function startResponsePriorityLoop() {
   console.log("reply-priority loop ON (2min)");
 }
 
+// Pedidos "Quero" recebidos fora do expediente: um PDF por minuto, somente 08h–20h.
+function startDeferredEmbrapaPdfLoop() {
+  let running = false;
+  const tick = async () => {
+    if (running) return;
+    running = true;
+    try {
+      const result = await pumpDeferredEmbrapaPdf(admin());
+      if (result.sent || result.blocked || result.failed) {
+        console.log("embrapa-pdf-deferred:", JSON.stringify(result));
+      }
+    } catch (error) {
+      console.error("embrapa-pdf-deferred loop erro:", error);
+    } finally {
+      running = false;
+    }
+  };
+  setTimeout(tick, 30_000);
+  setInterval(tick, 60_000);
+  console.log("embrapa-pdf-deferred loop ON (1min, 08h–20h BRT)");
+}
+
 // Bearer ou ?token=, comparado em tempo constante. Mesmo segredo já usado pelos loops
 // internos (SYNC_SECRET, com CHATWOOT_WEBHOOK_SECRET como retaguarda).
 function diagAutorizado(req: Request, url: URL): boolean {
-  const bearer = (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ?? "";
+  const bearer =
+    (req.headers.get("Authorization") ?? "").match(/^Bearer\s+(.+)$/i)?.[1] ??
+      "";
   const informado = bearer || url.searchParams.get("token") || "";
   const esperado = segredoParaChamadaInterna();
   return confereSegredo(informado, [esperado], "server");
@@ -1709,7 +1962,9 @@ function startUazapiCatchupLoop() {
   // de segurança podia estar furada há dias sem ninguém ter como saber de fora.
   const run = async () => {
     try {
-      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), { apply: true });
+      const { resumo, resultados } = await recuperarEntradaUazapi(admin(), {
+        apply: true,
+      });
       console.log("uazapi-catchup:", JSON.stringify(resumo));
       if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
         console.log("uazapi-catchup detalhe:", JSON.stringify(resultados));
@@ -1734,7 +1989,10 @@ function startUazapiCatchupLoop() {
       });
       console.log("uazapi-catchup-profundo:", JSON.stringify(resumo));
       if (resultados.some((r) => r.recuperadas || r.falhas || r.truncado)) {
-        console.log("uazapi-catchup-profundo detalhe:", JSON.stringify(resultados));
+        console.log(
+          "uazapi-catchup-profundo detalhe:",
+          JSON.stringify(resultados),
+        );
       }
     } catch (error) {
       console.error("uazapi-catchup-profundo erro:", error);
@@ -1771,8 +2029,29 @@ function startOperationalMonitorLoop() {
   console.log("operational-monitor loop ON (15min)");
 }
 
+function startInboundWatchdogLoop() {
+  agendarLoop("inbound-watchdog", async () => {
+    try {
+      await runInboundWatchdog(admin());
+    } catch (error) {
+      console.error("inbound-watchdog erro:", error);
+    }
+  }, {
+    intervaloMs: 2 * 60_000,
+    primeiraEmMs: 60_000,
+  });
+  console.log("inbound-watchdog loop ON (2min)");
+}
+
+// O monitor operacional roda SEMPRE, fora do kill-switch: ele só observa e ALERTA (canal
+// caído, fila presa, inbound perdido) — não dispara nem reprocessa. Pausar a operação
+// (AUTO_LOOPS_ENABLED=false) não pode deixar o sistema cego justo quando algo pode quebrar.
+// inbound-watchdog continua DENTRO do kill-switch: ele reprocessa entrada (efeito colateral).
+startOperationalMonitorLoop();
 if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
-  console.log("background loops OFF (AUTO_LOOPS_ENABLED=false)");
+  console.log(
+    "background loops OFF (AUTO_LOOPS_ENABLED=false) — operational-monitor segue ON",
+  );
 } else {
   startSyncLoop();
   startCommentsLoop();
@@ -1791,14 +2070,16 @@ if (optionalEnv("AUTO_LOOPS_ENABLED") === "false") {
   startDeclineGuardLoop();
   startBotMuteLoop();
   startFunnelQueueLoop();
+  startAdFunnelWatchdogLoop();
   startFunnelResumeLoop();
   startFunnelRecoveryLoop();
   startFlowTimeoutLoop();
   startFlowWaitLoop();
   startWhatsAppNameRepairLoop();
   startResponsePriorityLoop();
+  startDeferredEmbrapaPdfLoop();
   startCampaignQueueLoop();
-  startOperationalMonitorLoop();
+  startInboundWatchdogLoop();
   startUazapiCatchupLoop();
 }
 console.log(`bridge ouvindo na porta ${port}`);

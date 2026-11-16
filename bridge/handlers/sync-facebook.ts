@@ -1,7 +1,7 @@
 // sync-facebook — fallback por pull para Messenger/Instagram quando o webhook de
 // mensagens da Meta/EVO Hub não entrega evento. Deve rodar por cron curto no Coolify.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { metaDeliveryStatus } from "../shared/meta-errors.ts";
@@ -26,6 +26,7 @@ import {
 import {
   inferSocialDetailAction,
   inferSocialMenuAction,
+  inferSocialSalesIntent,
 } from "../shared/social-sales.ts";
 import {
   handleMenuClick,
@@ -36,6 +37,7 @@ import {
   handleSocialSalesIntent,
   recordInboundCommercialIntent,
 } from "./hub-webhook.ts";
+import { autoEnrollFunil } from "./funil-enroll.ts";
 
 type Json = Record<string, unknown>;
 
@@ -75,6 +77,18 @@ export async function handle(req: Request): Promise<Response> {
   if (!isAuthorized(req, url)) return json({ error: "unauthorized" }, 401);
 
   const channelId = url.searchParams.get("channel_id") ?? undefined;
+  const channelType = url.searchParams.get("channel_type");
+  if (channelType && channelType !== "facebook" && channelType !== "instagram") {
+    return json({ error: "invalid channel_type" }, 400);
+  }
+  const recoveryOnly = url.searchParams.get("recovery_only") === "true";
+  const mode = url.searchParams.get("mode") ?? "both";
+  if (mode !== "both" && mode !== "inbound" && mode !== "outgoing") {
+    return json({ error: "invalid mode" }, 400);
+  }
+  if (recoveryOnly && mode === "outgoing") {
+    return json({ error: "recovery_only requires inbound mode" }, 400);
+  }
   const sinceMinutes = intParam(url, "since_minutes", 360, 1, 10_080);
   const conversationLimit = intParam(url, "conversation_limit", 10, 1, 50);
   const messageLimit = intParam(url, "message_limit", 20, 1, 100);
@@ -85,7 +99,7 @@ export async function handle(req: Request): Promise<Response> {
     .select(
       "id,type,name,status,page_id,ig_id,display_name,chatwoot_inbox_identifier",
     )
-    .in("type", ["facebook", "instagram"])
+    .in("type", channelType ? [channelType] : ["facebook", "instagram"])
     .eq("status", "active");
   if (channelId) query = query.eq("id", channelId);
 
@@ -114,7 +128,7 @@ export async function handle(req: Request): Promise<Response> {
     errors: [] as string[],
   };
 
-  for (const channel of channels ?? []) {
+  await Promise.all((channels ?? []).map(async (channel: Json) => {
     try {
       const acct = await accountForChannel(channel.id as string);
       // cursor real: desde a última msg já gravada deste canal (com 2min de superposição p/
@@ -125,34 +139,46 @@ export async function handle(req: Request): Promise<Response> {
         ? Math.min(lastMs - 120_000, cutoffMs)
         : cutoffMs;
 
-      const inbound = await syncInbound(db, channel as Json, {
-        cutoffMs: channelCutoffMs,
-        conversationLimit,
-        messageLimit,
-      }, acct);
-      totals.conversations_scanned += inbound.conversations_scanned;
-      totals.inbound_found += inbound.inbound_found;
-      totals.inserted += inbound.inserted;
-      totals.duplicates += inbound.duplicates;
-      totals.skipped_self += inbound.skipped_self;
-      totals.media_found += inbound.media_found;
-      totals.media_attached += inbound.media_attached;
-      totals.media_repaired += inbound.media_repaired;
-      totals.media_failed += inbound.media_failed;
+      if (mode !== "outgoing") {
+        const inbound = await syncInbound(db, channel as Json, {
+          cutoffMs: channelCutoffMs,
+          conversationLimit,
+          messageLimit,
+          recoveryOnly,
+        }, acct);
+        totals.conversations_scanned += inbound.conversations_scanned;
+        totals.inbound_found += inbound.inbound_found;
+        totals.inserted += inbound.inserted;
+        totals.duplicates += inbound.duplicates;
+        totals.skipped_self += inbound.skipped_self;
+        totals.media_found += inbound.media_found;
+        totals.media_attached += inbound.media_attached;
+        totals.media_repaired += inbound.media_repaired;
+        totals.media_failed += inbound.media_failed;
+        totals.errors.push(...inbound.errors.map((error) =>
+          `${channel.name ?? channel.id}: ${error}`
+        ));
+      }
 
-      const outgoing = await syncOutgoing(db, channel as Json, {
-        cutoffMs: channelCutoffMs,
-        messageLimit,
-      }, acct);
-      totals.outgoing_found += outgoing.outgoing_found;
-      totals.outgoing_sent += outgoing.outgoing_sent;
-      totals.outgoing_duplicates += outgoing.outgoing_duplicates;
-      totals.outgoing_failed += outgoing.outgoing_failed;
-      totals.stale_conversations += outgoing.stale_conversations;
-      await db.from("channels").update({ last_error: null }).eq(
-        "id",
-        channel.id,
+      if (!recoveryOnly && mode !== "inbound") {
+        const outgoing = await syncOutgoing(db, channel as Json, {
+          cutoffMs: channelCutoffMs,
+          messageLimit,
+        }, acct);
+        totals.outgoing_found += outgoing.outgoing_found;
+        totals.outgoing_sent += outgoing.outgoing_sent;
+        totals.outgoing_duplicates += outgoing.outgoing_duplicates;
+        totals.outgoing_failed += outgoing.outgoing_failed;
+        totals.stale_conversations += outgoing.stale_conversations;
+      }
+      const channelErrors = totals.errors.filter((error) =>
+        error.startsWith(`${channel.name ?? channel.id}: `)
       );
+      if (mode !== "outgoing" || channelErrors.length) {
+        await db.from("channels").update({
+          last_error: channelErrors.length ? channelErrors[0] : null,
+        }).eq("id", channel.id);
+      }
     } catch (e) {
       const message = errorMessage(e);
       totals.errors.push(`${channel.name ?? channel.id}: ${message}`);
@@ -161,7 +187,7 @@ export async function handle(req: Request): Promise<Response> {
         channel.id,
       );
     }
-  }
+  }));
 
   await db.from("events").insert({
     source: "sync-facebook",
@@ -171,6 +197,9 @@ export async function handle(req: Request): Promise<Response> {
       since_minutes: sinceMinutes,
       conversation_limit: conversationLimit,
       message_limit: messageLimit,
+      channel_type: channelType,
+      recovery_only: recoveryOnly,
+      mode,
     },
   });
 
@@ -193,7 +222,12 @@ async function lastMessageMs(
 async function syncInbound(
   db: Db,
   channel: Json,
-  opts: { cutoffMs: number; conversationLimit: number; messageLimit: number },
+  opts: {
+    cutoffMs: number;
+    conversationLimit: number;
+    messageLimit: number;
+    recoveryOnly: boolean;
+  },
   acct: Awaited<ReturnType<typeof accountForChannel>>,
 ) {
   const isInstagram = channel.type === "instagram";
@@ -237,12 +271,15 @@ async function syncInbound(
     media_attached: 0,
     media_repaired: 0,
     media_failed: 0,
+    errors: [] as string[],
   };
   const profileCache = new Map<string, { name?: string; avatarUrl?: string }>();
 
-  for (const conversation of conversations) {
+  for (let offset = 0; offset < conversations.length; offset += 5) {
+    await Promise.all(conversations.slice(offset, offset + 5).map(async (conversation) => {
+    try {
     const updatedMs = Date.parse(conversation.updated_time as string);
-    if (!Number.isNaN(updatedMs) && updatedMs < opts.cutoffMs) continue;
+    if (!Number.isNaN(updatedMs) && updatedMs < opts.cutoffMs) return;
     result.conversations_scanned++;
 
     // `attachments` sem subcampos deixa a Graph escolher o que devolve: vinham cartões
@@ -358,8 +395,12 @@ async function syncInbound(
 
       const messageAt = Date.parse(message.created_time as string ?? "");
       const isRecentDuplicate = ingest.reason === "duplicate" &&
-        Number.isFinite(messageAt) && Date.now() - messageAt < 5 * 60_000;
-      if ((ingest.inserted || isRecentDuplicate) && !isFromPage && content) {
+        Number.isFinite(messageAt) && Date.now() - messageAt < 2 * 60_000;
+      const isFreshForAutomation = Number.isFinite(messageAt) &&
+        messageAt <= Date.now() + 30_000 && Date.now() - messageAt <= 2 * 60_000;
+      if (!opts.recoveryOnly && isFreshForAutomation &&
+        (ingest.inserted || isRecentDuplicate) && !isFromPage &&
+        (content || message.referral)) {
         const menuAction = inferSocialMenuAction(content);
         const detailAction = inferSocialDetailAction(content);
         const inferredReply = await inferStoredSocialPriceReply(
@@ -369,7 +410,53 @@ async function syncInbound(
           content,
           message.created_time as string | undefined,
         );
-        if (detailAction) {
+        const commercialIntent = classificarIntencaoComercial(content);
+        const salesIntent = inferSocialSalesIntent(content);
+        const humanHandoffWillHandle = commercialIntent === "duvida_tecnica" ||
+          (isAreaAcimaDosPacotes(content) &&
+            extrairAreaHectares(content) !== null);
+        let adEnrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+        try {
+          adEnrollment = await autoEnrollFunil(
+            db,
+            channel,
+            contactId,
+            content,
+            Boolean(message.referral),
+            {
+              responseWillHandle: Boolean(
+                (detailAction || menuAction || inferredReply || commercialIntent || salesIntent) &&
+                  !humanHandoffWillHandle
+              ),
+              humanHandoffWillHandle,
+              sourceMessageId: metaMessageId ??
+                `sync-${contactId}-${String(message.created_time ?? "")}`,
+            },
+          );
+        } catch (error) {
+          console.error(
+            "sync-facebook auto-enroll erro:",
+            String(error).slice(0, 200),
+          );
+        }
+        const deferSocialRoute = adEnrollment?.deferIntent === true;
+        if (deferSocialRoute) {
+          if (commercialIntent) {
+            await recordInboundCommercialIntent(
+              db,
+              channel,
+              contactId,
+              commercialIntent,
+              metaMessageId ??
+                `sync-${contactId}-${String(message.created_time ?? "")}`,
+            );
+          }
+          console.log(
+            "sync-facebook: rota adiada até a abertura do funil",
+            contactId.slice(-4),
+          );
+        }
+        if (!deferSocialRoute && detailAction) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
@@ -405,7 +492,7 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else if (menuAction) {
+        } else if (!deferSocialRoute && menuAction) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
@@ -439,7 +526,7 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else if (inferredReply) {
+        } else if (!deferSocialRoute && inferredReply) {
           try {
             const claimed = await claimDelivery(
               db,
@@ -467,11 +554,11 @@ async function syncInbound(
               String(error).slice(0, 240),
             );
           }
-        } else {
+        } else if (!deferSocialRoute) {
           try {
             const eventId = metaMessageId ??
               `sync-${contactId}-${String(message.created_time ?? "")}`;
-            const intent = classificarIntencaoComercial(content);
+            const intent = commercialIntent;
             if (intent) {
               await recordInboundCommercialIntent(
                 db,
@@ -510,7 +597,37 @@ async function syncInbound(
                 }
               }
             } else {
-              await handleSocialSalesIntent(db, channel, contactId, content, eventId);
+              const handled = await handleSocialSalesIntent(
+                db,
+                channel,
+                contactId,
+                content,
+                eventId,
+              );
+              if (!handled && adEnrollment?.humanHandoff) {
+                const handoffClaimId =
+                  `ad-question-handoff-${channel.id}-${contactId}-${eventId}`;
+                const claimed = await claimDelivery(
+                  db,
+                  handoffClaimId,
+                  "ad-question-handoff",
+                );
+                if (claimed) {
+                  try {
+                    await handleMenuClick(
+                      db,
+                      channel,
+                      contactId,
+                      "menu_humano",
+                      acct,
+                      eventId,
+                    );
+                  } catch (error) {
+                    await releaseDelivery(db, handoffClaimId);
+                    throw error;
+                  }
+                }
+              }
             }
           } catch (error) {
             console.error(
@@ -521,6 +638,12 @@ async function syncInbound(
         }
       }
     }
+    } catch (error) {
+      result.errors.push(
+        `conversation ${String(conversation.id ?? "unknown")}: ${errorMessage(error)}`,
+      );
+    }
+    }));
   }
 
   return result;
@@ -773,6 +896,7 @@ async function downloadAttachment(
 
   const res = await fetch(sourceUrl, {
     headers: cabecalhoDoAnexo(sourceUrl, channelToken),
+    signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`Meta attachment download ${res.status}`);
 

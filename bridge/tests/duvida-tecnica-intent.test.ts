@@ -3,6 +3,7 @@ import {
   detectarUsoComercial,
   isDuvidaTecnicaIntent,
   isInteresseComercialIntent,
+  isLogisticaIntent,
   isPlantioIntent,
   isPrecoIntent,
 } from "../shared/intent.ts";
@@ -42,6 +43,12 @@ Deno.test("preco vence a duvida tecnica quando os dois aparecem", () => {
       throw new Error(`preco vazou pra duvida tecnica: ${t}`);
     }
   }
+  assertEquals(isPrecoIntent("qual é o custo da semente por hectare"), true);
+  assertEquals(
+    isLogisticaIntent("Vocês oferecem entrega em todo o Brasil?"),
+    true,
+  );
+  assertEquals(isLogisticaIntent("qual é o preço incluindo o frete?"), false);
 });
 
 // Conversa fiada não pode pausar o funil e chamar atendente à toa.
@@ -69,13 +76,19 @@ Deno.test("conversa comum NAO dispara duvida tecnica", () => {
 Deno.test("as frases reais nao eram cobertas por isPlantioIntent", () => {
   assertEquals(isPlantioIntent("Qual melhor espaço entre linhas"), false);
   assertEquals(isPlantioIntent("Quantas sementes por hectare"), false);
-  assertEquals(isPlantioIntent("E pra quais animais esse mega sorgo serve??"), false);
+  assertEquals(
+    isPlantioIntent("E pra quais animais esse mega sorgo serve??"),
+    false,
+  );
   // contraprova: quando a palavra existe, plantio continua sendo o dono
   assertEquals(isPlantioIntent("como plantar o sorgo"), true);
 });
 
 Deno.test("interesse geral nao presume o uso", () => {
-  assertEquals(isInteresseComercialIntent("Tenho interesse, pode me explicar?"), true);
+  assertEquals(
+    isInteresseComercialIntent("Tenho interesse, pode me explicar?"),
+    true,
+  );
   assertEquals(isInteresseComercialIntent("quanto custa?"), false);
   assertEquals(isInteresseComercialIntent("qual o espacamento?"), false);
   assertEquals(detectarUsoComercial("quero usar para silagem"), "silagem");

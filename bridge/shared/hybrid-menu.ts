@@ -36,7 +36,7 @@ export function normalizeHybridMenuClick(
 ): string | undefined {
   if (
     !value ||
-    /^(menu_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
+    /^(menu_|f[1-5]_|preco_|tam_|pag_|uso_|plantio_|nutricao_|grp_|cat_|prod_|acao_|pg_|quali_obj_)/
       .test(value)
   ) {
     return value;
@@ -44,6 +44,10 @@ export function normalizeHybridMenuClick(
   const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim()
     .toLowerCase();
+  // A UazAPI pode devolver apenas o título do botão. Títulos específicos
+  // precisam vencer intenções genéricas como "silagem" e "produção".
+  const exactReply = normalizeHybridButtonReply(value);
+  if (exactReply) return exactReply;
   const aliases: Array<[RegExp, string]> = [
     [/\b(preco|valor|calcular|area)\b/, "menu_preco"],
     [/\b(plantar|plantio)\b/, "menu_plantio"],
@@ -91,6 +95,34 @@ export function normalizeHybridButtonReply(
     "boleto": "pag_boleto",
     "quero o material": "menu_isca_silagem",
     "agora nao": "menu_isca_nao_silagem",
+    "quero saber mais": "f1_sim",
+    "so olhando": "f1_olhando",
+    "quanto produz": "f1_continuar",
+    "leite": "f2_leite",
+    "corte": "f2_corte",
+    "os dois": "f2_ambos",
+    "quero o segredo": "f2_continuar",
+    "milho": "f3_milho",
+    "capim": "f3_capim",
+    "nao planto": "f3_nao",
+    "quero ver": "f3_continuar",
+    "ja sim": "f4_ja",
+    "nunca gracas": "f4_nunca",
+    "sim quero": "f5_sim",
+    "vou informar": "f5_local",
+    "como comecar": "plantio_inicio",
+    "solo e adubacao": "plantio_solo",
+    "corte e silagem": "plantio_colheita",
+    "visao geral": "nutricao_1",
+    "proteina": "nutricao_2",
+    "energia ndt": "nutricao_3",
+    "fibras": "nutricao_4",
+    "minerais": "nutricao_5",
+    "gordura": "nutricao_6",
+    "digestibilidade": "nutricao_7",
+    "fermentacao": "nutricao_8",
+    "producao estimada": "nutricao_9",
+    "comparativo": "nutricao_10",
   };
   return replies[normalized];
 }

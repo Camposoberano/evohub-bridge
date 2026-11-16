@@ -3,6 +3,7 @@ import {
   decidirSemMidia,
   limparCacheMidia,
   midiaDisponivel,
+  tamanhoDaMidiaEmCache,
   urlDaPeca,
 } from "../shared/midia-funil.ts";
 
@@ -78,4 +79,18 @@ Deno.test("cache evita um HEAD por contato, e expira", async () => {
 Deno.test("URL vazia não é mídia disponível", async () => {
   limparCacheMidia();
   assertEquals(await midiaDisponivel("", 1000, () => Promise.resolve(200)), false);
+});
+
+Deno.test("tamanho da mídia vem do HEAD em cache, sem nova consulta", async () => {
+  limparCacheMidia();
+  let chamadas = 0;
+  const url = "https://example.test/media.mp4";
+  const buscar = () => {
+    chamadas++;
+    return Promise.resolve({ status: 200, sizeBytes: 16_000_000 });
+  };
+  assertEquals(await midiaDisponivel(url, Date.now(), buscar), true);
+  assertEquals(tamanhoDaMidiaEmCache(url), 16_000_000);
+  assertEquals(await midiaDisponivel(url, Date.now(), buscar), true);
+  assertEquals(chamadas, 1);
 });

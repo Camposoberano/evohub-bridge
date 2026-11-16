@@ -28,14 +28,18 @@ export function normalizeLeadAttribution(referral?: Json | null): Json {
     ad_id: first(
       source.ad_id,
       source.source_id,
+      source.sourceID,
       referral.ad_id,
       referral.source_id,
+      referral.sourceID,
     ),
     ad_name: first(
       source.ad_name,
       source.headline,
+      source.title,
       referral.ad_name,
       referral.headline,
+      referral.title,
     ),
     campaign_id: first(source.campaign_id, referral.campaign_id),
     campaign_name: first(source.campaign_name, referral.campaign_name),
@@ -49,7 +53,14 @@ export function normalizeLeadAttribution(referral?: Json | null): Json {
       source.body,
       referral.creative_name,
     ),
-    source_url: first(source.source_url, source.sourceUrl, referral.source_url),
+    source_url: first(
+      source.source_url,
+      source.sourceUrl,
+      source.sourceURL,
+      referral.source_url,
+      referral.sourceUrl,
+      referral.sourceURL,
+    ),
     source_type: first(
       source.source_type,
       source.sourceType,
@@ -156,15 +167,20 @@ export async function syncInboundCliente(
   const { data: current, error: queryError } = await db.from("clientes")
     .select("*").eq("phone", phone).maybeSingle();
   if (queryError) throw queryError;
+  const previousRaw = object(current?.raw);
+  const previousInbound = object(previousRaw.inbound);
+  const incomingAttribution = normalizeLeadAttribution(input.referral);
   const raw = {
-    ...object(current?.raw),
+    ...previousRaw,
     inbound: {
       channel_id: input.channel.id ?? null,
       channel_name: input.channel.name ?? null,
       source_number: input.channel.phone_number ?? input.channel.display_name ??
         input.channel.name ?? null,
       source_owner_name: input.channel.owner_name ?? null,
-      attribution: normalizeLeadAttribution(input.referral),
+      attribution: Object.keys(incomingAttribution).length
+        ? incomingAttribution
+        : previousInbound.attribution ?? {},
       captured_at: new Date().toISOString(),
     },
   };

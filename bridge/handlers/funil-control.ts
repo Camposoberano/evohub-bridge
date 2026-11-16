@@ -2,7 +2,12 @@
 // Chamado por macros do Chatwoot ou API direta.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery, claimDeliveryWithTtl, releaseDelivery } from "../shared/supabase.ts";
+import {
+  admin,
+  claimDelivery,
+  claimDeliveryWithTtl,
+  releaseDelivery,
+} from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env } from "../shared/env.ts";
 import {
@@ -13,16 +18,35 @@ import {
 } from "../shared/chatwoot.ts";
 import { accountForChannel } from "../shared/accounts.ts";
 import { handleMenuClick } from "./hub-webhook.ts";
+import { enrollIfNew } from "./funil-enroll.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
+import { isSoberanoAction } from "../shared/n8n-action-contract.ts";
+import {
+  dispatchSoberanoAction,
+  enabledN8nActions,
+} from "../shared/n8n-action-router.ts";
 import { recoveryPieces } from "../shared/recovery-content.ts";
+import { confirmN8nRecovery } from "../shared/n8n-recovery.ts";
 import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
-import { autoPauseFunil } from "../shared/funnel-state.ts";
+import {
+  autoPauseFunil,
+  hasFunnelDeliveryEvidence,
+  openingMessagesComplete,
+} from "../shared/funnel-state.ts";
 import { resumeSequenceRebased } from "../shared/funnel-recovery.ts";
 import { BOT_MUTE_LABEL } from "../shared/bot-mute.ts";
 import { leaveCatalogJourney, sendCatalogRootMenu } from "./catalog.ts";
-import { blockContact } from "../shared/lead-block.ts";
+import { excludePaidContact, stopContactAutomation } from "../shared/stop-contact.ts";
+import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
+import {
+  funnelLabel,
+  LEGACY_MAIN_FUNNEL,
+  mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+} from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 
 /**
@@ -77,7 +101,9 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-control")) {
+  if (
+    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-control")
+  ) {
     return json({ error: "unauthorized" }, 401);
   }
 
@@ -101,18 +127,79 @@ export async function handle(req: Request): Promise<Response> {
     "id, channel_id, contact_id, chatwoot_conversation_id",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
-  if (!conv) return json({ error: "conversa não encontrada", terminal: true }, 404);
+  if (!conv) {
+    return json({ error: "conversa não encontrada", terminal: true }, 404);
+  }
 
   const acct = await accountForChannel(conv.channel_id as string);
+  const { data: controlChannel, error: controlChannelError } = await db
+    .from("channels").select("id,type,name,external_id,phone_number")
+    .eq("id", conv.channel_id).maybeSingle();
+  if (controlChannelError) {
+    return json({ error: "canal da conversa indisponível" }, 500);
+  }
+  const funnelId = mainFunnelForChannel(controlChannel);
+  const n8nAlias: Record<string, string> = {
+    iniciar: "funil",
+    "start-funil": "funil",
+    price: "preco",
+    videos: "video",
+    depoimento: "video",
+  };
+  const routedAction = n8nAlias[action] ?? action;
+
+  // O 5895 usa o workflow n8n correspondente, inclusive para aliases. Chamadas
+  // vindas de /n8n-action-enqueue passam pela implementação local sem recursão.
+  if (
+    [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId) &&
+    body.n8n_internal !== true &&
+    isSoberanoAction(routedAction) &&
+    !routedAction.startsWith("recuperacao-") &&
+    enabledN8nActions().has(routedAction)
+  ) {
+    const requestId = typeof body.request_id === "string" &&
+        body.request_id.trim()
+      ? body.request_id
+      : `direct:${crypto.randomUUID()}`;
+    const dispatched = await dispatchSoberanoAction({
+      request_id: requestId,
+      source: "macro",
+      chatwoot_conversation_id: cwConvId,
+      action: routedAction,
+      funnel_version: funnelId,
+    });
+    if (!dispatched.ok) {
+      return json({
+        ok: false,
+        terminal: dispatched.terminal,
+        error: dispatched.error,
+      }, dispatched.terminal ? 422 : 503);
+    }
+    if (!dispatched.duplicate && dispatched.accepted > 0) {
+      await nota(
+        cwConvId,
+        `📥 Ação "${routedAction}" aceita no n8n: ${dispatched.accepted} peça(s) na fila. Envio ainda será confirmado pelo bridge.`,
+        acct,
+      );
+    }
+    return json({
+      ok: true,
+      action: routedAction,
+      queued: dispatched.accepted,
+      duplicate: dispatched.duplicate,
+    });
+  }
 
   if (action === "pause") {
     const { count: paused } = await db.from("scheduled_messages").update({
       status: "paused",
     })
-      .eq("conversation_id", conv.id).eq("status", "pending")
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "pending")
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "paused" })
-      .eq("conversation_id", conv.id).eq("status", "running");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "running");
     await db.from("events").insert({
       source: "funil",
       event_type: "manual_paused",
@@ -155,7 +242,11 @@ export async function handle(req: Request): Promise<Response> {
         String(e).slice(0, 150),
       );
     }
-    const retomadas = await resumeSequenceRebased(db, String(conv.id));
+    const retomadas = await resumeSequenceRebased(
+      db,
+      String(conv.id),
+      funnelId,
+    );
     if (retomadas > 0) {
       await db.from("events").insert({
         source: "funil",
@@ -182,10 +273,12 @@ export async function handle(req: Request): Promise<Response> {
     const { count: cancelled } = await db.from("scheduled_messages").update({
       status: "cancelled",
     })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["pending", "paused"])
       .select("id", { count: "exact", head: true });
     await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .in("status", ["running", "paused"]);
     await nota(
       cwConvId,
       `⏹️ *Funil cancelado* — ${cancelled ?? 0} mensagens removidas da fila.`,
@@ -198,55 +291,51 @@ export async function handle(req: Request): Promise<Response> {
   // server.ts, startOutcomeLabelLoop -- diferente do poll de cmd-* que remove a etiqueta
   // depois de rodar). Cícero marca a etiqueta e ela fica visível como status permanente.
   if (action === "marcar-pago") {
-    const { count: cancelled } = await db.from("scheduled_messages").update({
-      status: "cancelled",
-    })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
-      .select("id", { count: "exact", head: true });
-    await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
-    await db.from("conversations").update({
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("external_contact_id").eq("id", conv.contact_id).maybeSingle();
+    if (contactError || !contact?.external_contact_id) {
+      return json({ error: "contato indisponível para excluir dos disparos" }, 500);
+    }
+    const { error: outcomeError } = await db.from("conversations").update({
       outcome: "won",
       outcome_source: "label",
       outcome_set_at: new Date().toISOString(),
     }).eq("id", conv.id);
+    if (outcomeError) throw outcomeError;
+    const result = await excludePaidContact(
+      db, String(conv.channel_id), String(contact.external_contact_id),
+    );
     await nota(
       cwConvId,
-      `✅ *Marcado como PAGO* — funil encerrado (${
-        cancelled ?? 0
-      } mensagens removidas da fila).`,
+      `✅ *Marcado como PAGO* — ${result.scheduled} peças do funil e ${result.campaigns} disparos pendentes excluídos.`,
       acct,
     );
-    return json({ ok: true, action: "marcar-pago", cancelled: cancelled ?? 0 });
+    return json({ ok: true, action: "marcar-pago", cancelled: result.scheduled, campaigns: result.campaigns });
   }
 
   if (action === "marcar-nao-compra") {
-    const { count: cancelled } = await db.from("scheduled_messages").update({
-      status: "cancelled",
-    })
-      .eq("conversation_id", conv.id).in("status", ["pending", "paused"])
-      .select("id", { count: "exact", head: true });
-    await db.from("sales_sequences").update({ status: "cancelled" })
-      .eq("conversation_id", conv.id).in("status", ["running", "paused"]);
-    await db.from("conversations").update({
-      outcome: "lost",
-      outcome_source: "label",
-      outcome_set_at: new Date().toISOString(),
-    }).eq("id", conv.id);
-    if (conv.contact_id) {
-      await blockContact(db, conv.contact_id as string, "nao-compra");
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("external_contact_id").eq("id", conv.contact_id).maybeSingle();
+    if (contactError || !contact?.external_contact_id) {
+      return json({ error: "contato indisponível para excluir dos disparos" }, 500);
     }
+    const result = await stopContactAutomation(
+      db, String(conv.channel_id), String(contact.external_contact_id), "manual",
+    );
+    const labels = await ensureNoPurchaseLabels(
+      db, String(conv.channel_id), String(contact.external_contact_id),
+    );
     await nota(
       cwConvId,
-      `🚫 *Marcado como NÃO COMPRA* — funil encerrado (${
-        cancelled ?? 0
-      } mensagens removidas da fila) e contato bloqueado pra futuros funis.`,
+      `🚫 *Marcado como NÃO COMPRA* — ${result.scheduled} peças do funil e ${result.campaigns} disparos pendentes excluídos.`,
       acct,
     );
     return json({
       ok: true,
       action: "marcar-nao-compra",
-      cancelled: cancelled ?? 0,
+      cancelled: result.scheduled,
+      campaigns: result.campaigns,
+      label_errors: labels.errors,
     });
   }
 
@@ -256,7 +345,11 @@ export async function handle(req: Request): Promise<Response> {
     // um funil parado por dias despejaria o resto do roteiro no cliente em minutos.
     // resumeSequenceRebased preserva os intervalos e reancora em agora+60s; é a mesma
     // função que o auto-resume usa, pra não voltarem a divergir.
-    const resumed = await resumeSequenceRebased(db, String(conv.id));
+    const resumed = await resumeSequenceRebased(
+      db,
+      String(conv.id),
+      funnelId,
+    );
     await db.from("events").insert({
       source: "funil",
       event_type: "manual_resumed",
@@ -269,7 +362,7 @@ export async function handle(req: Request): Promise<Response> {
     await nota(
       cwConvId,
       resumed > 0
-        ? `▶️ *Funil retomado* — ${resumed} mensagens reativadas, reagendadas a partir de agora mantendo os intervalos originais.`
+        ? `▶️ *Funil retomado* — ${resumed} etapa(s) reativada(s), com os intervalos originais preservados.`
         : "▶️ *Nada a retomar* — não há mensagem pausada nesta conversa. (Se o funil foi encerrado por *stop*, *pago* ou *não compra*, as mensagens foram canceladas e só um novo início traz de volta.)",
       acct,
     );
@@ -279,30 +372,38 @@ export async function handle(req: Request): Promise<Response> {
   if (action === "status") {
     const { data: seq, error: seqError } = await db.from("sales_sequences")
       .select("funnel, status")
-      .eq("conversation_id", conv.id).limit(1).maybeSingle();
+      .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
     const { count: pending, error: pendingError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "pending");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "pending");
     const { count: paused, error: pausedError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "paused");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "paused");
     const { count: sent, error: sentError } = await db.from(
       "scheduled_messages",
     ).select("id", { count: "exact", head: true })
-      .eq("conversation_id", conv.id).eq("status", "sent");
+      .eq("conversation_id", conv.id).eq("funnel", funnelId)
+      .eq("status", "sent");
     const { data: next, error: nextError } = await db.from("scheduled_messages")
       .select("id, type, send_at, status").eq("conversation_id", conv.id)
+      .eq("funnel", funnelId)
       .in("status", ["pending", "paused"]).order("send_at", { ascending: true })
       .limit(1).maybeSingle();
     const { data: upcoming, error: upcomingError } = await db.from(
       "scheduled_messages",
     )
       .select("day, step, type, send_at, status").eq("conversation_id", conv.id)
+      .eq("funnel", funnelId)
       .order("send_at", { ascending: true }).limit(40);
+    const mediaFunnel = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)
+      ? LEGACY_MAIN_FUNNEL
+      : funnelId;
     const { data: mediaRows, error: mediaError } = await db.from("funnel_media")
-      .select("day, slot, type").eq("funnel", "mega-sorgo").eq("active", true);
+      .select("day, slot, type").eq("funnel", mediaFunnel).eq("active", true);
     const media = (mediaRows ?? []).reduce(
       (acc: Record<string, number>, row: Json) => {
         const key = `dia${row.day}:${row.slot}:${row.type ?? "unknown"}`;
@@ -313,7 +414,8 @@ export async function handle(req: Request): Promise<Response> {
     );
     return json({
       ok: true,
-      funnel: seq?.funnel ?? null,
+      funnel: seq?.funnel ?? funnelId,
+      funnel_label: funnelLabel(seq?.funnel ?? funnelId),
       sequence_status: seq?.status ?? null,
       pending: pending ?? 0,
       paused: paused ?? 0,
@@ -336,48 +438,96 @@ export async function handle(req: Request): Promise<Response> {
 
   // Iniciar funil de apresentação (Mega Sorgo) manualmente
   if (action === "funil" || action === "iniciar" || action === "start-funil") {
-    const secret = env("CHATWOOT_WEBHOOK_SECRET");
-    const enrollRes = await fetch(
-      `http://localhost:${Deno.env.get("PORT") ?? "8000"}/funil-enroll?token=${
-        encodeURIComponent(secret)
-      }`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // Clique manual começa imediatamente; as fases seguintes respeitam a cadência comercial.
-        body: JSON.stringify({
-          chatwoot_conversation_id: cwConvId,
-          force: true,
-          manual: true,
-        }),
-      },
-    );
-    const enrollData = await enrollRes.json().catch(() => ({})) as Json;
-    if (enrollData.ok) {
-      await nota(
-        cwConvId,
-        `🚀 *Funil de apresentação iniciado!*\n${
-          enrollData.enfileiradas ?? 0
-        } mensagens enfileiradas.`,
-        acct,
+    const resolved = await resolveChannelAndContact(db, conv as Json);
+    if (!resolved) {
+      return json({
+        error: "canal ou contato não encontrado",
+        terminal: true,
+      }, 404);
+    }
+    const startedAt = new Date().toISOString();
+    let outcome: string;
+    try {
+      outcome = await enrollIfNew(db, resolved.channel, resolved.from, {
+        manual: true,
+        repairMissingOpening: true,
+        conversation: conv as Json,
+      });
+    } catch (error) {
+      console.error(
+        "funil-control: início manual falhou",
+        String(error).slice(0, 180),
       );
       return json({
-        ok: true,
+        ok: false,
         action: "funil",
-        enfileiradas: enrollData.enfileiradas,
-      });
+        error: "erro ao iniciar funil",
+      }, 500);
     }
+
+    if (!["created", "already", "in_progress"].includes(outcome)) {
+      const reason = outcome === "blocked"
+        ? "O contato está bloqueado ou excluído da automação."
+        : "Não foi possível localizar a sequência da conversa.";
+      await nota(cwConvId, "⚠️ " + reason, acct);
+      return json({ ok: true, action: "funil", terminal: true, outcome });
+    }
+
+    const [openingComplete, deliveryEvidence, newRows] = await Promise.all([
+      openingMessagesComplete(db, String(conv.id), funnelId),
+      hasFunnelDeliveryEvidence(db, String(conv.id), funnelId),
+      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+        .eq("conversation_id", conv.id).eq("funnel", funnelId)
+        .eq("day", 1).neq("type", "deferred_intent"),
+    ]);
+    if (newRows.error) {
+      console.warn(
+        "funil-control: não consegui contar a fila criada",
+        newRows.error.message,
+      );
+    }
+    const already = outcome !== "created";
+    let message: string;
+    if (outcome === "created") {
+      message =
+        `🚀 *${
+          funnelLabel(funnelId)
+        } iniciado!* A abertura foi adicionada à fila (` +
+        (newRows.count ?? 0) + " mensagem(ns)).";
+    } else if (outcome === "in_progress") {
+      message = `ℹ️ *O início de ${
+        funnelLabel(funnelId)
+      } já está em andamento.* Não criei outra fila.`;
+    } else if (openingComplete) {
+      message = `ℹ️ *Já há evidência da abertura de ${
+        funnelLabel(funnelId)
+      } no histórico do sistema.* Não criei outra sequência para evitar duplicação. O registro de envio não confirma a entrega da mensagem ao aparelho do cliente.`;
+    } else if (deliveryEvidence) {
+      message =
+        "⚠️ *A abertura não está confirmada como concluída.* Há uma tentativa registrada; não repliquei as mensagens para evitar duplicação. Confira a macro Status.";
+    } else {
+      message =
+        "⚠️ Não encontrei confirmação de envio nem consegui recriar a abertura. Confira a macro Status.";
+    }
+    await nota(cwConvId, message, acct);
     return json({
-      ok: false,
+      ok: true,
       action: "funil",
-      error: enrollData.error ?? "erro ao iniciar funil",
-    }, 500);
+      already,
+      outcome,
+      funnel: funnelId,
+      funnel_label: funnelLabel(funnelId),
+      enfileiradas: outcome === "created" ? (newRows.count ?? 0) : 0,
+    });
   }
 
   if (action === "catalogo" || action === "abrir-catalogo") {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
     }
     await sendCatalogRootMenu(
       db,
@@ -397,7 +547,10 @@ export async function handle(req: Request): Promise<Response> {
   if (action === "catalogo-sair" || action === "voltar-mega-sorgo") {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
     }
     await leaveCatalogJourney(db, resolved.channel, resolved.from, acct);
     await nota(
@@ -439,16 +592,21 @@ export async function handle(req: Request): Promise<Response> {
   if (menuId) {
     const resolved = await resolveChannelAndContact(db, conv);
     if (!resolved) {
-      return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+      return json(
+        { error: "canal ou contato não encontrado", terminal: true },
+        404,
+      );
     }
     try {
-      // Uma sequencia comercial manual substitui a conversa automatica naquele
-      // momento. Pausa o funil principal antes de enviar para nao misturar
-      // preco, audios e videos de jornadas diferentes.
-      const funnelPaused = await autoPauseFunil(
-        String(conv.id),
-        `macro manual: ${action}`,
-      );
+      // No 5895 a resposta solicitada entra entre as pausas da apresentação.
+      // A sequência fiel de 30/09 continua; não fica presa após preço/vídeo.
+      const funnelPaused = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)
+        ? false
+        : await autoPauseFunil(
+          String(conv.id),
+          `macro manual: ${action}`,
+          { funnel: funnelId },
+        );
       const dispatch = await handleMenuClick(
         db,
         resolved.channel,
@@ -496,7 +654,11 @@ export async function handle(req: Request): Promise<Response> {
       }
       const motivo = motivoTerminal(detail);
       if (motivo) {
-        await nota(cwConvId, `🚫 *Macro "${action}" não executada.* ${motivo}`, acct);
+        await nota(
+          cwConvId,
+          `🚫 *Macro "${action}" não executada.* ${motivo}`,
+          acct,
+        );
         return json({ ok: false, terminal: true, error: detail }, 422);
       }
       return json({ error: detail }, 500);
@@ -541,10 +703,80 @@ export async function dispatchRecovery(
   const resolved = await resolveChannelAndContact(db, conv);
   if (!resolved) {
     if (automatic) return { state: "failed" };
-    return json({ error: "canal ou contato não encontrado", terminal: true }, 404);
+    return json(
+      { error: "canal ou contato não encontrado", terminal: true },
+      404,
+    );
   }
   const channel = deliveryChannelLabel(resolved.channel);
   const claimKey = `recovery-${conv.id}-${variation}`;
+  const n8nAction = `recuperacao-${variation}`;
+  const recoveryVersion = mainFunnelForChannel(resolved.channel);
+  if (
+    [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(recoveryVersion) &&
+    isSoberanoAction(n8nAction) && enabledN8nActions().has(n8nAction)
+  ) {
+    const { data: priorClaim, error: claimError } = await db.from("deliveries")
+      .select("delivery_id").eq("delivery_id", claimKey).maybeSingle();
+    if (claimError) {
+      if (automatic) return { state: "failed" };
+      return json({ ok: false, error: "falha ao consultar recuperação" }, 503);
+    }
+    // Uma recuperação antiga já enviada continua protegida pela trava original.
+    if (!priorClaim) {
+      const recoveryFunnel = `${recoveryVersion}:${n8nAction}`;
+      const { data: queued, error: queueError } = await db.from("scheduled_messages")
+        .select("status").eq("conversation_id", conv.id)
+        .eq("funnel", recoveryFunnel);
+      if (queueError) {
+        if (automatic) return { state: "failed" };
+        return json({ ok: false, error: "falha ao consultar fila" }, 503);
+      }
+      if (queued?.length) {
+        if (queued.every((piece: { status: string }) => piece.status === "sent")) {
+          try {
+            await confirmN8nRecovery(db, {
+              conversation_id: conv.id,
+              chatwoot_conversation_id: cwConvId,
+              funnel: recoveryFunnel,
+            }, String(resolved.channel.id));
+          } catch (error) {
+            console.error("recovery: reconciliação n8n falhou", error);
+            if (automatic) return { state: "failed" };
+            return json({ ok: false, error: "falha ao confirmar recuperação" }, 503);
+          }
+          if (automatic) return { state: "reconciled" };
+          return json({ ok: true, action: n8nAction, skipped: "already-sent" });
+        }
+        if (queued.some((piece: { status: string }) => piece.status === "failed")) {
+          if (automatic) return { state: "failed" };
+          return json({ ok: false, error: "recuperação na fila exige conciliação" }, 409);
+        }
+        if (automatic) return { state: "queued" };
+        return json({ ok: true, action: n8nAction, queued: queued.length, duplicate: true });
+      }
+      const dispatched = await dispatchSoberanoAction({
+        request_id: `recovery:${conv.id}:${variation}`,
+        source: automatic ? "intent" : "macro",
+        chatwoot_conversation_id: cwConvId,
+        action: n8nAction,
+        funnel_version: recoveryVersion,
+      });
+      if (!dispatched.ok) {
+        if (automatic) return { state: "failed" };
+        return json({ ok: false, terminal: dispatched.terminal, error: dispatched.error },
+          dispatched.terminal ? 422 : 503);
+      }
+      if (!automatic) {
+        await nota(cwConvId,
+          `📥 Recuperação ${variation} aceita no n8n: ${dispatched.accepted} peça(s) na fila. O envio será confirmado depois.`,
+          acct);
+        return json({ ok: true, action: n8nAction, queued: dispatched.accepted,
+          duplicate: dispatched.duplicate });
+      }
+      return { state: "queued" };
+    }
+  }
   if (!await claimDelivery(db, claimKey, "recovery")) {
     // A cadeia conhece as recuperações pela tabela de eventos, mas a trava de entrega é
     // durável. Quando o evento já expirou, reconstituí-lo evita que cada rodada tente a
@@ -723,10 +955,14 @@ export async function dispatchRecovery(
       });
       if (blockedError) throw blockedError;
       // Claim atomico: macros simultaneas nao podem publicar duas notas.
-      if (await claimDeliveryWithTtl(
-        db, `recovery-blocked-note-${conv.id}-${variation}`, "recovery",
-        24 * 60 * 60_000,
-      )) {
+      if (
+        await claimDeliveryWithTtl(
+          db,
+          `recovery-blocked-note-${conv.id}-${variation}`,
+          "recovery",
+          24 * 60 * 60_000,
+        )
+      ) {
         await nota(
           cwConvId,
           `🚫 *Recuperação ${variation} não enviada.* ${motivo}`,

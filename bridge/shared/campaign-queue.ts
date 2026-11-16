@@ -33,6 +33,30 @@ export async function reservarProximoItem(
   return (row as FilaItem | null) ?? null;
 }
 
+/** Reserva sem permitir outro processamento simultâneo nas quatro filas da rotação. */
+export async function reservarProximoItemRotacao(
+  db: DbClient,
+  campaignId: string,
+): Promise<FilaItem | null> {
+  const { data, error } = await publicRpc(db, "claim_rotating_campaign_queue_item", {
+    p_campaign_id: campaignId,
+  });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row as FilaItem | null) ?? null;
+}
+
+/** Pendências realmente elegíveis, contadas no servidor para evitar o limite de 1.000. */
+export async function pendentesElegiveis(db: DbClient, campaignId: string): Promise<number> {
+  const { count, error } = await publicTable(db, "campaign_queue")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .lt("attempts", MAX_TENTATIVAS);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 /**
  * Põe a lista na fila. Ignora repetido pelo unique (campaign_id, contact_key): disparar a
  * mesma campanha duas vezes para a mesma lista não duplica ninguém.
@@ -219,7 +243,24 @@ export async function campanhasComFila(db: DbClient): Promise<string[]> {
     .lt("attempts", MAX_TENTATIVAS)
     .limit(1000);
   if (error) throw error;
-  return [...new Set(((data ?? []) as Json[]).map((r) => String(r.campaign_id)))];
+  const ids = new Set(((data ?? []) as Json[]).map((r) => String(r.campaign_id)));
+
+  // A API limita a resposta a 1.000 linhas. A campanha oficial 5895 tem mais
+  // pendentes que isso e ocupa a página inteira, ocultando a fila de botões.
+  // Incluímos apenas a fila 5895 que ficou invisível; não alteramos o despacho
+  // de outras campanhas/canais.
+  const buttons5895 = "reativacao-5895-uz";
+  if (!ids.has(buttons5895)) {
+    const { count, error: countError } = await publicTable(db, "campaign_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", buttons5895)
+      .eq("status", "pending")
+      .lt("attempts", MAX_TENTATIVAS);
+    if (countError) throw countError;
+    if ((count ?? 0) > 0) ids.add(buttons5895);
+  }
+
+  return [...ids];
 }
 
 /**
@@ -293,18 +334,25 @@ export async function resumoDaFila(
   db: DbClient,
   campaignId: string,
 ): Promise<ResumoFila> {
-  const { data, error } = await publicTable(db, "campaign_queue")
-    .select("status")
-    .eq("campaign_id", campaignId)
-    .limit(10_000);
-  if (error) throw error;
-  const linhas = (data ?? []) as Json[];
-  const conta = (s: string) => linhas.filter((r) => r.status === s).length;
+  // PostgREST limita cada resposta a 1.000 linhas neste projeto, mesmo com
+  // `.limit(10_000)`. Contar no servidor evita truncar campanhas maiores.
+  const conta = async (status: string): Promise<number> => {
+    const { count, error } = await publicTable(db, "campaign_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", campaignId)
+      .eq("status", status);
+    if (error) throw error;
+    return count ?? 0;
+  };
+  const [pendentes, pausados, enviados, falhas, pulados] = await Promise.all([
+    conta("pending"), conta("paused"), conta("sent"), conta("failed"),
+    conta("skipped"),
+  ]);
   return {
-    pendentes: conta("pending"),
-    pausados: conta("paused"),
-    enviados: conta("sent"),
-    falhas: conta("failed"),
-    pulados: conta("skipped"),
+    pendentes,
+    pausados,
+    enviados,
+    falhas,
+    pulados,
   };
 }

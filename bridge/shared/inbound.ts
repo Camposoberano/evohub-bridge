@@ -23,7 +23,8 @@ import {
   resolveInboxIdentifier,
   setConversationLabels,
 } from "./chatwoot.ts";
-import { resumeWindowHeldMessages } from "./funnel-queue.ts";
+import { resumeWindowHeldMessages } from "./social-window-hold.ts";
+import { autoPauseFunil } from "./funnel-state.ts";
 
 type Json = Record<string, unknown>;
 export type { MsgType };
@@ -253,12 +254,39 @@ async function ingestInboundClaimed(
   if (convQueryError) throw convQueryError;
 
   let conv = openConv as Json | null;
-  const source = sourceSnapshot(channel, msg.from, msg.referral);
+  const previouslyMarkedAsAd = conv?.origem === "anuncio";
+  const effectiveReferral = msg.referral ?? (openConv?.referral as Json | null) ?? null;
+  const source = sourceSnapshot(channel, msg.from, effectiveReferral);
   if (!conv) {
     // nativo: conversa só no banco (a nativa gerencia a dela).
-    const cwConv = skip
-      ? null
-      : await createConversation(inboxId, sourceId!, acct);
+    let cwConv: { id: number } | null = null;
+    if (!skip) {
+      try {
+        cwConv = await createConversation(inboxId, sourceId!, acct);
+      } catch (error) {
+        // O contato pode ter sido apagado no Chatwoot enquanto o Supabase ainda guarda
+        // o source_id antigo. Um 404 na criação da conversa exige recriar o vínculo.
+        if (!(error instanceof Error) ||
+          !error.message.startsWith("Chatwoot createConversation 404:")) {
+          throw error;
+        }
+        const repaired = await ensureContact(inboxId, {
+          name: msg.name ?? (contact.name as string | undefined),
+          phone: phone ?? undefined,
+          identifier: msg.from,
+        }, acct);
+        sourceId = repaired.source_id;
+        const repairedAttributes = { ...leadAttributes, source_id: sourceId };
+        const { error: repairError } = await db.from("contacts").update({
+          chatwoot_contact_id: repaired.contact_id ?? null,
+          attributes: repairedAttributes,
+        }).eq("id", contact.id);
+        if (repairError) throw repairError;
+        contact = { ...contact, attributes: repairedAttributes,
+          chatwoot_contact_id: repaired.contact_id ?? null };
+        cwConv = await createConversation(inboxId, sourceId, acct);
+      }
+    }
     const { data: insertedConv, error: convInsertError } = await db.from(
       "conversations",
     ).insert({
@@ -273,13 +301,45 @@ async function ingestInboundClaimed(
     if (convInsertError) throw convInsertError;
     conv = insertedConv as Json;
   } else {
-    const sourceUpdate = {
+    const sourceUpdate: Json = {
       ...source,
       origem: msg.referral ? "anuncio" : conv.origem,
       referral: msg.referral ?? conv.referral ?? null,
     };
-    await db.from("conversations").update(sourceUpdate).eq("id", conv.id);
+    if (!effectiveReferral) {
+      for (const key of [
+        "ad_id", "ad_name", "campaign_id", "campaign_name", "creative_id",
+        "creative_name", "source_url", "ctwa_clid",
+      ]) {
+        if (sourceUpdate[key] == null && conv[key] != null) delete sourceUpdate[key];
+      }
+      if (!Object.keys(sourceUpdate.attribution as Json).length &&
+        Object.keys((conv.attribution ?? {}) as Json).length) {
+        delete sourceUpdate.attribution;
+      }
+    }
+    const { error: sourceUpdateError } = await db.from("conversations")
+      .update(sourceUpdate).eq("id", conv.id);
+    if (sourceUpdateError) throw sourceUpdateError;
     conv = { ...conv, ...sourceUpdate };
+  }
+
+  // A referência da Meta é o sinal de origem, independentemente do texto enviado.
+  // O evento registra a primeira detecção sem copiar dados pessoais ou o anúncio.
+  if (!msg.outgoing && msg.referral && !previouslyMarkedAsAd) {
+    const { error: attributionEventError } = await db.from("events").insert({
+      source: "ad-funnel",
+      event_type: "ad_origin_detected",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: conv.chatwoot_conversation_id ?? null,
+        message_id: msg.metaMessageId ?? null,
+      },
+    });
+    if (attributionEventError) {
+      console.warn("ad_origin_detected: auditoria falhou", attributionEventError.message);
+    }
   }
 
   const attachments = msg.attachments ?? [];
@@ -526,45 +586,37 @@ async function ingestInboundClaimed(
     }
   }
 
-  // Uma resposta passa o lead para a conversa comercial. Para Mega Sorgo, a régua de
-  // apresentação não pode continuar por cima do atendimento nem ser retomada depois.
+  // Uma resposta pausa a régua enquanto o cliente conversa. A pausa tem prazo e é
+  // renovada em cada mensagem; os roteadores podem promovê-la para espera humana sem prazo.
   if (!msg.outgoing) {
     try {
-      const { data: sequence, error: sequenceError } = await db.from(
-        "sales_sequences",
-      ).select("id,status")
-        .eq("conversation_id", conv.id).eq("funnel", "mega-sorgo")
-        .in("status", ["running", "paused"]).maybeSingle();
-      if (sequenceError) throw sequenceError;
-      if (sequence) {
-        const { error: stateError } = await db.from("sales_sequences")
-          .update({ status: "replied" }).eq("id", sequence.id)
-          .in("status", ["running", "paused"]);
-        if (stateError) throw stateError;
-        const { error: cancelError } = await db.from("scheduled_messages")
-          .update({ status: "cancelled" })
-          .eq("conversation_id", conv.id)
-          .in("funnel", ["mega-sorgo", "mega-sorgo-followup"])
-          .in("status", ["pending", "paused"]);
-        if (cancelError) throw cancelError;
+      const paused = await autoPauseFunil(
+        String(conv.id),
+        "resposta_cliente",
+        { comPrazo: true },
+      );
+      if (paused) {
         const { error: eventError } = await db.from("events").insert({
           source: "sales-funnel",
           event_type: "commercial_engaged",
           channel_id: channel.id,
           payload: {
             conversation_id: conv.id,
-            sequence_id: sequence.id,
             message_id: insertedMessage.id,
             origin: "cliente",
           },
         });
         if (eventError) throw eventError;
       }
+      const { error: followupError } = await db.from("scheduled_messages")
+        .update({ status: "cancelled" })
+        .eq("conversation_id", conv.id)
+        .eq("funnel", "mega-sorgo-followup")
+        .in("status", ["pending", "paused"]);
+      if (followupError) throw followupError;
     } catch (error) {
-      // A mensagem continua persistida. O pump da fila repete a guarda consultando o estado
-      // da sequência antes de qualquer entrega pendente.
       console.error(
-        "inbound: não consegui interromper a régua após resposta:",
+        "inbound: não consegui pausar a régua após resposta:",
         String(error).slice(0, 180),
       );
     }

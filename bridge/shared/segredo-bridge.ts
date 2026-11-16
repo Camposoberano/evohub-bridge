@@ -39,8 +39,15 @@ export function confereSegredo(
 ): boolean {
   const token = informado ?? "";
   if (!token) return false;
-  const rotacao = segredoEmRotacao();
   const legados = esperados.filter((s): s is string => Boolean(s && s.trim()));
+  // A rotação é exclusiva do domínio Chatwoot. Um segredo de webhook não pode
+  // autenticar rotas que esperam a credencial independente do n8n ou de cron.
+  const principalChatwoot = optionalEnv("CHATWOOT_WEBHOOK_SECRET");
+  const rotacao = principalChatwoot && legados.some((s) =>
+      timingSafeEqual(s, principalChatwoot)
+    )
+    ? segredoEmRotacao()
+    : undefined;
 
   // percorre a lista inteira de propósito: sair no primeiro acerto abriria canal de temporização
   let casouLegado = false;

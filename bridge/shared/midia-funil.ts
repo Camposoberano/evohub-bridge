@@ -20,7 +20,13 @@ const TTL_EXISTE_MS = 10 * 60_000;
 const TTL_SUMIU_MS = 5 * 60_000;
 const TIMEOUT_MS = 8_000;
 
-const cache = new Map<string, { existe: boolean; ate: number }>();
+const cache = new Map<string, { existe: boolean; ate: number; sizeBytes: number | null }>();
+
+/** Tamanho obtido pelo HEAD já feito no pré-envio; não consulta a rede novamente. */
+export function tamanhoDaMidiaEmCache(url: string): number | null {
+  const item = cache.get(String(url ?? "").trim());
+  return item && item.ate > Date.now() ? item.sizeBytes : null;
+}
 
 /** Só para teste: limpa o cache entre casos. */
 export function limparCacheMidia(): void {
@@ -34,12 +40,16 @@ export function limparCacheMidia(): void {
 export async function midiaDisponivel(
   url: string,
   now = Date.now(),
-  buscar: (u: string) => Promise<number> = async (u) => {
+  buscar: (u: string) => Promise<number | { status: number; sizeBytes: number | null }> = async (u) => {
     const r = await fetch(u, {
       method: "HEAD",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    return r.status;
+    const length = Number(r.headers.get("content-length"));
+    return {
+      status: r.status,
+      sizeBytes: Number.isSafeInteger(length) && length > 0 ? length : null,
+    };
   },
 ): Promise<boolean> {
   const alvo = String(url ?? "").trim();
@@ -47,8 +57,11 @@ export async function midiaDisponivel(
   const guardado = cache.get(alvo);
   if (guardado && guardado.ate > now) return guardado.existe;
   let existe = true;
+  let sizeBytes: number | null = null;
   try {
-    const status = await buscar(alvo);
+    const result = await buscar(alvo);
+    const status = typeof result === "number" ? result : result.status;
+    sizeBytes = typeof result === "number" ? null : result.sizeBytes;
     // 2xx e 3xx valem; 4xx é arquivo que não está lá. 5xx é problema do storage, não do
     // arquivo — não vale marcar a peça como perdida por causa disso.
     existe = status < 400 || status >= 500;
@@ -58,6 +71,7 @@ export async function midiaDisponivel(
   cache.set(alvo, {
     existe,
     ate: now + (existe ? TTL_EXISTE_MS : TTL_SUMIU_MS),
+    sizeBytes,
   });
   return existe;
 }

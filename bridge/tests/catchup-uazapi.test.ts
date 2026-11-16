@@ -1,6 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   candidatasARecuperar,
+  conteudoRecuperado,
+  cliqueRespondeEspera,
+  respostaInterativaRecuperada,
   dataDaQueda,
   JANELA_PADRAO_MS,
   janelaDeBusca,
@@ -59,9 +62,34 @@ Deno.test("só entra mensagem de cliente, fora de grupo, dentro da janela", () =
     { id: "velha", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 7 * H) },
     // chegou há 2 minutos: é do webhook; a varredura não pode passar na frente da automação
     { id: "recente", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - 2 * 60_000) },
+    { id: "call_123", fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
+    { id: "x_call", fromMe: false, isGroup: false, messageType: "CallLogMessage", chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
+    { id: "reacao", fromMe: false, isGroup: false, messageType: "ReactionMessage", chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
     { fromMe: false, isGroup: false, chatid: "5542@s.whatsapp.net", messageTimestamp: s(agora - H) },
   ];
   assertEquals(candidatasARecuperar(lista, desde, ate).map((m) => m.id), ["a"]);
+});
+
+Deno.test("recuperação preserva o título visível do clique de lista", () => {
+  assertEquals(conteudoRecuperado({ content: { title: "🧪 Info nutricional" } }), "🧪 Info nutricional");
+  assertEquals(conteudoRecuperado({ text: "Oi" }), "Oi");
+});
+
+Deno.test("clique recuperado não avança etapa iniciada depois do clique", () => {
+  const canal = "0595";
+  const clique = Date.parse("2026-10-21T16:54:20Z");
+  assertEquals(cliqueRespondeEspera({ channel_id: canal, waiting_since: "2026-10-21T16:16:43Z" }, canal, clique), true);
+  assertEquals(cliqueRespondeEspera({ channel_id: canal, waiting_since: "2026-10-21T17:18:37Z" }, canal, clique), false);
+  assertEquals(cliqueRespondeEspera({ channel_id: "5895", waiting_since: "2026-10-21T16:16:43Z" }, canal, clique), false);
+});
+
+Deno.test("recuperação reconhece resposta de botão template da Uazapi", () => {
+  assertEquals(respostaInterativaRecuperada({
+    messageType: "TemplateButtonReplyMessage",
+    buttonOrListid: "Quero ver o vídeo",
+    text: "",
+  }), "Quero ver o vídeo");
+  assertEquals(respostaInterativaRecuperada({ messageType: "TextMessage", text: "Quero ver o vídeo" }), "");
 });
 
 // --- paginação e margem -------------------------------------------------------------------

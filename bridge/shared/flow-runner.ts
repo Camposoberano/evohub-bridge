@@ -85,6 +85,10 @@ export type RunResult = {
   aguardarMinutos?: number;
   /** kind=goto — fluxo publicado para onde saltar; quem persiste o salto é o chamador */
   gotoFlowId?: string;
+  /** algum step enviado pediu humano (pausa+alerta+atribuição) — o chamador executa */
+  pedirHumano?: boolean;
+  /** contexto do step que pediu humano, para o evento `pediu_humano` */
+  handoffContexto?: Record<string, unknown>;
 };
 
 /**
@@ -136,6 +140,40 @@ async function enviarStep(
 ): Promise<{ ok: boolean; providerMessageId?: string }> {
   // Personaliza os textos ({{nome}} etc.) antes de enviar. Ids/branches ficam intactos.
   step = renderStep(step, vars);
+  // Abridor oficial de janela fria: template NUNCA sai pela uazapi. É um conceito do
+  // WhatsApp oficial (Meta Cloud) e é a ÚNICA coisa que a Meta aceita fora da janela de 24h
+  // — texto/mídia/botão interativo são recusados até o lead responder. Por isso ignora a
+  // rota híbrida e vai direto no oficial; sem token oficial, não há como abrir.
+  if (step.kind === "template") {
+    if (!ch.token || !ch.phoneNumberId || !step.template?.name) return { ok: false };
+    const components: Json[] = [];
+    const hm = step.template.headerMedia;
+    if (hm?.url) {
+      components.push({
+        type: "header",
+        parameters: [{ type: hm.type, [hm.type]: { link: hm.url } }],
+      });
+    }
+    const body: Json = {
+      messaging_product: "whatsapp",
+      to,
+      type: "template",
+      template: {
+        name: step.template.name,
+        language: { code: step.template.language ?? "pt_BR" },
+        ...(components.length ? { components } : {}),
+      },
+    };
+    const r = await sendMeta(ch.token, `${ch.phoneNumberId}/messages`, body);
+    if (!r.ok) {
+      console.error(
+        `flow: template ${step.template.name} falhou no oficial:`,
+        JSON.stringify((r.data as Json)?.error ?? r.data).slice(0, 200),
+      );
+    }
+    const providerMessageId = r.ok ? extractProviderSendId(r.data) : null;
+    return { ok: r.ok, ...(providerMessageId ? { providerMessageId } : {}) };
+  }
   // Transfer sem texto: nada a enviar, mas "sucesso" pra o onSent aplicar a etiqueta bot-off.
   if (step.kind === "transfer" && !step.text?.trim()) return { ok: true };
   const listSections = step.kind === "list" ? capListSections(step.sections) : [];
@@ -280,6 +318,8 @@ export async function runFlow(
 
   const { enviar, pararEm, fim } = stepsUntilWait(flow, inicio.id);
   let enviados = 0, falhas = 0;
+  let pedirHumano = false;
+  let handoffContexto: Record<string, unknown> | undefined;
   for (const step of enviar) {
     // Ritmo entre as peças. Sem isso o bloco inteiro sai colado e o lead recebe imagem,
     // áudio e pergunta no mesmo segundo — parece robô e some com a chance de ele ler cada
@@ -291,6 +331,12 @@ export async function runFlow(
     const sent = await enviarStep(ch, to, step, vars);
     if (sent.ok) {
       enviados++;
+      // Só marca o handoff depois que a peça saiu: prometer "o Cícero te chama" sem a
+      // mensagem ter ido seria o mesmo buraco que o pedido-humano original fechou.
+      if (step.pedirHumano) {
+        pedirHumano = true;
+        handoffContexto = step.handoffContexto;
+      }
       // Registrar não pode derrubar o fluxo: a mensagem já chegou ao lead, e abortar aqui
       // deixaria a conversa pela metade por causa de um problema de bookkeeping.
       if (onSent) {
@@ -362,6 +408,8 @@ export async function runFlow(
     return {
       enviados,
       falhas,
+      pedirHumano,
+      handoffContexto,
       aguardarMinutos: pararEm.minutes ?? 0,
       position: {
         stepId: pararEm.id,
@@ -370,11 +418,19 @@ export async function runFlow(
     };
   }
   if (fim || !pararEm) {
-    return { enviados, falhas, position: { stepId: null, done: true } };
+    return {
+      enviados,
+      falhas,
+      pedirHumano,
+      handoffContexto,
+      position: { stepId: null, done: true },
+    };
   }
   return {
     enviados,
     falhas,
+    pedirHumano,
+    handoffContexto,
     position: {
       stepId: pararEm.id,
       waitingSince: new Date(now).toISOString(),

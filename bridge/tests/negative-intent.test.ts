@@ -6,6 +6,8 @@ Deno.test("reconhece recusa explícita com variações de acento", () => {
   assertEquals(isNegativeIntent("SEM INTERESSE"), true);
   assertEquals(isNegativeIntent("Pare de enviar, por favor"), true);
   assertEquals(isNegativeIntent("sair da lista"), true);
+  assertEquals(isNegativeIntent("No momento não irei adquirir,obrigado"), true);
+  assertEquals(isNegativeIntent("Não quero comprar agora"), true);
 });
 
 Deno.test("não transforma qualquer frase com não em recusa", () => {

@@ -1,6 +1,6 @@
 // Consumidor de contingencia da fila do funil.
 // O claim em deliveries evita duplicacao se o n8n e este loop enxergarem a mesma linha.
-import { admin, claimDelivery } from "./supabase.ts";
+import { admin, claimDeliveryWithTtl } from "./supabase.ts";
 import { env } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
@@ -8,51 +8,43 @@ import { canSendSilentFollowup } from "./funnel-recovery.ts";
 import { bloqueiosPorConversa, motivoDoBloqueio } from "./gate-comercial.ts";
 import {
   brtMinuteOfDay,
+  FUNNEL_CUTOFF_MINUTE,
+  FUNNEL_OPEN_MINUTE,
   isWithinFunnelSendHours,
   nextFunnelSendAt,
 } from "./business-hours.ts";
+import { openingMessagesComplete } from "./funnel-state.ts";
+import {
+  isMainFunnel,
+  mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+} from "./funnel-identity.ts";
+import { WINDOW_HOLD_FLAG } from "./social-window-hold.ts";
 
 type Json = Record<string, unknown>;
 
-let running = false;
-const WINDOW_HOLD_FLAG = "__awaiting_meta_window";
-
-/** Reabre somente peças retidas pela janela Meta após nova entrada do cliente. */
-export async function resumeWindowHeldMessages(
+async function releaseQueueClaim(
   db: ReturnType<typeof admin>,
-  conversationId: string,
-  now = Date.now(),
-): Promise<number> {
-  const { data, error } = await db.from("scheduled_messages")
-    .select("id,payload")
-    .eq("conversation_id", conversationId)
-    .eq("status", "paused")
-    .limit(500);
+  claimKey: string,
+): Promise<void> {
+  const { error } = await db.from("deliveries").delete()
+    .eq("delivery_id", claimKey);
   if (error) throw error;
-  let resumed = 0;
-  for (const row of (data ?? []) as Json[]) {
-    const payload = row.payload && typeof row.payload === "object"
-      ? row.payload as Json
-      : {};
-    if (payload[WINDOW_HOLD_FLAG] !== true) continue;
-    const nextPayload = { ...payload };
-    delete nextPayload[WINDOW_HOLD_FLAG];
-    await db.from("scheduled_messages").update({
-      status: "pending",
-      send_at: new Date(now + 60_000).toISOString(),
-      payload: nextPayload,
-    }).eq("id", row.id);
-    resumed++;
-  }
-  if (resumed) {
-    await db.from("events").insert({
-      source: "funil",
-      event_type: "window_held_resumed",
-      payload: { conversation_id: conversationId, resumed_messages: resumed },
-    });
-  }
-  return resumed;
 }
+
+let running = false;
+// Peça que o pump ENCONTRA mas não envia neste ciclo (bot travado, não-due, janela) é empurrada
+// pra frente. Sem isso fica na cabeça da fila (SELECT ... ORDER send_at ASC LIMIT N) e o pump
+// re-pega as mesmas N todo ciclo, nunca avançando — head-of-line blocking que, em 26/10, prendeu
+// a fila em 6 conversas velhas (11–17/out): o log repetia found:N held:N sent:0.
+const HOLD_DEFER_MS = 15 * 60_000;
+// Peça pendente MUITO atrasada (send_at há dias) não vai mais ser enviada: a janela Meta fechou,
+// o lead esfriou, ou travou num resultado "uncertain" (provider_transport) que não resolve nem
+// retenta. Em vez de segurar pra sempre na cabeça da fila — foi o que prendeu 2 conversas de
+// 17/out por 9 dias —, cancela acima desta idade. Só mexe em peça VENCIDA; futura (campanha
+// agendada) nunca é tocada.
+const STALE_MAX_MS = 3 * 24 * 60 * 60_000; // 3 dias
 
 export function businessShiftMinutes(values: string[]): number {
   const minutes = values.map((value) => {
@@ -62,8 +54,8 @@ export function businessShiftMinutes(values: string[]): number {
   if (!minutes.length) return 0;
   const min = Math.min(...minutes);
   const max = Math.max(...minutes);
-  if (min < 6 * 60) return 6 * 60 - min;
-  if (max >= 22 * 60) return 24 * 60 - min + 6 * 60;
+  if (min < FUNNEL_OPEN_MINUTE) return FUNNEL_OPEN_MINUTE - min;
+  if (max >= FUNNEL_CUTOFF_MINUTE) return 24 * 60 - min + FUNNEL_OPEN_MINUTE;
   return 0;
 }
 
@@ -148,6 +140,10 @@ async function recordFailure(
 
 export async function pumpFunnelQueue(
   limit = 10,
+  dispatchDeferredIntent?: (
+    db: ReturnType<typeof admin>,
+    row: Json,
+  ) => Promise<void>,
 ): Promise<
   { found: number; sent: number; failed: number; held: number }
 > {
@@ -161,15 +157,36 @@ export async function pumpFunnelQueue(
     const db = admin();
     await normalizeBusinessQueue(db);
     const now = new Date().toISOString();
-    const { data, error } = await db.from("scheduled_messages")
-      .select(
-        "id,conversation_id,chatwoot_conversation_id,funnel,day,type,payload,send_at",
-      )
-      .eq("status", "pending")
-      .lte("send_at", now)
-      .order("send_at", { ascending: true })
-      .limit(limit);
-    if (error) throw error;
+    const [pendingResult, deferredResult] = await Promise.all([
+      db.from("scheduled_messages")
+        .select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
+        )
+        .eq("status", "pending")
+        // A régua restaurada já é consumida pelo cron do n8n. Dois consumidores
+        // enviaram o mesmo vídeo do #3402; o bridge cuida apenas da rota adiada.
+        .not("funnel", "like", `${RESTORED_5895_FUNNEL}%`)
+        .not("funnel", "like", `${SOCIAL_N8N_FUNNEL}%`)
+        .lte("send_at", now)
+        .order("send_at", { ascending: true })
+        .limit(limit),
+      db.from("scheduled_messages")
+        .select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,payload,send_at",
+        )
+        .eq("status", "paused").eq("type", "deferred_intent")
+        .lte("send_at", now).order("send_at", { ascending: true })
+        .limit(limit),
+    ]);
+    if (pendingResult.error) throw pendingResult.error;
+    if (deferredResult.error) throw deferredResult.error;
+    const data = [
+      ...(pendingResult.data ?? []),
+      ...(deferredResult.data ?? []),
+    ].sort((a: Json, b: Json) =>
+      Date.parse(String(a.send_at)) - Date.parse(String(b.send_at))
+    ).slice(0, limit);
+    if (!data.length) return { found: 0, sent: 0, failed: 0, held: 0 };
 
     // Quem já comprou e quem disse que não compra saem da cadeia. A etiqueta é posta pelo
     // atendente no WhatsApp/Chatwoot e `bloqueiosPorConversa` lê a ETIQUETA junto com o
@@ -186,6 +203,26 @@ export async function pumpFunnelQueue(
       ),
     ];
     const closed = await bloqueiosPorConversa(db, convIds);
+    const { data: conversations, error: conversationsError } = await db
+      .from("conversations").select("id,channel_id").in("id", convIds);
+    if (conversationsError) throw conversationsError;
+    const channelIds = [
+      ...new Set(
+        (conversations ?? []).map((conv: Json) => String(conv.channel_id ?? ""))
+          .filter(Boolean),
+      ),
+    ];
+    const { data: channels, error: channelsError } = await db.from("channels")
+      .select("id,name,external_id,phone_number").in("id", channelIds);
+    if (channelsError) throw channelsError;
+    const channelById = new Map((channels ?? []).map((channel: Json) => [
+      String(channel.id),
+      channel,
+    ]));
+    const conversationById = new Map((conversations ?? []).map((conv: Json) => [
+      String(conv.id),
+      conv,
+    ]));
     // Bot travado na conversa (label bot-off): a peça fica esperando, não é cancelada nem
     // marcada como falha. Marcar 'failed' aqui recriaria o defeito que travou 16
     // sequências por 24 dias — falha segura a conclusão do funil e o lead some dos dois
@@ -196,14 +233,56 @@ export async function pumpFunnelQueue(
     let failed = 0;
     let cancelled = 0;
     let held = 0;
+    let heldMuted = 0;
+    let staleCancelled = 0;
     const motivosCancelamento = new Map<string, number>();
     for (const row of (data ?? []) as Json[]) {
       const id = String(row.id ?? "");
       if (!id) continue;
 
+      // Age-out: peça vencida há mais de STALE_MAX_MS é morta — cancela em vez de segurar pra
+      // sempre na cabeça da fila (head-of-line). Antes do envio, pra não tentar entregar lixo.
+      // O filtro de status cobre `pending` E `paused`: os candidatos vêm de dois sets (pending
+      // vencido e paused+deferred_intent vencido). Com `.eq("status","pending")` as peças
+      // `paused` vencidas NÃO eram canceladas, mas `staleCancelled++` incrementava assim mesmo
+      // — o log dizia "canceladas N velhas" a cada tick enquanto as mesmas N voltavam à cabeça
+      // da fila para sempre (31/10: 10 peças, found:10/sent:0 em loop). Agora conta só o que de
+      // fato mudou de status.
+      const sendAtMs = Date.parse(String(row.send_at ?? ""));
+      if (Number.isFinite(sendAtMs) && sendAtMs < Date.now() - STALE_MAX_MS) {
+        const { data: staleRows, error: staleError } = await db.from(
+          "scheduled_messages",
+        )
+          .update({ status: "cancelled" }).eq("id", id)
+          .in("status", ["pending", "paused"]).select("id");
+        if (staleError) throw staleError;
+        if (staleRows && staleRows.length) staleCancelled++;
+        continue;
+      }
+
       const conversationId = String(row.conversation_id ?? "");
       const funnel = String(row.funnel ?? "mega-sorgo");
-      if (funnel === "mega-sorgo") {
+      const conversation = conversationById.get(conversationId) as
+        | Json
+        | undefined;
+      const channel = conversation
+        ? channelById.get(String(conversation.channel_id ?? "")) as
+          | Json
+          | undefined
+        : undefined;
+      const expectedMainFunnel = mainFunnelForChannel(channel);
+      if (
+        isMainFunnel(funnel) && funnel !== expectedMainFunnel &&
+        row.type !== "deferred_intent"
+      ) {
+        const { error: disableError } = await db.from("scheduled_messages")
+          .update({ status: "cancelled" }).eq("id", id)
+          .eq("status", "pending");
+        if (disableError) throw disableError;
+        cancelled++;
+        continue;
+      }
+      if (isMainFunnel(funnel)) {
         const { data: sequence, error: sequenceError } = await db.from(
           "sales_sequences",
         ).select("status")
@@ -211,18 +290,47 @@ export async function pumpFunnelQueue(
           .maybeSingle();
         if (sequenceError) throw sequenceError;
         if (!sequence || sequence.status === "replied") {
+          // Candidatos incluem `paused deferred_intent`; `.eq("status","pending")` casava 0
+          // linhas numa peça paused (mas `cancelled++` incrementava do mesmo jeito) e a peça
+          // voltava vencida à cabeça da fila todo tick. Casa pending|paused.
           const { error: cancelError } = await db.from("scheduled_messages")
             .update({ status: "cancelled" }).eq("id", id)
-            .eq("status", "pending");
+            .in("status", ["pending", "paused"]);
           if (cancelError) throw cancelError;
           cancelled++;
+          continue;
+        }
+        if (row.type === "deferred_intent" && sequence.status !== "running") {
+          // Sequência não-running e a peça não é ≥3d (já tratada no age-out). Antes isto só
+          // fazia `held++` SEM mexer no send_at — e, como a fila é ORDER send_at ASC LIMIT N,
+          // a mesma peça voltava à cabeça todo tick e starvava o resto (head-of-line,
+          // [[pump-head-of-line-defer]]). Agora:
+          //  - sequência encerrada (cancelled/completed/…): a rota adiada nunca mais sai →
+          //    cancela, como faz o resto do funil quando a sequência morreu.
+          //  - `paused` (pode retomar): empurra o send_at pra SAIR da cabeça da fila; ao
+          //    destravar, resumeSequenceRebased reprograma o que ficou parado.
+          if (sequence.status === "paused") {
+            await db.from("scheduled_messages")
+              .update({
+                send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString(),
+              })
+              .eq("id", id).in("status", ["pending", "paused"]);
+            held++;
+          } else {
+            const { error: deadSeqError } = await db.from("scheduled_messages")
+              .update({ status: "cancelled" }).eq("id", id)
+              .in("status", ["pending", "paused"]);
+            if (deadSeqError) throw deadSeqError;
+            cancelled++;
+          }
           continue;
         }
       } else if (funnel === "mega-sorgo-followup") {
         const { data: sequence, error: sequenceError } = await db.from(
           "sales_sequences",
         ).select("last_sent_at")
-          .eq("conversation_id", conversationId).eq("funnel", "mega-sorgo")
+          .eq("conversation_id", conversationId)
+          .eq("funnel", expectedMainFunnel)
           .maybeSingle();
         if (sequenceError) throw sequenceError;
         const { data: inbound, error: inboundError } = await db.from("messages")
@@ -248,7 +356,7 @@ export async function pumpFunnelQueue(
         ) {
           const { error: cancelError } = await db.from("scheduled_messages")
             .update({ status: "cancelled" }).eq("id", id)
-            .eq("status", "pending");
+            .in("status", ["pending", "paused"]);
           if (cancelError) throw cancelError;
           cancelled++;
           continue;
@@ -261,7 +369,10 @@ export async function pumpFunnelQueue(
       if (!isWithinFunnelSendHours(dispatchAt)) {
         const nextSendAt = new Date(nextFunnelSendAt(dispatchAt)).toISOString();
         const { error: deferError } = await db.from("scheduled_messages")
-          .update({ send_at: nextSendAt }).eq("id", id).eq("status", "pending");
+          .update({ send_at: nextSendAt }).eq("id", id).in("status", [
+            "pending",
+            "paused",
+          ]);
         if (deferError) throw deferError;
         held++;
         continue;
@@ -280,59 +391,167 @@ export async function pumpFunnelQueue(
       }
 
       if (muted.has(String(row.conversation_id ?? ""))) {
+        // Bot travado: espera o atendente destravar (resumeSequenceRebased reprograma). Empurra
+        // o send_at pra SAIR da cabeça da fila e não travar o resto.
+        await db.from("scheduled_messages")
+          .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+          .eq("id", id).in("status", ["pending", "paused"]);
         held++;
+        heldMuted++;
         continue;
       }
 
       const claimKey = `funnel-queue-${id}`;
-      if (!await claimDelivery(db, claimKey, "funnel-queue")) continue;
+      if (
+        !await claimDeliveryWithTtl(
+          db,
+          claimKey,
+          "funnel-queue",
+          10 * 60_000,
+        )
+      ) continue;
 
       const payload = (row.payload && typeof row.payload === "object")
         ? row.payload as Json
         : {};
-      const res = await sendOutbound(
-        new Request(
-          `http://internal/send-outbound?token=${
-            encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
-          }`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chatwoot_conversation_id: Number(row.chatwoot_conversation_id),
-              type: String(row.type ?? "text"),
-              payload,
-              // Elo pra messages.funnel/funnel_day/funnel_step/scheduled_message_id (migration
-              // 0012) -- sem isso o relatório não consegue dizer qual peça da sequência gerou
-              // qual resposta do lead.
-              funnel: row.funnel ?? "mega-sorgo",
-              funnel_day: row.day ?? null,
-              funnel_step: row.type ?? null,
-              scheduled_message_id: id,
-            }),
-          },
-        ),
-      );
+      if (String(row.type ?? "") === "deferred_intent") {
+        if (!dispatchDeferredIntent) {
+          await releaseQueueClaim(db, claimKey);
+          await db.from("scheduled_messages")
+            .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+            .eq("id", id).in("status", ["pending", "paused"]);
+          held++;
+          continue;
+        }
+        let openingComplete: boolean;
+        try {
+          openingComplete = await openingMessagesComplete(
+            db,
+            conversationId,
+            funnel,
+          );
+        } catch (error) {
+          await releaseQueueClaim(db, claimKey);
+          throw error;
+        }
+        if (!openingComplete) {
+          const { error: waitError } = await db.from("scheduled_messages")
+            .update({
+              send_at: new Date(Date.now() + 30_000).toISOString(),
+            }).eq("id", id).in("status", ["pending", "paused"]);
+          if (waitError) throw waitError;
+          await releaseQueueClaim(db, claimKey);
+          held++;
+          continue;
+        }
+        try {
+          await dispatchDeferredIntent(db, row);
+          const sentAt = new Date().toISOString();
+          const { error: sentError } = await db.from("scheduled_messages")
+            .update({ status: "sent", sent_at: sentAt }).eq("id", id);
+          if (sentError) throw sentError;
+          const { error: sequenceError } = await db.from("sales_sequences")
+            .update({ current_day: Number(row.day ?? 1), last_sent_at: sentAt })
+            .eq("conversation_id", conversationId)
+            .eq("funnel", row.funnel ?? "mega-sorgo")
+            .in("status", ["running", "paused"]);
+          if (sequenceError) throw sequenceError;
+          sent++;
+        } catch (error) {
+          console.error("funnel-queue: rota adiada falhou", id, error);
+          await db.from("scheduled_messages").update({ status: "failed" })
+            .eq("id", id).in("status", ["pending", "paused", "cancelled"]);
+          await releaseQueueClaim(db, claimKey);
+          await recordFailure(db, id, row, 500, {
+            blocked: "deferred-intent-failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          failed++;
+        }
+        continue;
+      }
+      let res: Response;
+      try {
+        res = await sendOutbound(
+          new Request(
+            `http://internal/send-outbound?token=${
+              encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+            }`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chatwoot_conversation_id: Number(row.chatwoot_conversation_id),
+                type: String(row.type ?? "text"),
+                payload,
+                // Os IDs ligam cada resultado de envio à conversa e à etapa do funil.
+                funnel: row.funnel ?? "mega-sorgo",
+                funnel_day: row.day ?? null,
+                funnel_step: row.type ?? null,
+                scheduled_message_id: id,
+              }),
+            },
+          ),
+        );
+      } catch (error) {
+        console.error("funnel-queue: send-outbound lançou exceção", id, error);
+        await db.from("scheduled_messages").update({ status: "failed" })
+          .eq("id", id).eq("status", "pending");
+        await releaseQueueClaim(db, claimKey);
+        await recordFailure(db, id, row, 500, {
+          blocked: "send-handler-exception",
+          error_type: error instanceof Error ? error.name : "unknown",
+        });
+        failed++;
+        continue;
+      }
       const body = await res.json().catch(() => ({} as Json));
-      if (res.ok && body.ok !== false && !body.blocked) {
+      if (res.ok && body.ok === true && body.sent === true) {
         const sentAt = new Date().toISOString();
-        await db.from("scheduled_messages").update({
-          status: "sent",
-          sent_at: sentAt,
-        }).eq("id", id);
-        await db.from("sales_sequences").update({
-          current_day: Number(row.day ?? 0),
-          last_sent_at: sentAt,
-        }).eq("conversation_id", row.conversation_id)
+        const { error: sentError } = await db.from("scheduled_messages").update(
+          {
+            status: "sent",
+            sent_at: sentAt,
+          },
+        ).eq("id", id);
+        if (sentError) throw sentError;
+        const { error: sequenceError } = await db.from("sales_sequences")
+          .update({
+            current_day: Number(row.day ?? 0),
+            last_sent_at: sentAt,
+          }).eq("conversation_id", row.conversation_id)
           .eq("funnel", row.funnel ?? "mega-sorgo")
           .in("status", ["running", "paused"]);
+        if (sequenceError) throw sequenceError;
         sent++;
+      } else if (body.retry_scheduled === true) {
+        await releaseQueueClaim(db, claimKey);
+        held++;
+      } else if (
+        body.in_progress === true ||
+        body.blocked === "previous-step-not-sent" ||
+        body.blocked === "scheduled-message-not-pending" ||
+        body.not_due === true
+      ) {
+        await releaseQueueClaim(db, claimKey);
+        await db.from("scheduled_messages")
+          .update({ send_at: new Date(Date.now() + HOLD_DEFER_MS).toISOString() })
+          .eq("id", id).eq("status", "pending");
+        held++;
       } else if (
         body.deferred_business_window === true
       ) {
         // send-outbound também é chamado pelo n8n. O endpoint persiste o novo horário;
-        // liberamos o claim para a fila poder tentar novamente na próxima abertura.
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        // liberamos o claim para a fila poder tentar novamente na próxima abertura. Empurra o
+        // send_at (usa next_send_at se veio) pra peça não ficar presa na cabeça da fila.
+        await releaseQueueClaim(db, claimKey);
+        await db.from("scheduled_messages")
+          .update({
+            send_at: typeof body.next_send_at === "string"
+              ? body.next_send_at
+              : new Date(Date.now() + HOLD_DEFER_MS).toISOString(),
+          })
+          .eq("id", id).eq("status", "pending");
         held++;
       } else if (
         body.awaiting_window === true ||
@@ -341,9 +560,10 @@ export async function pumpFunnelQueue(
       ) {
         await db.from("scheduled_messages").update({
           status: "paused",
-          payload: { ...payload, [WINDOW_HOLD_FLAG]: true },
+          payload: { ...payload, [WINDOW_HOLD_FLAG]: true,
+            __pause_reason: "window_closed" },
         }).eq("id", id);
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await releaseQueueClaim(db, claimKey);
         await db.from("events").insert({
           source: "funil",
           event_type: "message_held_window",
@@ -363,7 +583,7 @@ export async function pumpFunnelQueue(
           "id",
           id,
         );
-        await db.from("deliveries").delete().eq("delivery_id", claimKey);
+        await releaseQueueClaim(db, claimKey);
         await recordFailure(db, id, row, res.status, body);
         failed++;
       }
@@ -377,7 +597,20 @@ export async function pumpFunnelQueue(
       );
     }
     if (held > 0) {
-      console.log("funnel-queue: seguradas", held, "msg(s) com bot travado");
+      // Antes dizia "com bot travado" pra TODO hold — mentira: a maioria é janela/horário/não-due.
+      // Agora separa o mute real do resto.
+      console.log(
+        "funnel-queue: seguradas",
+        held,
+        `msg(s) [bot-travado=${heldMuted} janela/horario/nao-due=${held - heldMuted}]`,
+      );
+    }
+    if (staleCancelled > 0) {
+      console.log(
+        "funnel-queue: canceladas",
+        staleCancelled,
+        "msg(s) velhas (send_at > 3 dias, mortas)",
+      );
     }
     return { found: data?.length ?? 0, sent, failed, held };
   } finally {

@@ -3,6 +3,8 @@ import { env } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { handle as funnelControl } from "./funil-control.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
+import { funnelLabel } from "../shared/funnel-identity.ts";
+import { allowsContinuationAfterUnconfirmedVideo } from "../shared/unconfirmed-video-continuation.ts";
 
 type Json = Record<string, unknown>;
 
@@ -28,12 +30,61 @@ export async function handle(req: Request): Promise<Response> {
     if (action === "retry") {
       const messageId = String(body.message_id ?? "").trim();
       if (!messageId) return json({ error: "message_id obrigatório" }, 400);
+      const { data: failedRow, error: failedError } = await db
+        .from("scheduled_messages")
+        .select("id,conversation_id,funnel,step,status,payload")
+        .eq("id", messageId).eq("status", "failed").maybeSingle();
+      if (failedError) return json({ error: failedError.message }, 500);
+      if (!failedRow) {
+        return json({ error: "mensagem falha não encontrada" }, 404);
+      }
+      const payload = (failedRow.payload ?? {}) as Json;
+      const delivery = (payload.__funnel_delivery ?? {}) as Json;
+      if (
+        delivery.last_outcome !== "rejected" ||
+        Number(delivery.provider_status) !== 429
+      ) {
+        return json({
+          error:
+            "retry bloqueado: falha sem rejeição 429 confirmada; exige revisão manual",
+          blocked: "diagnostico-insuficiente-ou-envio-incerto",
+        }, 409);
+      }
+      const sequenceId = String(payload.__funnel_sequence_id ?? "");
+      const { data: previousSteps, error: previousError } = await db
+        .from("scheduled_messages").select("id,status,step,type,payload")
+        .eq("conversation_id", failedRow.conversation_id)
+        .eq("funnel", failedRow.funnel)
+        .lt("step", Number(failedRow.step ?? 0))
+        .limit(100);
+      if (previousError) return json({ error: previousError.message }, 500);
+      const previousUnsent = (previousSteps ?? []).find((item: Json) => {
+        const previousPayload = item.payload && typeof item.payload === "object"
+          ? item.payload as Json
+          : {};
+        const sameSequence = !sequenceId ||
+          previousPayload.__funnel_sequence_id === sequenceId;
+        return sameSequence && item.status !== "sent" &&
+          item.status !== "cancelled" &&
+          !allowsContinuationAfterUnconfirmedVideo(item, failedRow.funnel);
+      });
+      if (previousUnsent) {
+        return json({
+          error: "retry bloqueado: uma etapa anterior ainda não foi entregue",
+          blocked: "previous-step-not-sent",
+          previous_step: (previousUnsent as Json).step,
+        }, 409);
+      }
       const { data, error } = await db.from("scheduled_messages")
         .update({ status: "pending", send_at: new Date().toISOString() })
         .eq("id", messageId).eq("status", "failed").select("id").maybeSingle();
       if (error) return json({ error: error.message }, 500);
       if (!data) return json({ error: "mensagem falha não encontrada" }, 404);
-      await audit(db, "funnel_retry", user, { message_id: messageId });
+      await audit(db, "funnel_retry", user, {
+        message_id: messageId,
+        provider_status: delivery.provider_status,
+        attempt_count: delivery.attempts ?? null,
+      });
       return json({ ok: true, action, message_id: messageId });
     }
     if (!["pause", "resume", "stop", "funil"].includes(action)) {
@@ -73,39 +124,50 @@ export async function handle(req: Request): Promise<Response> {
   if (recentError) return json({ error: recentError.message }, 500);
   const recentIds = (recentConversations ?? []).map((item: Json) => item.id)
     .filter(Boolean);
-  const commercialSince = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
-  const [activeSequenceResult, recentSequenceResult, messageResult, commercialResult] =
-    await Promise.all([
-      db.from("sales_sequences").select(
-        "id,conversation_id,chatwoot_conversation_id,funnel,status",
-      ).in("status", ["running", "paused"]).limit(1000),
-      // Em lotes: `recentIds` é sempre 500 (o limit acima), o que dava ~18 KB de URL e 414
-      // em TODA requisição — a tela de operação do funil respondia 500 e não mostrava nada.
-      consultaEmLotes<Json>(
-        recentIds,
-        (lote) =>
-          db.from("sales_sequences").select(
-            "id,conversation_id,chatwoot_conversation_id,funnel,status",
-          ).in("conversation_id", lote),
-        // erro aqui SOBE (consultaEmLotes lança); o `error` existe só para a forma bater
-        // com as outras consultas do Promise.all.
-      ).then((data) => ({ data, error: null as { message: string } | null })),
-      db.from("scheduled_messages").select(
-        "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
-      ).order("send_at", { ascending: true }).limit(2000),
-      db.from("messages").select(
-        "id,conversation_id,content,msg_type,status,sent_at",
-      ).eq("direction", "out").gte("sent_at", commercialSince)
-        .order("sent_at", { ascending: false }).limit(2000),
-    ]);
+  const commercialSince = new Date(Date.now() - 48 * 60 * 60 * 1000)
+    .toISOString();
+  const [
+    activeSequenceResult,
+    recentSequenceResult,
+    messageResult,
+    commercialResult,
+    failedMessageResult,
+  ] = await Promise.all([
+    db.from("sales_sequences").select(
+      "id,conversation_id,chatwoot_conversation_id,funnel,status",
+    ).in("status", ["running", "paused"]).limit(1000),
+    // Em lotes: `recentIds` é sempre 500 (o limit acima), o que dava ~18 KB de URL e 414
+    // em TODA requisição — a tela de operação do funil respondia 500 e não mostrava nada.
+    consultaEmLotes<Json>(
+      recentIds,
+      (lote) =>
+        db.from("sales_sequences").select(
+          "id,conversation_id,chatwoot_conversation_id,funnel,status",
+        ).in("conversation_id", lote),
+      // erro aqui SOBE (consultaEmLotes lança); o `error` existe só para a forma bater
+      // com as outras consultas do Promise.all.
+    ).then((data) => ({ data, error: null as { message: string } | null })),
+    db.from("scheduled_messages").select(
+      "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status",
+    ).order("send_at", { ascending: true }).limit(2000),
+    db.from("messages").select(
+      "id,conversation_id,content,msg_type,status,sent_at",
+    ).eq("direction", "out").gte("sent_at", commercialSince)
+      .order("sent_at", { ascending: false }).limit(2000),
+    db.from("scheduled_messages").select(
+      "id,conversation_id,chatwoot_conversation_id,funnel,day,step,type,send_at,status,payload",
+      { count: "exact" },
+    ).eq("status", "failed").order("send_at", { ascending: false })
+      .limit(300),
+  ]);
   if (
     activeSequenceResult.error || recentSequenceResult.error ||
-    messageResult.error || commercialResult.error
+    messageResult.error || commercialResult.error || failedMessageResult.error
   ) {
     return json({
       error: activeSequenceResult.error?.message ??
         recentSequenceResult.error?.message ?? messageResult.error?.message ??
-        commercialResult.error?.message,
+        commercialResult.error?.message ?? failedMessageResult.error?.message,
     }, 500);
   }
   const sequenceMap = new Map<string, Json>();
@@ -118,14 +180,49 @@ export async function handle(req: Request): Promise<Response> {
     sequenceMap.set(String(item.id), item);
   }
   const sequences = [...sequenceMap.values()];
-  const messages = messageResult.data ?? [];
+  const scheduledMap = new Map<string, Json>();
+  for (const item of (messageResult.data ?? []) as Json[]) {
+    scheduledMap.set(String(item.id), {
+      ...item,
+      funnel_label: funnelLabel(item.funnel),
+    });
+  }
+  for (const item of (failedMessageResult.data ?? []) as Json[]) {
+    const payload = item.payload && typeof item.payload === "object"
+      ? item.payload as Json
+      : {};
+    const delivery = payload.__funnel_delivery &&
+        typeof payload.__funnel_delivery === "object"
+      ? payload.__funnel_delivery as Json
+      : {};
+    const { payload: _payload, ...safeItem } = item;
+    scheduledMap.set(String(item.id), {
+      ...safeItem,
+      funnel_label: funnelLabel(item.funnel),
+      delivery: {
+        last_outcome: delivery.last_outcome ?? null,
+        provider_status: delivery.provider_status ?? null,
+        provider_code: delivery.provider_code ?? null,
+        transport_stage: delivery.transport_stage ?? null,
+        transport_elapsed_ms: delivery.transport_elapsed_ms ?? null,
+        last_attempt_at: delivery.last_attempt_at ?? null,
+        attempts: delivery.attempts ?? null,
+        retryable: delivery.last_outcome === "rejected" &&
+          Number(delivery.provider_status) === 429,
+        followups_released_at: delivery.followups_released_at ?? null,
+      },
+    });
+  }
+  const messages = [...scheduledMap.values()];
   const commercialRows = (commercialResult.data ?? []).map((item: Json) => ({
     ...item,
     intent: commercialIntent(String(item.content ?? "")),
   })).filter((item: Json) => item.intent);
   const conversationIds = [
     ...new Set(
-      [...sequences, ...commercialRows].map((item: Json) => item.conversation_id)
+      [...sequences, ...commercialRows].map((item: Json) =>
+        item.conversation_id
+      )
         .filter(Boolean),
     ),
   ];
@@ -149,7 +246,10 @@ export async function handle(req: Request): Promise<Response> {
   const contacts = await consultaEmLotes<Json>(
     contactIds,
     (lote) =>
-      db.from("contacts").select("id,name,phone,external_contact_id").in("id", lote),
+      db.from("contacts").select("id,name,phone,external_contact_id").in(
+        "id",
+        lote,
+      ),
   );
   const contactMap = new Map(
     (contacts ?? []).map((item: Json) => [item.id, item]),
@@ -174,6 +274,7 @@ export async function handle(req: Request): Promise<Response> {
   }
   const enrichedSequences = sequences.map((item: Json) => ({
     ...item,
+    funnel_label: funnelLabel(item.funnel),
     conversation: conversationMap.get(item.conversation_id) ?? null,
     pause_event: pauseReasonMap.get(String(item.conversation_id)) ?? null,
   }));
@@ -188,7 +289,9 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
   const commercial = [...commercialMap.values()].map((item: Json) => {
-    const conversation = conversationMap.get(item.conversation_id) as Json | undefined;
+    const conversation = conversationMap.get(item.conversation_id) as
+      | Json
+      | undefined;
     return {
       ...item,
       chatwoot_conversation_id: conversation?.chatwoot_conversation_id ?? null,
@@ -207,12 +310,93 @@ export async function handle(req: Request): Promise<Response> {
       "send_failed",
     )
     .order("received_at", { ascending: false }).limit(200);
+  const deliverySince = new Date(Date.now() - 72 * 60 * 60 * 1000)
+    .toISOString();
+  const { data: deliveryEvents, error: deliveryError } = await db.from("events")
+    .select("received_at,payload").eq("source", "funil")
+    .eq("event_type", "funnel_delivery_attempt")
+    .gte("received_at", deliverySince)
+    .order("received_at", { ascending: false }).limit(2000);
+  if (deliveryError) return json({ error: deliveryError.message }, 500);
+  const { data: socialEnrollmentEvents, error: socialEnrollmentError } = await db.from("events")
+    .select("received_at,payload").eq("event_type", "social_n8n_enrolled")
+    .gte("received_at", deliverySince)
+    .order("received_at", { ascending: false }).limit(1000);
+  if (socialEnrollmentError) return json({ error: socialEnrollmentError.message }, 500);
+  const enrollmentByConversation = new Map<string, Json>();
+  for (const event of (socialEnrollmentEvents ?? []) as Json[]) {
+    const payload = (event.payload ?? {}) as Json;
+    const conversationId = String(payload.conversation_id ?? "");
+    if (conversationId && !enrollmentByConversation.has(conversationId)) {
+      enrollmentByConversation.set(conversationId, {
+        origin: payload.origin ?? null,
+        received_at: event.received_at,
+      });
+    }
+  }
+  const deliveryByChannel: Record<string, Record<string, number>> = {};
+  const recentDeliveryFailures: Json[] = [];
+  const firstAcceptedByConversation = new Map<string, string>();
+  for (const event of (deliveryEvents ?? []) as Json[]) {
+    const payload = (event.payload ?? {}) as Json;
+    const outcome = String(payload.outcome ?? "unknown");
+    if (outcome === "sent" && String(payload.funnel ?? "") === "mega-sorgo-social-20260930") {
+      const conversationId = String(payload.conversation_id ?? "");
+      const acceptedAt = String(event.received_at ?? "");
+      const previous = firstAcceptedByConversation.get(conversationId);
+      if (conversationId && (!previous || acceptedAt < previous)) {
+        firstAcceptedByConversation.set(conversationId, acceptedAt);
+      }
+    }
+    if (outcome === "started") continue;
+    const channelType = String(payload.channel_type ?? "unknown");
+    const outcomes = deliveryByChannel[channelType] ??= {};
+    outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+    if (
+      outcome === "rejected" || outcome === "uncertain" ||
+      outcome === "media_unavailable" || outcome === "partial"
+    ) {
+      recentDeliveryFailures.push({
+        received_at: event.received_at,
+        scheduled_message_id: payload.scheduled_message_id ?? null,
+        funnel: payload.funnel ?? null,
+        day: payload.day ?? null,
+        step: payload.step ?? null,
+        type: payload.type ?? null,
+        channel_type: channelType,
+        outcome,
+        http_status: payload.http_status ?? null,
+        provider_code: payload.provider_code ?? null,
+        failure_stage: payload.failure_stage ?? null,
+        transport_stage: payload.transport_stage ?? null,
+        transport_elapsed_ms: payload.transport_elapsed_ms ?? null,
+      });
+    }
+  }
+
+  for (const sequence of enrichedSequences) {
+    const conversationId = String((sequence as Json).conversation_id ?? "");
+    const enrollment = enrollmentByConversation.get(conversationId);
+    const firstAcceptedAt = firstAcceptedByConversation.get(conversationId);
+    (sequence as Json).origin = enrollment?.origin ?? null;
+    (sequence as Json).first_provider_accepted_at = firstAcceptedAt ?? null;
+    const enrolledAt = enrollment?.received_at ? Date.parse(String(enrollment.received_at)) : NaN;
+    const acceptedAt = firstAcceptedAt ? Date.parse(firstAcceptedAt) : NaN;
+    (sequence as Json).first_acceptance_seconds = Number.isFinite(enrolledAt) && Number.isFinite(acceptedAt)
+      ? Math.max(0, Math.round((acceptedAt - enrolledAt) / 1000))
+      : null;
+  }
 
   return json({
     sequences: enrichedSequences,
     commercial,
     messages,
     failures: failureEvents ?? [],
+    delivery_audit: {
+      window_hours: 72,
+      by_channel: deliveryByChannel,
+      recent_failures: recentDeliveryFailures.slice(0, 100),
+    },
     summary: {
       running: sequences.filter((item: Json) =>
         item.status === "running"
@@ -220,13 +404,13 @@ export async function handle(req: Request): Promise<Response> {
       paused: sequences.filter((item: Json) => item.status === "paused").length,
       pending:
         messages.filter((item: Json) => item.status === "pending").length,
-      failed: messages.filter((item: Json) => item.status === "failed").length,
+      failed: failedMessageResult.count ??
+        messages.filter((item: Json) => item.status === "failed").length,
       sent: messages.filter((item: Json) => item.status === "sent").length,
       won: won.length,
       lost: lost.length,
-      completed: sequences.filter((item: Json) =>
-        item.status === "completed"
-      ).length,
+      completed:
+        sequences.filter((item: Json) => item.status === "completed").length,
       won_value_cents: won.reduce((total: number, item: Json) =>
         total + Number(item.outcome_value_cents ?? 0), 0),
       conversion_rate: won.length + lost.length
@@ -238,10 +422,21 @@ export async function handle(req: Request): Promise<Response> {
 
 function commercialIntent(content: string): string | null {
   const value = content.toLocaleLowerCase("pt-BR");
-  if (value.includes("qual o tamanho da área") || value.includes("imagem promoção") || value.includes("pacote de ")) return "Preço";
-  if (value.includes("instruções de plantio") || value.includes("temas de plantio") || value.includes("precisa no plantio")) return "Plantio";
-  if (value.includes("análise bromatológica") || value.includes("info nutricional")) return "Nutrição";
-  if (value.includes("preparei 5 vídeos") || value.includes("[vídeo ")) return "Vídeos";
+  if (
+    value.includes("qual o tamanho da área") ||
+    value.includes("imagem promoção") || value.includes("pacote de ")
+  ) return "Preço";
+  if (
+    value.includes("instruções de plantio") ||
+    value.includes("temas de plantio") || value.includes("precisa no plantio")
+  ) return "Plantio";
+  if (
+    value.includes("análise bromatológica") ||
+    value.includes("info nutricional")
+  ) return "Nutrição";
+  if (value.includes("preparei 5 vídeos") || value.includes("[vídeo ")) {
+    return "Vídeos";
+  }
   return null;
 }
 

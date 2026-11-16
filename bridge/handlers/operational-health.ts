@@ -2,17 +2,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { env, optionalEnv } from "../shared/env.ts";
 import { getMeta } from "../shared/hub.ts";
 import {
-  entregarAlertas,
   avaliarInstanciasUazapi,
+  temWebhookUazapiDoHub,
   avaliarSilencio,
+  entregarAlertas,
   type OperationalIssue,
 } from "../shared/operational-alert.ts";
-import { listInstances, uazapiConfigured } from "../shared/uazapi.ts";
+import { instGet, listInstances, uazapiConfigured } from "../shared/uazapi.ts";
 import {
   admin,
   claimDeliveryWithTtl,
   type DbClient,
 } from "../shared/supabase.ts";
+import { MAIN_FUNNELS, RESTORED_5895_FUNNEL } from "../shared/funnel-identity.ts";
+import { mediaBlocks5895, mediaBlocks5895Detail, mediaBlocks5895Key } from "../shared/5895-media-incidents.ts";
 
 type Json = Record<string, unknown>;
 
@@ -62,6 +65,7 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const monitoringWindow = await ensureMonitoringWindow(db, now);
   const since24h = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const since15m = new Date(now.getTime() - 15 * 60 * 1000).toISOString();
+  const since5m = new Date(now.getTime() - 5 * 60 * 1000).toISOString();
   const overdue = new Date(now.getTime() - 10 * 60 * 1000).toISOString();
   const [
     channelsResult,
@@ -70,6 +74,9 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     overdueQueue,
     recentContacts,
     adConversations,
+    unconfirmed5895VideosResult,
+    overdue5895Queue,
+    media5895Result,
   ] = await Promise.all([
     db.from("channels").select(
       "id,name,type,status,phone_number,phone_number_id,external_id,display_name,page_id,ig_id,owner_name,owner_identifier,last_error",
@@ -88,16 +95,139 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
     ),
     db.from("contacts").select("id,name,phone,attributes,channel_id")
       .gte("last_seen_at", since24h).limit(3000),
-    db.from("conversations").select("id,ad_id,creative_id,attribution")
+    db.from("conversations").select(
+      "id,channel_id,opened_at,ad_id,creative_id,attribution",
+    )
       .eq("origem", "anuncio").gte("opened_at", since24h).limit(3000),
+    db.from("scheduled_messages")
+        .select("chatwoot_conversation_id", { count: "exact" })
+        .eq("funnel", RESTORED_5895_FUNNEL).eq("type", "video")
+        .eq("status", "failed")
+        .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+        .eq("payload->__funnel_delivery->>transport_stage", "await_receipt")
+        .lte("payload->__funnel_delivery->>last_attempt_at", since5m)
+        .is("payload->__funnel_delivery->>followups_released_at", null)
+        .limit(20),
+    exactCount(
+      db.from("scheduled_messages").select("id", { count: "exact", head: true })
+        .eq("status", "pending")
+        .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+        .lt("send_at", overdue),
+    ),
+    db.from("scheduled_messages")
+      .select("id,chatwoot_conversation_id,step,type,status,payload")
+      .like("funnel", `${RESTORED_5895_FUNNEL}%`)
+      .eq("status", "failed")
+      .eq("payload->__funnel_delivery->>last_outcome", "uncertain")
+      .limit(1000),
   ]);
   if (channelsResult.error) throw channelsResult.error;
   if (recentContacts.error) throw recentContacts.error;
   if (adConversations.error) throw adConversations.error;
+  if (unconfirmed5895VideosResult.error) throw unconfirmed5895VideosResult.error;
+  if (media5895Result.error) throw media5895Result.error;
+  const media5895Blocks = mediaBlocks5895((media5895Result.data ?? []) as Json[]);
+  const unconfirmed5895Videos = unconfirmed5895VideosResult.count ?? 0;
+  const unconfirmed5895Conversations = [...new Set(
+    ((unconfirmed5895VideosResult.data ?? []) as Json[])
+      .map((row) => Number(row.chatwoot_conversation_id))
+      .filter((id) => Number.isInteger(id) && id > 0),
+  )];
 
   const channels = (channelsResult.data ?? []) as Json[];
   const contacts = (recentContacts.data ?? []) as Json[];
   const ads = (adConversations.data ?? []) as Json[];
+  const channelTypeById = new Map(
+    channels.map((
+      channel,
+    ) => [String(channel.id), String(channel.type ?? "unknown")]),
+  );
+  const { data: firstStepRows, error: firstStepError } = await db
+    .from("scheduled_messages")
+    .select("id,conversation_id,status,send_at,payload")
+    .in("funnel", MAIN_FUNNELS)
+    .eq("step", 0)
+    .gte("send_at", since24h)
+    .order("send_at", { ascending: false })
+    .limit(5000);
+  if (firstStepError) throw firstStepError;
+  const { data: providerMessages, error: providerMessagesError } = await db
+    .from("messages")
+    .select("scheduled_message_id,status,meta_message_id")
+    .eq("direction", "out")
+    .not("scheduled_message_id", "is", null)
+    .gte("sent_at", since24h)
+    .limit(5000);
+  if (providerMessagesError) throw providerMessagesError;
+  const providerConfirmedMessageIds = new Set(
+    ((providerMessages ?? []) as Json[])
+      .filter((message) => message.status === "sent" && message.meta_message_id)
+      .map((message) => String(message.scheduled_message_id)),
+  );
+  const firstStepByConversation = new Map<string, Json>();
+  for (const row of (firstStepRows ?? []) as Json[]) {
+    const key = String(row.conversation_id ?? "");
+    if (!key) continue;
+    const current = firstStepByConversation.get(key);
+    if (!current || row.status === "sent") {
+      firstStepByConversation.set(key, row);
+    }
+  }
+  const adFirstStepByChannel: Record<string, Record<string, number>> = {};
+  const adFirstStepCutoff = now.getTime() - 15 * 60_000;
+  for (const ad of ads) {
+    const channelType = channelTypeById.get(String(ad.channel_id ?? "")) ??
+      "unknown";
+    const counts = adFirstStepByChannel[channelType] ??= {
+      sent: 0,
+      unverified_sent: 0,
+      not_enrolled: 0,
+      failed: 0,
+      paused: 0,
+      overdue_pending: 0,
+      waiting: 0,
+      cancelled: 0,
+    };
+    const openedAt = Date.parse(String(ad.opened_at ?? ""));
+    const firstStep = firstStepByConversation.get(String(ad.id));
+    if (firstStep?.status === "sent") {
+      const payload = (firstStep.payload ?? {}) as Json;
+      const delivery = (payload.__funnel_delivery ?? {}) as Json;
+      if (
+        delivery.last_outcome === "sent" ||
+        providerConfirmedMessageIds.has(String(firstStep.id))
+      ) counts.sent++;
+      else counts.unverified_sent++;
+    } else if (firstStep?.status === "cancelled") {
+      counts.cancelled++;
+    } else if (firstStep?.status === "failed") {
+      counts.failed++;
+    } else if (firstStep?.status === "paused") {
+      counts.paused++;
+    } else if (!firstStep) {
+      if (Number.isFinite(openedAt) && openedAt <= adFirstStepCutoff) {
+        counts.not_enrolled++;
+      } else {
+        counts.waiting++;
+      }
+    } else {
+      const dueAt = Date.parse(String(firstStep.send_at ?? ""));
+      if (
+        Number.isFinite(dueAt) &&
+        dueAt < now.getTime() - 10 * 60_000
+      ) counts.overdue_pending++;
+      else counts.waiting++;
+    }
+  }
+  const missingAdFirstSteps = Object.values(adFirstStepByChannel)
+    .reduce(
+      (sum, counts) =>
+        sum + counts.not_enrolled + counts.failed + counts.paused +
+        counts.overdue_pending,
+      0,
+    );
+  const unverifiedAdFirstSteps = Object.values(adFirstStepByChannel)
+    .reduce((sum, counts) => sum + counts.unverified_sent, 0);
   const activeChannels = channels.filter((item) =>
     item.status === "active" || item.status === "connected"
   );
@@ -135,6 +265,26 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   const canaisSociais = activeChannels.filter((c) =>
     c.type === "facebook" || c.type === "instagram"
   );
+  const instagramAtivo = canaisSociais.some((c) => c.type === "instagram");
+  const { data: ultimaSincroniaInstagram, error: instagramSyncError } = await db
+    .from("events").select("received_at,payload")
+    .eq("source", "sync-facebook").eq("event_type", "sync_completed")
+    .eq("payload->>channel_type", "instagram")
+    .eq("payload->>mode", "inbound")
+    .order("received_at", { ascending: false }).limit(1).maybeSingle();
+  if (instagramSyncError) throw instagramSyncError;
+  const ultimaSincroniaInstagramMs = Date.parse(
+    String(ultimaSincroniaInstagram?.received_at ?? ""),
+  );
+  const instagramSyncStale = instagramAtivo &&
+    (!Number.isFinite(ultimaSincroniaInstagramMs) ||
+      now.getTime() - ultimaSincroniaInstagramMs > 2 * 60_000);
+  const instagramSyncErrors = ((ultimaSincroniaInstagram?.payload ?? {}) as Json)
+    .errors;
+  const instagramSyncFailures = instagramAtivo && !instagramSyncStale &&
+      Array.isArray(instagramSyncErrors)
+    ? instagramSyncErrors.length
+    : 0;
   const tokensInvalidos: string[] = [];
   for (const canal of canaisSociais) {
     const { data: secret } = await db.from("channel_secrets")
@@ -154,7 +304,8 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
 
   // 2) canal que costuma receber e parou: só alarma quem tem volume (>=20 entradas em 7d),
   //    senão canal naturalmente quieto viraria alerta todo dia.
-  const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    .toISOString();
   const canaisMudos: string[] = [];
   for (const canal of activeChannels) {
     // SEMPRE em ordem decrescente. A primeira versão pedia 3000 linhas em ordem
@@ -196,6 +347,70 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       .in("event_type", ["inbound_ingest_failed", "chatwoot_post_failed"])
       .gte("received_at", since1h),
   );
+  const { data: funnelDeliveryEvents, error: deliveryEventsError } = await db
+    .from("events").select("received_at,payload")
+    .eq("event_type", "funnel_delivery_attempt")
+    .gte("received_at", since1h)
+    .order("received_at", { ascending: false })
+    .limit(3000);
+  if (deliveryEventsError) throw deliveryEventsError;
+  const funnelDeliveryByChannel: Record<string, Record<string, number>> = {};
+  const mediaTimeouts: Record<string, number> = {};
+  const latestAttemptOutcome = new Map<string, {
+    outcome: string;
+    channel_type: string;
+    received_at: string;
+  }>();
+  for (const event of (funnelDeliveryEvents ?? []) as Json[]) {
+    const payload = (event.payload ?? {}) as Json;
+    const outcome = String(payload.outcome ?? "unknown");
+    const channelType = String(payload.channel_type ?? "unknown");
+    const attemptId = String(payload.attempt_id ?? "");
+    if (attemptId && !latestAttemptOutcome.has(attemptId)) {
+      latestAttemptOutcome.set(attemptId, {
+        outcome,
+        channel_type: channelType,
+        received_at: String(event.received_at ?? ""),
+      });
+    }
+    if (outcome === "started") continue;
+    if (outcome === "uncertain" && payload.transport_stage) {
+      const size = Number(payload.media_size_bytes);
+      const sizeBucket = !Number.isFinite(size) || size <= 0 ? "unknown"
+        : size < 5_000_000 ? "lt5mb"
+        : size < 15_000_000 ? "5to15mb" : "gte15mb";
+      const type = ["video", "document", "audio", "image"].includes(String(payload.type))
+        ? String(payload.type) : "other";
+      const stage = ["await_response", "read_body", "invalid_body", "await_receipt"].includes(String(payload.transport_stage))
+        ? String(payload.transport_stage) : "other";
+      const key = `${type}:${sizeBucket}:${stage}`;
+      mediaTimeouts[key] = (mediaTimeouts[key] ?? 0) + 1;
+    }
+    const outcomes = funnelDeliveryByChannel[channelType] ??= {};
+    outcomes[outcome] = (outcomes[outcome] ?? 0) + 1;
+  }
+  let staleStartedAttempts = 0;
+  for (const latest of latestAttemptOutcome.values()) {
+    const startedAt = Date.parse(latest.received_at);
+    if (
+      latest.outcome === "started" &&
+      Number.isFinite(startedAt) &&
+      startedAt < now.getTime() - 10 * 60_000
+    ) {
+      const outcomes = funnelDeliveryByChannel[latest.channel_type] ??= {};
+      outcomes.uncertain = (outcomes.uncertain ?? 0) + 1;
+      staleStartedAttempts++;
+    }
+  }
+  const deliveryFailures = Object.values(funnelDeliveryByChannel)
+    .reduce(
+      (sum, outcomes) =>
+        sum + (outcomes.rejected ?? 0) + (outcomes.uncertain ?? 0) +
+        (outcomes.media_unavailable ?? 0) + (outcomes.partial ?? 0),
+      0,
+    );
+  const scheduledDeliveryRetries = Object.values(funnelDeliveryByChannel)
+    .reduce((sum, outcomes) => sum + (outcomes.retry_scheduled ?? 0), 0);
 
   // 3b) instância uazapi entregando sem canal cadastrado: o número foi conectado, o cliente
   //     está escrevendo, e o webhook descarta tudo porque não existe linha em `channels`.
@@ -214,26 +429,60 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   // 3c) instância uazapi caída com o canal `active` no banco (6836, 10/09). Uma consulta
   //     por rodada; uazapi inacessível não é instância caída — não vira alarme.
   let instanciasCaidas: string[] = [];
+  let webhooksAusentes: string[] = [];
   if (uazapiConfigured()) {
     try {
-      instanciasCaidas = avaliarInstanciasUazapi(activeChannels, await listInstances());
+      const instancias = await listInstances();
+      instanciasCaidas = avaliarInstanciasUazapi(activeChannels, instancias);
+      const basePublica = optionalEnv("BRIDGE_PUBLIC_BASE");
+      if (basePublica) {
+        const digitos = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+        const checks = await Promise.all(activeChannels
+          .filter((c) => c.type === "whatsapp")
+          .map(async (canal): Promise<string | null> => {
+            const numero = digitos(canal.phone_number);
+            const instancia = instancias.find((i) =>
+              i.name === canal.external_id || i.name === canal.name ||
+              (numero.length >= 10 && digitos(i.number) === numero)
+            );
+            if (!instancia?.token || !/^(connected|open)$/i.test(instancia.status)) return null;
+            try {
+              const hook = await instGet("/webhook", instancia.token);
+              if (!hook.ok) return null;
+              return temWebhookUazapiDoHub(hook.data, basePublica)
+                ? null
+                : `${String(canal.name)}: webhook do Hub ausente`;
+            } catch {
+              return null;
+            }
+          }));
+        webhooksAusentes = checks.filter((x): x is string => x !== null);
+      }
     } catch {
       // erro de rede na uazapi não é instância desconectada
     }
   }
 
-  // 3d) peça do funil apontando para arquivo que não existe mais no storage: sai como texto
-  //     (ou é pulada) e alguém precisa repor o arquivo.
+  // 3d) peça do funil que aponta para arquivo ausente; o envio fica bloqueado até correção.
   const { data: eventosMidia } = await db.from("events")
     .select("payload").eq("event_type", "midia_indisponivel")
     .gte("received_at", since1h);
   const midiasSumidas = [
-    ...new Set(
-      ((eventosMidia ?? []) as Json[])
-        .map((e) => String(((e.payload ?? {}) as Json).url ?? ""))
-        .filter(Boolean)
-        .map((url) => decodeURIComponent(url.split("/").pop() ?? url)),
-    ),
+    ...new Set([
+      ...((eventosMidia ?? []) as Json[]).map((e) => {
+        const payload = (e.payload ?? {}) as Json;
+        if (payload.media_key) return String(payload.media_key);
+        const url = String(payload.url ?? "");
+        return url
+          ? decodeURIComponent(url.split("?")[0].split("/").pop() ?? url)
+          : "";
+      }),
+      ...((funnelDeliveryEvents ?? []) as Json[])
+        .filter((e) =>
+          ((e.payload ?? {}) as Json).outcome === "media_unavailable"
+        )
+        .map((e) => String(((e.payload ?? {}) as Json).media_key ?? "")),
+    ].filter(Boolean)),
   ];
   // 3d) mensagem de cliente que o catch-up achou fora do webhook: entrou sem automação e
   //     alguém precisa responder. O evento vale por uma hora, o alerta sai uma vez.
@@ -244,9 +493,15 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
   for (const e of (eventosRecuperadas ?? []) as Json[]) {
     const p = (e.payload ?? {}) as Json;
     const canal = String(p.canal ?? p.instancia ?? "?");
-    recuperadasPorCanal.set(canal, (recuperadasPorCanal.get(canal) ?? 0) + Number(p.recuperadas ?? 0));
+    recuperadasPorCanal.set(
+      canal,
+      (recuperadasPorCanal.get(canal) ?? 0) + Number(p.recuperadas ?? 0),
+    );
   }
-  const totalRecuperadas = [...recuperadasPorCanal.values()].reduce((s, n) => s + n, 0);
+  const totalRecuperadas = [...recuperadasPorCanal.values()].reduce(
+    (s, n) => s + n,
+    0,
+  );
   // 3e) a varredura da uazapi não conseguiu fazer o trabalho dela (401 no /instance/all,
   //     consulta falhando, lista truncada). É rede de segurança: se ela cai calada, só se
   //     descobre no próximo incidente, contando mensagem de cliente perdida.
@@ -282,7 +537,9 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       key: "inbound_recovered",
       severity: "critical",
       count: totalRecuperadas,
-      detail: [...recuperadasPorCanal].map(([c, n]) => `${c}: ${n}`).join("; ") || undefined,
+      detail:
+        [...recuperadasPorCanal].map(([c, n]) => `${c}: ${n}`).join("; ") ||
+        undefined,
     },
     {
       key: "pediu_humano",
@@ -294,13 +551,20 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       key: "catchup_degradado",
       severity: "critical",
       count: motivosCatchup.size ? 1 : 0,
-      detail: [...motivosCatchup].map(([m, n]) => `${m} (${n}x)`).join("; ") || undefined,
+      detail: [...motivosCatchup].map(([m, n]) => `${m} (${n}x)`).join("; ") ||
+        undefined,
     },
     {
       key: "uazapi_instance_disconnected",
       severity: "critical",
       count: instanciasCaidas.length,
       detail: instanciasCaidas.join("; ") || undefined,
+    },
+    {
+      key: "uazapi_webhook_missing",
+      severity: "critical",
+      count: webhooksAusentes.length,
+      detail: webhooksAusentes.join("; ") || undefined,
     },
     {
       key: "canal_nao_cadastrado",
@@ -313,6 +577,18 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "critical",
       count: tokensInvalidos.length,
       detail: tokensInvalidos.join("; ") || undefined,
+    },
+    {
+      key: "instagram_sync_stale",
+      severity: "critical",
+      count: instagramSyncStale ? 1 : 0,
+      detail: "sincronização de directs sem conclusão há mais de 2 minutos",
+    },
+    {
+      key: "instagram_sync_error",
+      severity: "critical",
+      count: instagramSyncFailures,
+      detail: "um ou mais canais falharam na última sincronização",
     },
     {
       key: "channel_silent",
@@ -341,7 +617,58 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       severity: "warning",
       count: failedMessages24h,
     },
-    { key: "overdue_funnel_queue", severity: "critical", count: overdueQueue },
+    { key: "overdue_funnel_queue", severity: "critical", count: Math.max(0, overdueQueue - overdue5895Queue) },
+    {
+      key: "5895_media_blocked", severity: "critical",
+      count: media5895Blocks.length,
+      detail: mediaBlocks5895Detail(media5895Blocks),
+    },
+    {
+      key: "funnel_delivery_failure_1h",
+      severity: "critical",
+      count: deliveryFailures,
+      detail: Object.entries(funnelDeliveryByChannel)
+        .map(([channel, outcomes]) => {
+          const failed = (outcomes.rejected ?? 0) + (outcomes.uncertain ?? 0) +
+            (outcomes.media_unavailable ?? 0) + (outcomes.partial ?? 0);
+          return failed ? channel + ": " + failed : "";
+        }).filter(Boolean).join("; ") || undefined,
+    },
+    {
+      key: "funnel_media_timeout_1h",
+      severity: "warning",
+      count: Object.values(mediaTimeouts).reduce((sum, count) => sum + count, 0),
+      detail: Object.entries(mediaTimeouts).map(([bucket, count]) => `${bucket}: ${count}`).join("; ") || undefined,
+    },
+    {
+      key: "5895_video_receipt_overdue",
+      severity: "critical",
+      count: unconfirmed5895Videos,
+      detail: `vídeo sem confirmação de entrega há mais de 5 minutos; conversas: ${
+        unconfirmed5895Conversations.map((id) => `#${id}`).join(", ") || "não identificadas"
+      }`,
+    },
+    {
+      key: "funnel_delivery_retries_1h",
+      severity: "warning",
+      count: scheduledDeliveryRetries,
+    },
+    {
+      key: "ad_first_step_unverified_24h",
+      severity: "warning",
+      count: unverifiedAdFirstSteps,
+    },
+    {
+      key: "ad_first_step_missing_24h",
+      severity: "critical",
+      count: missingAdFirstSteps,
+      detail: Object.entries(adFirstStepByChannel)
+        .map(([channel, counts]) => {
+          const missing = counts.not_enrolled + counts.failed + counts.paused +
+            counts.overdue_pending;
+          return missing ? channel + ": " + missing : "";
+        }).filter(Boolean).join("; ") || undefined,
+    },
     {
       key: "lead_missing_identifier_24h",
       severity: "critical",
@@ -380,16 +707,30 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
 
   const entrega = await entregarAlertas(
     db,
-    issues as OperationalIssue[],
+    issues.filter((issue) => !issue.key.startsWith("5895_")) as OperationalIssue[],
     now,
   ).catch((e) => {
     console.error("operational-alert erro:", e);
     return { enviado: false, motivo: "excecao" };
   });
+  const alerta5895 = media5895Blocks.length
+    ? await entregarAlertas(db, [{
+      key: "5895_media_blocked", severity: "critical",
+      count: media5895Blocks.length,
+      detail: mediaBlocks5895Detail(media5895Blocks),
+    }], now, {
+      dedupeKey: await mediaBlocks5895Key(media5895Blocks),
+      ttlMs: 7 * 24 * 60 * 60_000,
+    }).catch((e) => {
+      console.error("operational-alert 5895 erro:", e);
+      return { enviado: false, motivo: "excecao" };
+    })
+    : { enviado: false, motivo: "sem-bloqueio" };
 
   return {
     ok: !issues.some((issue) => issue.severity === "critical"),
     alerta: entrega,
+    alerta_5895: alerta5895,
     checked_at: now.toISOString(),
     monitoring_window: monitoringWindow,
     ai: {
@@ -405,6 +746,12 @@ export async function runOperationalAudit(db: DbClient): Promise<Json> {
       active_channels: activeChannels.length,
       recent_contacts_24h: contacts.length,
       ad_conversations_24h: ads.length,
+      ad_first_steps_24h: adFirstStepByChannel,
+      ad_first_steps_unverified_24h: unverifiedAdFirstSteps,
+      funnel_delivery_1h: funnelDeliveryByChannel,
+      funnel_overdue_5895: overdue5895Queue,
+      funnel_media_timeouts_1h: mediaTimeouts,
+      funnel_stale_attempts_1h: staleStartedAttempts,
       failed_messages_24h: failedMessages24h,
     },
     issues,

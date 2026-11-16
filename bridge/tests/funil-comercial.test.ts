@@ -3,9 +3,9 @@ import {
   classificarIntencaoComercial,
   extrairAreaHectares,
   isAreaAcimaDosPacotes,
-  PACOTES_COMERCIAIS,
   pacotePorId,
   pacotePorResposta,
+  PACOTES_COMERCIAIS,
   textoCondicaoComercial,
   textoPacote,
   textoPerguntaUso,
@@ -13,10 +13,22 @@ import {
 } from "../shared/funil-comercial.ts";
 
 Deno.test("preço tem precedência sobre intenção técnica ou de uso", () => {
-  assertEquals(classificarIntencaoComercial("Quanto custa para silagem?"), "preco");
-  assertEquals(classificarIntencaoComercial("Tenho interesse em pastejo"), "uso");
-  assertEquals(classificarIntencaoComercial("Qual o espaçamento?"), "duvida_tecnica");
-  assertEquals(classificarIntencaoComercial("Quero conhecer melhor"), "interesse_geral");
+  assertEquals(
+    classificarIntencaoComercial("Quanto custa para silagem?"),
+    "preco",
+  );
+  assertEquals(
+    classificarIntencaoComercial("Tenho interesse em pastejo"),
+    "uso",
+  );
+  assertEquals(
+    classificarIntencaoComercial("Qual o espaçamento?"),
+    "duvida_tecnica",
+  );
+  assertEquals(
+    classificarIntencaoComercial("Quero conhecer melhor"),
+    "interesse_geral",
+  );
   assertEquals(classificarIntencaoComercial("Bom dia"), null);
 });
 
@@ -31,8 +43,10 @@ Deno.test("pacotes seguem a correspondência aprovada e sem preço automático",
   assertEquals(pacotePorResposta("meio hectare")?.quilos, 2);
   const copy = textoPacote(pacotePorId("tam_4kg")!);
   assertEquals(copy.includes("R$"), false);
-  assertEquals(copy.includes("30%"), true);
-  assertEquals(textoCondicaoComercial().includes("acima de 100 kg"), true);
+  assertEquals(copy.includes("30%"), false);
+  assertEquals(copy.includes("desconto"), false);
+  assertEquals(copy.includes("Cícero confirma a cotação exata"), true);
+  assertEquals(textoCondicaoComercial().includes("acima de 100 kg"), false);
 });
 
 Deno.test("pergunta e reconhecimento de uso são neutros", () => {

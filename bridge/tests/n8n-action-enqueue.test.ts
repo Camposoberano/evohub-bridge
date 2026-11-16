@@ -1,0 +1,129 @@
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  buildActionRows,
+  nextActionWindow,
+  resolveActionMedia,
+  validateEnqueueBody,
+} from "../handlers/n8n-action-enqueue.ts";
+
+const request = {
+  request_id: "inbound-3509-1",
+  source: "ad" as const,
+  chatwoot_conversation_id: 3509,
+  action: "funil" as const,
+  funnel_version: "mega-sorgo-5895-20260930",
+};
+
+Deno.test("rejeita funil curto, ação desconhecida e lote parcial", () => {
+  assertEquals(validateEnqueueBody({ request: { ...request, funnel_version: "mega-sorgo-5895-v2" }, pieces: [] }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...request, action: "outra" }, pieces: [] }).ok, false);
+  assertEquals(validateEnqueueBody({ request, pieces: [{ day: 1, type: "text", payload: { content: "Oi" }, offset_seconds: 0 }] }).ok, false);
+});
+
+Deno.test("versão social aceita 31 peças e mantém identidade própria na fila", async () => {
+  const pieces = Array.from({ length: 31 }, (_, index) => ({
+    day: Math.min(5, Math.floor(index / 7) + 1),
+    type: "text",
+    payload: { content: "Peça" },
+    offset_seconds: index,
+  }));
+  const parsed = validateEnqueueBody({
+    request: { ...request, funnel_version: "mega-sorgo-social-20260930" }, pieces,
+  });
+  assertEquals(parsed.ok, true);
+  if (!parsed.ok) return;
+  const rows = await buildActionRows(parsed.value, "conversation-social", 1_760_000_000_000);
+  assertEquals(rows.length, 31);
+  assertEquals(rows.every((row) => row.funnel === "mega-sorgo-social-20260930"), true);
+});
+
+Deno.test("reparo de abertura exige sinal explícito e só vale no funil principal", () => {
+  const pieces = Array.from({ length: 31 }, (_, index) => ({
+    day: Math.min(5, Math.floor(index / 7) + 1),
+    type: "text",
+    payload: { content: "Peça" },
+    offset_seconds: index,
+  }));
+  assertEquals(validateEnqueueBody({ request: { ...request, repair_missing_opening: true }, pieces }).ok, true);
+  assertEquals(validateEnqueueBody({ request: { ...request, repair_missing_opening: "true" }, pieces }).ok, false);
+  assertEquals(validateEnqueueBody({ request: { ...request, action: "preco", repair_missing_opening: true },
+    pieces: [{ day: 0, type: "text", payload: { content: "Preço" }, offset_seconds: 0 }] }).ok, false);
+});
+
+Deno.test("aceita intenção automática no mesmo workflow editável da macro", () => {
+  const result = validateEnqueueBody({
+    request: { ...request, action: "preco", source: "intent" },
+    pieces: [{ day: 0, type: "text", payload: { content: "Cotação" }, offset_seconds: 0 }],
+  });
+  assertEquals(result.ok, true);
+});
+
+Deno.test("aceita botão do funil certo e exige resultado para cotação", () => {
+  const piece = [{ day: 0, type: "text", payload: { content: "Resposta" }, offset_seconds: 0 }];
+  const valid = (action: string, selection: string, quote_registered?: boolean) =>
+    validateEnqueueBody({ request: { ...request, action, selection, quote_registered }, pieces: piece }).ok;
+  assertEquals(valid("plantio", "plantio_10"), true);
+  assertEquals(valid("nutricao", "nutricao_2"), true);
+  assertEquals(valid("preco", "tam_4kg"), true);
+  assertEquals(valid("preco", "tam_2kg"), true);
+  assertEquals(valid("preco", "uso_silagem"), true);
+  assertEquals(valid("preco", "uso_pastejo"), true);
+  assertEquals(valid("preco", "uso_outro"), true);
+  assertEquals(valid("plantio", "uso_silagem"), false);
+  assertEquals(valid("preco", "preco_cotar_tam_4kg", true), true);
+  assertEquals(valid("preco", "preco_cotar_tam_4kg"), false);
+  assertEquals(valid("plantio", "nutricao_2"), false);
+  assertEquals(valid("preco", "tam_999kg"), false);
+});
+
+Deno.test("mesmo evento gera as mesmas peças e mantém a ordem", async () => {
+  const body = validateEnqueueBody({
+    request: { ...request, action: "preco", source: "macro" },
+    pieces: [
+      { day: 0, type: "text", payload: { content: "Preço" }, offset_seconds: 0 },
+      { day: 0, type: "image", payload: { media_url: "https://example.org/preco.jpg" }, offset_seconds: 70 },
+    ],
+  });
+  assertEquals(body.ok, true);
+  if (!body.ok) return;
+  const a = await buildActionRows(body.value, "conversation-uuid", 1_760_000_000_000);
+  const b = await buildActionRows(body.value, "conversation-uuid", 1_760_000_000_000);
+  assertEquals(a, b);
+  assertEquals(a.length, 2);
+  assertEquals(a[0].status, "paused");
+  assertEquals(a[1].step, 1);
+  assertEquals(Date.parse(a[1].send_at) - Date.parse(a[0].send_at), 70_000);
+  await assertRejects(() => buildActionRows(body.value, "", 1_760_000_000_000));
+});
+
+Deno.test("preço cabe na pausa entre fases, sem ocupar os envios próximos", () => {
+  const start = Date.parse("2026-10-10T12:00:00Z"); // 09h BRT
+  const occupied = [70, 140, 210, 280, 350, 420, 2_220]
+    .map((seconds) => new Date(start + seconds * 1000).toISOString());
+  assertEquals(nextActionWindow(start, 210, occupied), start + 490_000);
+});
+
+Deno.test("mídia é resolvida da biblioteca antes de aceitar o lote", async () => {
+  const db = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: async () => ({
+            data: [{ day: 0, slot: "preco_4kg", type: "image", url: "https://example.org/arte.jpg" }],
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  };
+  const resolved = await resolveActionMedia(db as never, [{
+    day: 0, type: "image", payload: { media_ref: { day: 0, slot: "preco_4kg" } },
+    offset_seconds: 0,
+  }]);
+  assertEquals(resolved[0].payload.media_url, "https://example.org/arte.jpg");
+  assertEquals("media_ref" in resolved[0].payload, false);
+  await assertRejects(() => resolveActionMedia(db as never, [{
+    day: 0, type: "image", payload: { media_ref: { day: 0, slot: "ausente" } },
+    offset_seconds: 0,
+  }]));
+});

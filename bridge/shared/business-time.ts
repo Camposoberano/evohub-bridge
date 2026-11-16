@@ -1,19 +1,26 @@
-const BRT_OFFSET_MS = 3 * 60 * 60_000;
-const OPEN_MINUTE = 6 * 60;
-const CLOSE_MINUTE = 22 * 60;
+import { FUNNEL_CUTOFF_MINUTE, FUNNEL_OPEN_MINUTE } from "./business-hours.ts";
 
-// Keeps funnel time inside 06:00-22:00 BRT. Closed hours do not consume a gap.
+const BRT_OFFSET_MS = 3 * 60 * 60_000;
+
+const OPEN_HOUR = Math.floor(FUNNEL_OPEN_MINUTE / 60);
+const OPEN_MIN = FUNNEL_OPEN_MINUTE % 60;
+
+// Mantém o funil dentro da janela de business-hours (08:00–19:55 BRT); a noite não consome
+// intervalos. A abertura vem de FUNNEL_OPEN_MINUTE — não hardcodar a hora aqui.
 export function clampBusinessTime(ms: number, durationSec = 0): number {
   const brt = new Date(ms - BRT_OFFSET_MS);
-  const startMinute = brt.getUTCHours() * 60 + brt.getUTCMinutes();
-  const endMinute = startMinute + durationSec / 60;
-  if (startMinute >= OPEN_MINUTE && endMinute <= CLOSE_MINUTE) return ms;
+  const startSecond = brt.getUTCHours() * 3600 + brt.getUTCMinutes() * 60 +
+    brt.getUTCSeconds() + brt.getUTCMilliseconds() / 1000;
+  const endSecond = startSecond + durationSec;
+  if (startSecond >= FUNNEL_OPEN_MINUTE * 60 &&
+    endSecond <= FUNNEL_CUTOFF_MINUTE * 60) return ms;
 
   const next = new Date(brt);
-  if (startMinute >= CLOSE_MINUTE || endMinute > CLOSE_MINUTE) {
+  if (startSecond >= FUNNEL_CUTOFF_MINUTE * 60 ||
+    endSecond > FUNNEL_CUTOFF_MINUTE * 60) {
     next.setUTCDate(next.getUTCDate() + 1);
   }
-  next.setUTCHours(6, 0, 0, 0);
+  next.setUTCHours(OPEN_HOUR, OPEN_MIN, 0, 0);
   return next.getTime() + BRT_OFFSET_MS;
 }
 
@@ -30,7 +37,7 @@ export function addBusinessSeconds(
     const minute = brt.getUTCHours() * 60 + brt.getUTCMinutes();
     const available = Math.max(
       0,
-      (CLOSE_MINUTE - minute) * 60 - brt.getUTCSeconds(),
+      (FUNNEL_CUTOFF_MINUTE - minute) * 60 - brt.getUTCSeconds(),
     );
     if (remaining <= available) {
       return clampBusinessTime(cursor + remaining * 1000, followingDurationSec);
@@ -45,6 +52,6 @@ export function addBusinessSeconds(
 function nextBusinessOpening(ms: number): number {
   const brt = new Date(ms - BRT_OFFSET_MS);
   brt.setUTCDate(brt.getUTCDate() + 1);
-  brt.setUTCHours(6, 0, 0, 0);
+  brt.setUTCHours(OPEN_HOUR, OPEN_MIN, 0, 0);
   return brt.getTime() + BRT_OFFSET_MS;
 }

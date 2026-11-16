@@ -1,4 +1,7 @@
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertRejects,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { pumpRecoveryChain } from "../shared/recovery-chain.ts";
 
 // 11–12/09: a recuperação saiu para 6 conversas com venda GANHA e 11 com venda perdida —
@@ -14,9 +17,15 @@ import { pumpRecoveryChain } from "../shared/recovery-chain.ts";
 const dia = 86_400_000;
 const now = Date.parse("2026-09-12T16:00:00Z");
 
-type Opcoes = { outcome?: string; erroConversas?: boolean; erroSaidas?: boolean };
+type Opcoes = {
+  outcome?: string;
+  erroConversas?: boolean;
+  erroSaidas?: boolean;
+};
 
-function banco({ outcome = "open", erroConversas = false, erroSaidas = false }: Opcoes) {
+function banco(
+  { outcome = "open", erroConversas = false, erroSaidas = false }: Opcoes,
+) {
   const conversasPedidas: string[][] = [];
   const db = {
     from(table: string) {
@@ -56,13 +65,17 @@ function banco({ outcome = "open", erroConversas = false, erroSaidas = false }: 
           filtros.single = true;
           return q;
         },
-        then(resolve: (r: unknown) => unknown, reject: (e: unknown) => unknown) {
+        then(
+          resolve: (r: unknown) => unknown,
+          reject: (e: unknown) => unknown,
+        ) {
           let data: unknown = [];
           let error: unknown = null;
           if (table === "sales_sequences") {
             data = [{
               conversation_id: "c1",
               chatwoot_conversation_id: 787,
+              funnel: "mega-sorgo",
               last_sent_at: new Date(now - 5 * dia).toISOString(),
               status: "completed",
             }];
@@ -133,7 +146,11 @@ Deno.test("erro ao ler desfechos PARA a rodada, não vira lista vazia", async ()
       return Promise.resolve({ state: "sent" as const });
     }, now)
   );
-  assertEquals(enviados, 0, "nenhuma mensagem sai quando não dá pra saber quem já comprou");
+  assertEquals(
+    enviados,
+    0,
+    "nenhuma mensagem sai quando não dá pra saber quem já comprou",
+  );
 });
 
 Deno.test("erro ao ler quem está em atendimento também para a rodada", async () => {
@@ -149,9 +166,17 @@ Deno.test("erro ao ler quem está em atendimento também para a rodada", async (
 
 Deno.test("os desfechos são consultados em lotes, nunca numa URL só", async () => {
   const { db, conversasPedidas } = banco({});
-  await pumpRecoveryChain(db, () => Promise.resolve({ state: "sent" as const }), now);
+  await pumpRecoveryChain(
+    db,
+    () => Promise.resolve({ state: "sent" as const }),
+    now,
+  );
   assertEquals(conversasPedidas.length >= 1, true);
   for (const lote of conversasPedidas) {
-    assertEquals(lote.length <= 40, true, "lote grande demais volta a estourar a URL");
+    assertEquals(
+      lote.length <= 40,
+      true,
+      "lote grande demais volta a estourar a URL",
+    );
   }
 });

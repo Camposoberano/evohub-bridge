@@ -13,9 +13,16 @@ const STATUS = {
   replied: ["badge-gray", "Respondido"],
   completed: ["badge-green", "Concluído"],
   pending: ["badge-amber", "Pendente"],
-  sent: ["badge-green", "Enviado"],
+  sent: ["badge-green", "Aceito pelo emissor"],
   failed: ["badge-red", "Falhou"],
   paused_message: ["badge-amber", "Pausada"],
+};
+
+const CHANNELS = {
+  "2e49dea3-9d93-4f5f-ad54-02882956d1ed": "Facebook · campo soberano",
+  "319d3aa4-26df-42bf-acbf-df440ef5981d": "Facebook · Mega Sorgo Santa Elisa",
+  "93a082b0-e169-4cf8-9b1f-6e93758bf908": "Instagram · Atendimento IG",
+  "1f056c55-fd58-4d55-943f-7d18c0dbc43b": "Instagram · sorgo brasileiro",
 };
 
 function badge(status) {
@@ -37,9 +44,11 @@ export default function FunilPage() {
   const [commercial, setCommercial] = useState([]);
   const [queue, setQueue] = useState([]);
   const [filter, setFilter] = useState("todos");
+  const [channelFilter, setChannelFilter] = useState("todos");
   const [lastSync, setLastSync] = useState(null);
   const [serverSummary, setServerSummary] = useState({});
   const [failureEvents, setFailureEvents] = useState([]);
+  const [deliveryFailures, setDeliveryFailures] = useState([]);
   const [acting, setActing] = useState("");
   const [message, setMessage] = useState("");
 
@@ -55,6 +64,7 @@ export default function FunilPage() {
       setQueue(data.messages || []);
       setServerSummary(data.summary || {});
       setFailureEvents(data.failures || []);
+      setDeliveryFailures(data.delivery_audit?.recent_failures || []);
       setError("");
       setLastSync(new Date());
     } catch (err) {
@@ -117,7 +127,11 @@ export default function FunilPage() {
     };
   }, [sequences, queue, serverSummary]);
 
-  const visibleSequences = sequences.filter((item) => filter === "todos" || item.status === filter);
+  const visibleSequences = sequences.filter((item) =>
+    (filter === "todos" || item.status === filter) &&
+    (channelFilter === "todos" ||
+      (channelFilter === "5895" ? !CHANNELS[item.conversation?.channel_id] : item.conversation?.channel_id === channelFilter))
+  );
   const upcomingByConversation = useMemo(() => {
     const groups = new Map();
     for (const item of queue.filter((row) => ["pending", "paused"].includes(row.status))) {
@@ -128,7 +142,16 @@ export default function FunilPage() {
     }
     return [...groups.values()].sort((a, b) => new Date(a.send_at) - new Date(b.send_at)).slice(0, 100);
   }, [queue]);
-  const failed = queue.filter((item) => item.status === "failed").slice(0, 80);
+  const failed = queue.filter((item) => item.status === "failed")
+    .sort((a, b) => new Date(b.send_at) - new Date(a.send_at)).slice(0, 80);
+  const failureByMessage = useMemo(() => {
+    const map = new Map();
+    for (const event of deliveryFailures) {
+      const id = String(event.scheduled_message_id || "");
+      if (id && !map.has(id)) map.set(id, event);
+    }
+    return map;
+  }, [deliveryFailures]);
   const failureByConversation = useMemo(() => {
     const map = new Map();
     for (const event of failureEvents) {
@@ -170,9 +193,14 @@ export default function FunilPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
             <div><div style={{ fontSize: 17, fontWeight: 700 }}>Sequências por conversa</div><div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 3 }}>Cada conversa deve ter no máximo um funil ativo.</div></div>
             <select value={filter} onChange={(event) => setFilter(event.target.value)}><option value="todos">Todos os status</option><option value="running">Rodando</option><option value="paused">Pausados</option><option value="completed">Concluídos</option><option value="cancelled">Parados</option><option value="replied">Respondidos</option></select>
+            <select value={channelFilter} onChange={(event) => setChannelFilter(event.target.value)}>
+              <option value="todos">Todos os canais</option>
+              <option value="5895">WhatsApp 5895 e demais</option>
+              {Object.entries(CHANNELS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
           </div>
           <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Funil</th><th>Cliente</th><th>Conversa</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-            {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); const pauseReason = item.pause_event?.payload?.reason; return <tr key={item.id}><td>{item.funnel || "—"}</td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span>{item.status === "paused" && pauseReason && <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 4 }}>Motivo: {pauseReason}</div>}</td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}
+            {visibleSequences.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma sequência encontrada.</td></tr> : visibleSequences.slice(0, 100).map((item) => { const [cls, label] = badge(item.status); const contact = item.conversation?.contact; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); const pauseReason = item.pause_event?.payload?.reason; return <tr key={item.id}><td>{item.funnel || "—"}<div style={{ color: "var(--text-dim)", fontSize: 11 }}>{CHANNELS[item.conversation?.channel_id] || "WhatsApp/outro"}</div><div style={{ color: "var(--text-faint)", fontSize: 11 }}>Origem: {item.origin === "ad_referral" ? "anúncio" : item.origin === "commercial_fallback" ? "primeira conversa comercial" : "—"} · 1ª aceitação: {item.first_acceptance_seconds == null ? "—" : `${item.first_acceptance_seconds}s`}</div></td><td>{contact?.name || contact?.phone || contact?.external_contact_id || "—"}</td><td>#{item.chatwoot_conversation_id || "—"}</td><td><span className={`badge ${cls}`}>{label}</span>{item.status === "paused" && pauseReason && <div style={{ color: "var(--text-dim)", fontSize: 11, marginTop: 4 }}>Motivo: {pauseReason}</div>}</td><td><div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>{chatUrl && <Link href={chatUrl} target="_blank" className="btn-ghost mini">Abrir</Link>}{item.status === "running" && <button className="btn-ghost mini" disabled={acting === `pause:${item.id}`} onClick={() => operate("pause", item)}>Pausar</button>}{item.status === "paused" && <button className="btn-ghost mini" disabled={acting === `resume:${item.id}`} onClick={() => operate("resume", item)}>Retomar</button>}{["running", "paused"].includes(item.status) && <button className="btn-ghost mini" disabled={acting === `stop:${item.id}`} onClick={() => operate("stop", item)} style={{ color: "var(--red)" }}>Parar</button>}</div></td></tr>; })}
           </tbody></table></div>
         </div>
 
@@ -193,9 +221,9 @@ export default function FunilPage() {
         </div>
 
         <div className="card" style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Falhas para reprocessar</div>
-          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>O reprocessamento devolve uma mensagem falha para o início da fila, mantendo a proteção contra duplicidade.</div>
-          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Conversa</th><th>Etapa</th><th>Tipo</th><th>Motivo mais recente</th><th>Ação</th></tr></thead><tbody>{failed.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma falha pendente.</td></tr> : failed.map((item) => { const failure = failureByConversation.get(Number(item.chatwoot_conversation_id)); const detail = failure?.payload?.error; const reason = typeof detail === "string" ? detail : detail ? JSON.stringify(detail) : `Status ${failure?.payload?.status || "desconhecido"}`; return <tr key={item.id}><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td style={{ maxWidth: 320, color: "var(--red)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={reason}>{reason}</td><td><button className="btn-ghost mini" disabled={acting === `retry:${item.id}`} onClick={() => operate("retry", item)}>{acting === `retry:${item.id}` ? "Reprocessando..." : "Reprocessar"}</button></td></tr>; })}</tbody></table></div>
+          <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 4 }}>Falhas para revisar</div>
+          <div style={{ color: "var(--text-dim)", fontSize: 13, marginBottom: 12 }}>Envio incerto exige conferência do recibo do provedor. Reprocessar só aparece para rejeição 429 confirmada.</div>
+          <div className="table-wrap" style={{ borderRadius: 12 }}><table className="table table-ops"><thead><tr><th>Conversa</th><th>Etapa</th><th>Tipo</th><th>Motivo mais recente</th><th>Ação</th></tr></thead><tbody>{failed.length === 0 ? <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-dim)", padding: 24 }}>Nenhuma falha pendente.</td></tr> : failed.map((item) => { const audit = failureByMessage.get(String(item.id)); const legacy = failureByConversation.get(Number(item.chatwoot_conversation_id)); const delivery = item.delivery || {}; const outcome = delivery.last_outcome || audit?.outcome; const stage = delivery.transport_stage || audit?.transport_stage; const elapsed = delivery.transport_elapsed_ms || audit?.transport_elapsed_ms; const pendingVideo = item.type === "video" && outcome === "uncertain" && stage === "await_receipt"; const waitMinutes = delivery.last_attempt_at ? Math.max(0, Math.floor((Date.now() - Date.parse(delivery.last_attempt_at)) / 60000)) : null; const reason = pendingVideo ? `Vídeo com entrega sem confirmação há ${waitMinutes ?? "?"} min. ${delivery.followups_released_at ? "Sequência liberada após uma cópia Sent; vídeo ainda não confirmado. " : ""}Conferir recibo antes de qualquer reenvio.` : outcome === "uncertain" ? `Envio incerto na uazapi${stage ? ` · ${stage}` : ""}${elapsed ? ` · ${Math.round(elapsed / 1000)}s` : ""}. Conferir recibo antes de reenviar.` : outcome === "rejected" ? `Provedor rejeitou o envio${delivery.provider_status ? ` · HTTP ${delivery.provider_status}` : ""}.` : audit?.failure_stage ? `Falha em ${audit.failure_stage}.` : legacy?.payload?.error || "Falha sem diagnóstico completo; conferir histórico."; const chatUrl = chatwootConversationUrl(item.chatwoot_conversation_id); return <tr key={item.id}><td>#{item.chatwoot_conversation_id || "—"}</td><td>{item.day ?? "—"} / {item.step ?? "—"}</td><td>{item.type || "—"}</td><td style={{ maxWidth: 420, color: "var(--red)" }} title={reason}>{reason}<div style={{ color: "var(--text-faint)", fontSize: 11 }}>{when(audit?.received_at || item.send_at)}</div></td><td>{delivery.retryable === true ? <button className="btn-ghost mini" disabled={acting === `retry:${item.id}`} onClick={() => operate("retry", item)}>{acting === `retry:${item.id}` ? "Reprocessando..." : "Reprocessar"}</button> : chatUrl ? <Link href={chatUrl} target="_blank" className="btn-ghost mini">Conferir conversa</Link> : <span>Revisão manual</span>}</td></tr>; })}</tbody></table></div>
         </div>
       </main>
     </>

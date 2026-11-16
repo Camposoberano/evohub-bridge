@@ -36,6 +36,10 @@ import {
   metaDeliveryStatus,
 } from "../shared/meta-errors.ts";
 import { readConversationAssigneeUpdate } from "../shared/chatwoot-assignee.ts";
+import {
+  isProviderEchoOutgoing,
+  isUazapiSystemNotice,
+} from "../shared/chatwoot-provider-echo.ts";
 
 type Json = Record<string, unknown>;
 type Db = ReturnType<typeof admin>;
@@ -124,6 +128,9 @@ function isOutgoing(p: Json): boolean {
 export async function handleOutgoing(db: Db, p: Json) {
   const attributes = (p.content_attributes ?? {}) as Json;
   if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") return;
+  // Outgoing messages imported from WhatsApp/Meta already carry the provider's
+  // source_id. Sending them again creates a new provider echo and an endless loop.
+  if (isProviderEchoOutgoing(p)) return;
   const conversation = (p.conversation ?? {}) as Json;
   const inbox = (p.inbox ?? {}) as Json;
   const cwConversationId = (conversation.id ?? p.conversation_id) as
@@ -146,6 +153,13 @@ export async function handleOutgoing(db: Db, p: Json) {
   if (
     attachments.length === 0 && /\s\[[^\]]+\s\/\s[^\]]+\]\s*$/.test(content)
   ) {
+    return;
+  }
+
+  // Anti-LOOP de notícia do aparelho (deleção/edição/reação espelhada pela uazapi como texto
+  // de saída SEM source_id). Reenviar é sempre errado e gera loop. Ver isUazapiSystemNotice.
+  if (attachments.length === 0 && isUazapiSystemNotice(content)) {
+    console.log("notícia do aparelho (deleção/reação/edição) — não reenvia", cwMsgId);
     return;
   }
 

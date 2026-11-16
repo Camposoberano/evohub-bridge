@@ -12,17 +12,20 @@ Deno.test("sem env de rotação, comportamento é o de sempre", () => {
 });
 
 Deno.test("durante a rotação, os dois segredos valem", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET", "atual");
   Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "novo");
   try {
     assertEquals(confereSegredo("atual", ["atual"]), true, "o antigo segue valendo");
     assertEquals(confereSegredo("novo", ["atual"]), true, "o novo passa a valer");
     assertEquals(confereSegredo("terceiro", ["atual"]), false);
   } finally {
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET");
     Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
   }
 });
 
 Deno.test("token vazio ou ausente nunca passa", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET", "atual");
   Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "novo");
   try {
     assertEquals(confereSegredo("", ["atual"]), false);
@@ -32,16 +35,19 @@ Deno.test("token vazio ou ausente nunca passa", () => {
     assertEquals(confereSegredo("qualquer", [""]), false);
     assertEquals(confereSegredo("qualquer", [undefined]), false);
   } finally {
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET");
     Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
   }
 });
 
 Deno.test("env de rotação em branco é ignorada", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET", "atual");
   Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "   ");
   try {
     assertEquals(confereSegredo("   ", ["atual"]), false);
     assertEquals(confereSegredo("atual", ["atual"]), true);
   } finally {
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET");
     Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
   }
 });
@@ -49,6 +55,7 @@ Deno.test("env de rotação em branco é ignorada", () => {
 // Antes de matar o segredo antigo é preciso saber se alguém ainda o usa — o n8n chama
 // /send-outbound e /funil-enroll, e seus workflows não são visíveis deste repositório.
 Deno.test("uso do segredo legado durante a rotação é sinalizado", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET", "atual");
   Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "novo");
   const original = console.warn;
   const avisos: string[] = [];
@@ -62,6 +69,20 @@ Deno.test("uso do segredo legado durante a rotação é sinalizado", () => {
     assertEquals(avisos[0].includes("LEGADO"), true);
   } finally {
     console.warn = original;
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET");
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
+  }
+});
+
+Deno.test("segredo da rotação Chatwoot não autentica credencial n8n", () => {
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET", "chatwoot-atual");
+  Deno.env.set("CHATWOOT_WEBHOOK_SECRET_NOVO", "chatwoot-legado");
+  try {
+    assertEquals(confereSegredo("chatwoot-legado", ["n8n-separado"]), false);
+    assertEquals(confereSegredo("n8n-separado", ["n8n-separado"]), true);
+    assertEquals(confereSegredo("chatwoot-legado", ["chatwoot-atual"]), true);
+  } finally {
+    Deno.env.delete("CHATWOOT_WEBHOOK_SECRET");
     Deno.env.delete("CHATWOOT_WEBHOOK_SECRET_NOVO");
   }
 });

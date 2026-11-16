@@ -20,6 +20,50 @@ export default function Eventos() {
   const [auto, setAuto] = useState(true);
   const [msg, setMsg] = useState("");
   const [instancias, setInstancias] = useState([]);
+  const [entradas, setEntradas] = useState(null);
+  const [erroEntradas, setErroEntradas] = useState("");
+  const [recuperando, setRecuperando] = useState("");
+
+  const carregarEntradas = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const res = await fetch(`${BRIDGE_URL}/inbound-incidents`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error("O diagnóstico de entradas está indisponível");
+      setEntradas(await res.json());
+      setErroEntradas("");
+    } catch (error) {
+      setErroEntradas(error.message || "Falha ao consultar entradas");
+    }
+  }, []);
+
+  async function recuperarEntrada(incident) {
+    setRecuperando(incident.event_id);
+    setMsg("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch(`${BRIDGE_URL}/inbound-incidents`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ event_id: incident.event_id }),
+      });
+      const data = await res.json();
+      setMsg(res.ok
+        ? "Entrada reprocessada. Confira a conversa para confirmar a resposta ao cliente."
+        : data.error || "A recuperação não foi concluída.");
+      await carregarEntradas();
+    } catch {
+      setMsg("A recuperação não foi concluída. Tente novamente pelo painel.");
+    } finally {
+      setRecuperando("");
+    }
+  }
 
   const carregar = useCallback(async (f, d) => {
     const desde = new Date(Date.now() - d * 86_400_000).toISOString();
@@ -41,9 +85,16 @@ export default function Eventos() {
       if (!data.session) { router.replace("/login"); return; }
       setPronto(true);
       carregar(fonte, dias);
+      carregarEntradas();
       api("instances").then((r) => { if (r.ok) setInstancias(r.data.instances || []); });
     });
-  }, [router, carregar, fonte, dias]);
+  }, [router, carregar, carregarEntradas, fonte, dias]);
+
+  useEffect(() => {
+    if (!pronto) return;
+    const t = setInterval(carregarEntradas, 30_000);
+    return () => clearInterval(t);
+  }, [pronto, carregarEntradas]);
 
   useEffect(() => {
     if (!auto || !pronto) return;
@@ -75,6 +126,53 @@ export default function Eventos() {
         </div>
 
         {msg && <div className="card" style={{ marginBottom: 14, fontSize: 13 }}>{msg}</div>}
+
+        <section className="card" style={{ marginBottom: 22, padding: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Entradas de clientes</div>
+              <div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 4 }}>
+                Webhook recebido → mensagem registrada → clique iniciado. Últimos 3 dias.
+              </div>
+            </div>
+            <button className="btn-ghost" onClick={carregarEntradas}>Atualizar diagnóstico</button>
+          </div>
+          {erroEntradas && <div style={{ color: "var(--danger, #dc3545)", marginTop: 12 }}>{erroEntradas}</div>}
+          {!entradas && !erroEntradas && <div style={{ color: "var(--text-dim)", fontSize: 13, marginTop: 14 }}>Carregando diagnóstico…</div>}
+          {entradas && <>
+            <div style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 10 }}>Conferido em {quando(entradas.checked_at)}</div>
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", margin: "18px 0" }}>
+              <div><strong style={{ fontSize: 22 }}>{entradas.scanned}</strong><div style={{ fontSize: 12, color: "var(--text-dim)" }}>entradas recebidas</div></div>
+              <div><strong style={{ fontSize: 22, color: entradas.incidents.length ? "#d97706" : "inherit" }}>{entradas.incidents.length}</strong><div style={{ fontSize: 12, color: "var(--text-dim)" }}>pendentes</div></div>
+              <div><strong style={{ fontSize: 22 }}>{entradas.late}</strong><div style={{ fontSize: 12, color: "var(--text-dim)" }}>registradas com atraso</div></div>
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Precisam de atenção</div>
+            {entradas.incidents.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 16 }}>Nenhuma entrada pendente encontrada.</div>
+              : <div className="table-wrap" style={{ marginBottom: 18 }}><table className="table"><thead><tr><th>Quando</th><th>Conversa</th><th>Etapa</th><th>Motivo</th><th>Ação</th></tr></thead><tbody>
+                {entradas.incidents.map((item) => <tr key={item.event_id}>
+                  <td style={{ whiteSpace: "nowrap" }}>{quando(item.received_at)}</td>
+                  <td><strong>{item.channel}</strong> · {item.contact_suffix}{item.choice && <div style={{ fontSize: 12 }}>{item.choice}</div>}</td>
+                  <td>{item.state === "missing_message" ? "Mensagem" : item.state === "missing_channel" ? "Canal" : "Clique"}</td>
+                  <td style={{ maxWidth: 360, fontSize: 13 }}>{item.reason}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {item.chatwoot_url && <a href={item.chatwoot_url} target="_blank" rel="noopener noreferrer" style={{ marginRight: 10 }}>Abrir conversa</a>}
+                    {item.can_retry && <button className="btn-ghost" disabled={Boolean(recuperando)} onClick={() => recuperarEntrada(item)}>{recuperando === item.event_id ? "Recuperando…" : "Reprocessar"}</button>}
+                  </td>
+                </tr>)}
+              </tbody></table></div>}
+            {entradas.delayed?.length > 0 && <details>
+              <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 700 }}>Resolvidas com atraso ({entradas.delayed.length})</summary>
+              <div className="table-wrap" style={{ marginTop: 10 }}><table className="table"><thead><tr><th>Quando</th><th>Conversa</th><th>Atraso</th><th></th></tr></thead><tbody>
+                {entradas.delayed.map((item) => <tr key={item.event_id}>
+                  <td>{quando(item.received_at)}</td><td>{item.channel} · {item.contact_suffix}</td>
+                  <td>{item.delay_minutes} min</td>
+                  <td>{item.chatwoot_url && <a href={item.chatwoot_url} target="_blank" rel="noopener noreferrer">Abrir conversa</a>}</td>
+                </tr>)}
+              </tbody></table></div>
+            </details>}
+          </>}
+        </section>
 
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
           {FONTES.map((f) => <button key={f} className={"tab" + (fonte === f ? " tab-active" : "")} onClick={() => setFonte(f)}>{f}</button>)}

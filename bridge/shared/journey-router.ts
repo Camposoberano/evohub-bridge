@@ -19,6 +19,7 @@ const MEGA_SORGO_PREFIXES = [
 ] as const;
 
 export function clickDomain(id: string): JourneyDomain {
+  if (/^f[1-5]_/.test(id)) return "mega_sorgo";
   if (CATALOG_PREFIXES.some((prefix) => id.startsWith(prefix))) {
     return "catalogo";
   }

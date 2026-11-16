@@ -22,6 +22,7 @@ Deno.test("endereço interno é bloqueado em todas as formas conhecidas", () => 
     "http://169.254.169.254/latest/meta-data/", // metadados de nuvem
     "http://[::1]/x",
     "http://[::ffff:127.0.0.1]/x",
+    "http://[::ffff:7f00:1]/x",
     "http://[fd00::1]/x",
     "http://chatwoot:3000/x", // nome de serviço em rede Docker
     "http://redis.internal/x",

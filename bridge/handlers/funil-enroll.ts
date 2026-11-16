@@ -1,17 +1,30 @@
 // funil-enroll — coloca um lead no funil de apresentação Mega Sorgo: gera a fila
-// (scheduled_messages) com os 5 acessos, sorteando mídia da "faixa" (funnel_media) pra variar.
-// Textos e botões são fixos (roteiro v2 — docs/funil-mega-sorgo-playbook.md). Imagem/áudios/
-// vídeo vêm da faixa (rotação por slot). Slot sem mídia cadastrada -> peça é pulada (não trava).
+// (scheduled_messages) com as cinco fases multimídia recuperadas de 30/09/2026.
+// Textos, botões e slots usam a faixa histórica `mega-sorgo`.
 // Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
-import { admin } from "../shared/supabase.ts";
+import {
+  admin,
+  claimDelivery,
+  claimDeliveryWithTtl,
+  releaseDelivery,
+} from "../shared/supabase.ts";
+import {
+  autoPauseFunil,
+  canRecreateMissingOpening,
+  hasFunnelDeliveryEvidence,
+  openingMessagesComplete,
+} from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import {
+  deferredAdRoute,
   foldText,
+  isAdFunnelOriginSignal,
   isDefaultAdMessage,
   pareceAberturaComercial,
+  shouldDeferInitialAdIntent,
 } from "../shared/ad-lead.ts";
 import {
   addBusinessSeconds,
@@ -23,28 +36,44 @@ import {
 } from "../shared/lead-block.ts";
 import { type Isca, iscasAtivas } from "../shared/iscas.ts";
 import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
+import {
+  canalAlvoFunil,
+  deveEncaminharPerguntaDeAnuncio,
+  deveIgnorarInscricaoHistorica,
+  suprimirAberturaGenerica,
+  usaNovoFunilNoCanal,
+} from "../shared/funil-anuncio.ts";
+import {
+  LEGACY_MAIN_FUNNEL,
+  mainFunnelForChannel,
+  RESTORED_5895_FUNNEL,
+  SOCIAL_N8N_FUNNEL,
+  funnelVersionForChannel,
+} from "../shared/funnel-identity.ts";
+import { socialLeadEntry, type SocialLeadEntry } from "../shared/social-lead-entry.ts";
+import { isLogisticaIntent } from "../shared/intent.ts";
+import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 
 type Json = Record<string, unknown>;
-const FUNNEL = "mega-sorgo";
-// Jornada estendida: os intervalos contam apenas dentro de 06h-22h BRT e começam no fim
-// da fase anterior. Às 22h o relógio congela; às 06h ele continua com o saldo restante.
+const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
+const CANAL_ANUNCIO_ALVO = "5895";
+// Jornada estendida: os intervalos contam apenas dentro de 08h-19h55 BRT e começam no fim
+// da fase anterior. O corte às 19h55 protege o limite de 20h; às 08h continua o saldo.
 // A retomada final (+10h úteis depois da fase 5) é criada por funnel-recovery.ts.
-const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
-// modo TESTE (body.fast=true): fases fluem em sequência (~70s entre fases, sem horário comercial),
-// pra revisar o funil todo em ~30min sem clicar. Produção usa a jornada comercial de até 48h.
+export const GAPS = [0, 1_800, 21_600, 43_200, 43_200]; // imediato, +30min, +6h, +12h, +12h
+// modo TESTE (body.fast=true): momentos fluem em sequência (~70s entre eles, sem horário comercial).
+// Produção usa a jornada comercial de até 48h.
 const GAPS_FAST = [0, 70, 70, 70, 70];
 // Peças DENTRO de um acesso ficam sempre >=70s uma da outra. O cron do n8n roda 1x/min e
 // dispara junto tudo que já venceu -- gap < 60s não garante ordem de chegada (2 peças no
 // mesmo tick podem sair em ordem trocada). >=70s garante 1 peça por tick.
-// Teto do acesso: a próxima fase começa em ini+FIM_ACESSO, então peça agendada além disso
-// invade a fase seguinte. Exportado pra tests/funil-offsets.test.ts vigiar.
-export const FIM_ACESSO = 560; // último disparo do acesso (lista de fechamento) = +9min20
-// (a fase 5 ganhou a oferta de isca no offset 490, empurrando o fechamento de 490 p/ 560)
+// A última peça da fase 5 fica no offset 560; a próxima fase sempre começa depois do fim.
+export const FIM_ACESSO = 560;
 const TZ_OFFSET = 3 * 3600 * 1000; // BRT = UTC-3
 
 type Botao = { id: string; title: string };
 type Peca =
-  | { offset: number; kind: "text"; text: string }
+  | { offset: number; kind: "text"; text: string; opening?: boolean }
   | { offset: number; kind: "text_sequence"; texts: string[] }
   | {
     offset: number;
@@ -71,6 +100,7 @@ type Peca =
     text: string;
     buttonLabel: string;
     sections: { title?: string; rows: Botao[] }[];
+    opening?: boolean;
   };
 
 // Menu de ação — disponível no fechamento de TODA fase. Clique entrega o conteúdo na hora
@@ -83,13 +113,19 @@ const MENU_ROWS: Botao[] = [
   { id: "menu_humano", title: "🧑‍🌾 Falar com Cícero" },
 ];
 
-function closingList(): Peca {
+function closingList(gancho: { text: string; row: Botao } | null): Peca {
+  const sections = gancho
+    ? [{ title: "Continuar", rows: [gancho.row] }, {
+      title: "Tire sua dúvida",
+      rows: MENU_ROWS,
+    }]
+    : [{ title: "Tire sua dúvida", rows: MENU_ROWS }];
   return {
     offset: 0,
     kind: "list",
-    text: "O senhor quer saber mais sobre o quê? 🙌",
+    text: gancho?.text ?? "O senhor quer saber mais sobre o quê? 🙌",
     buttonLabel: "Ver opções",
-    sections: [{ title: "Tire sua dúvida", rows: MENU_ROWS }],
+    sections,
   };
 }
 
@@ -147,40 +183,53 @@ function fase1(): Peca[] {
     },
     {
       offset: 140,
-      kind: "media",
-      mediaType: "image",
-      slot: "image",
-      caption:
-        "Este é o Mega Sorgo Santa Elisa. Ao final desta etapa, escolha no menu se quer ver preço, plantio, informação nutricional, vídeos ou falar com o Cícero.",
+      kind: "interactive",
+      text: "O senhor se interessou no *Mega Sorgo Santa Elisa*?",
+      buttons: [{ id: "f1_sim", title: "Quero saber mais ✅" }, {
+        id: "f1_olhando",
+        title: "Só olhando 👀",
+      }],
+      headerSlot: "image",
     },
     { offset: 210, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 280, kind: "media", mediaType: "audio", slot: "audio2" },
-    // A imagem de apresentação segue como peça própria; perguntas com botões sem destino
-    // foram retiradas até existir tratamento de respostas para esta jornada agendada.
+    // imagem solta (slot "image") removida 30/06: a imagem já vai junto do botão de abertura
+    // (offset 140, headerSlot "image"). Padrão = botão-com-imagem, nunca imagem solta.
     { offset: 350, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList(),
+      ...closingList({
+        text: "O senhor sabe *quanto ele produz por hectare*? 🤔📊",
+        row: { id: "f1_continuar", title: "📈 Quanto produz?" },
+      }) as Peca,
       offset: 420,
     },
   ];
 }
 
-// Fase 2: imagem com legenda -> áudios -> vídeo -> menu final com ações que têm handler.
+// Ordem padrão (combinada 29/06, corrigida 29/06 2): imagem e botão são UMA mensagem só
+// (header_image no interactive) -> áudio1 -> áudio2 -> vídeo -> lista de fechamento (sempre
+// por último). Nunca manda imagem solta separada do botão de abertura.
 function fase2(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "media",
-      mediaType: "image",
-      slot: "image",
-      caption:
-        "O sorgo forrageiro pode ser uma alternativa para silagem. Produção e qualidade variam conforme o híbrido, a região, a época e o manejo; compare a ficha técnica e os resultados de campo antes de estimar sua área.",
+      kind: "interactive",
+      text:
+        "O *Mega Sorgo Santa Elisa* tem marcas que *poucos produtos no Brasil* alcançam 🇧🇷\n\n📈 Mais de *140 toneladas de silagem por hectare ao ano*\n🌾 Porque passa de *5 metros de altura*!\n\nO senhor trabalha com gado de leite ou de corte? 🐄",
+      buttons: [{ id: "f2_leite", title: "Leite 🥛" }, {
+        id: "f2_corte",
+        title: "Corte 🥩",
+      }, { id: "f2_ambos", title: "Os dois 🐄" }],
+      headerSlot: "image",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList(),
+      ...closingList({
+        text: "Quer saber por que ele é *melhor que o milho*? 🤫🌽",
+        row: { id: "f2_continuar", title: "🌽 Quero o segredo" },
+      }) as Peca,
       offset: 280,
     },
   ];
@@ -190,17 +239,24 @@ function fase3(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "media",
-      mediaType: "image",
-      slot: "image",
-      caption:
-        "Alguns materiais de sorgo podem rebrotar após o corte. O volume e a qualidade do segundo corte variam conforme o híbrido, a chuva e o manejo; não são duas colheitas garantidas iguais.",
+      kind: "interactive",
+      text:
+        "O segredo? 🤫\n\n🌽 Ele *REBROTA* — corta e nasce de novo, diferente do milho!\n\nHoje o senhor planta o quê pra silagem?",
+      buttons: [{ id: "f3_milho", title: "Milho 🌽" }, {
+        id: "f3_capim",
+        title: "Capim 🌿",
+      }, { id: "f3_nao", title: "Não planto 🤷" }],
+      headerSlot: "image",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
     { offset: 210, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList(),
+      ...closingList({
+        text:
+          "E quando vem a *praga* e a *seca*? Quer ver como ele segura firme? 💪",
+        row: { id: "f3_continuar", title: "💪 Quero ver" },
+      }) as Peca,
       offset: 280,
     },
   ];
@@ -208,13 +264,18 @@ function fase3(): Peca[] {
 
 function fase4(): Peca[] {
   return [
+    // abertura = botão-com-imagem (igual fases 2/3): os 2 textos de praga/seca foram fundidos
+    // no corpo do interactive -> uma mensagem só, abrindo com a imagem (header_image).
     {
       offset: 0,
-      kind: "media",
-      mediaType: "image",
-      slot: "image",
-      caption:
-        "O sorgo pode ter vantagem em condições de menor disponibilidade de água, mas seca e pragas ainda podem afetar a lavoura. O resultado depende do híbrido, da região e do manejo.",
+      kind: "interactive",
+      text:
+        "🐛 *Resistente às pragas!*\nLagarta e cigarrinha não derrubam o Mega Sorgo.\n\n☀️ *Aguenta a seca!*\nGarante a sua silagem mesmo no ano mais difícil.\n\nO senhor já perdeu lavoura pra praga ou seca? 😟",
+      buttons: [{ id: "f4_ja", title: "Já sim 😔" }, {
+        id: "f4_nunca",
+        title: "Nunca, graças 🙏",
+      }],
+      headerSlot: "image",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
@@ -227,22 +288,30 @@ function fase4(): Peca[] {
     },
     { offset: 280, kind: "media", mediaType: "video", slot: "video" },
     {
-      ...closingList(),
+      ...closingList({
+        text: "Quer *garantir o seu* pra safra 2027? 🚜",
+        row: { id: "f4_continuar", title: "🚜 Quero garantir" },
+      }) as Peca,
       offset: 350,
     },
   ];
 }
 
-// Fase 5 — oferta + LOGÍSTICA + cotação sem preço automático.
-// Endereço/CEP enviados livremente são detectados por isFechamentoIntent (shared/intent.ts),
-// que pausa o funil e encaminha para atendimento.
+// Fase 5 — oferta + LOGÍSTICA + entrada de 2 kg.
+// A logística (depósitos, nota fiscal, rastreio, frete) é quebra de objeção pesada pra quem
+// compra semente pela internet e não existia em nenhuma fase. A oferta de 2 kg baixa a
+// barreira: "testar antes de ampliar" converte melhor que "condição especial" genérica.
+// O gancho final pede CIDADE/CEP de propósito — a resposta dispara isFechamentoIntent
+// (shared/intent.ts), que pausa o funil e atribui a conversa pro atendente.
 function fase5(): Peca[] {
   return [
     {
       offset: 0,
-      kind: "text",
+      kind: "interactive",
       text:
-        "Se quiser consultar os pacotes e a condição vigente, use a opção *Preço* no menu ao final. A disponibilidade é confirmada antes de fechar o pedido.",
+        "🌾 Estamos com uma *condição especial* no lote dessa safra!\n\n⚠️ Mas o lote é *limitado* e tá saindo rápido 🏃\n\nPosso te passar a *condição especial*? 💰",
+      buttons: [{ id: "f5_sim", title: "Sim, quero 💰" }],
+      headerSlot: "image",
     },
     { offset: 70, kind: "media", mediaType: "audio", slot: "audio1" },
     { offset: 140, kind: "media", mediaType: "audio", slot: "audio2" },
@@ -264,33 +333,50 @@ function fase5(): Peca[] {
       slot: "logistica_img",
       mediaDay: 0,
     },
-    { offset: 350, kind: "media", mediaType: "video", slot: "video" },
+    // O catálogo de 30/09 não tinha vídeo da fase 5; a fila real continha 31 peças.
+    // Oferta de entrada COM a foto do saco de 2 kg em vez de texto solto -- o produtor vê o
+    // que vai receber. Legenda no lugar do texto: é a mesma mensagem, uma peça só.
     {
       offset: 420,
-      kind: "text",
-      text:
-        "🚚 O frete é grátis e o desconto é progressivo por quantidade: pode chegar a 30% em pedidos acima de 100 kg.\n\n📦 O valor exato depende do volume. Toque em *Preço* no menu e diga a quantidade ou a área que pretende plantar para receber a cotação.",
+      kind: "media",
+      mediaType: "image",
+      slot: "preco_2kg",
+      mediaDay: 0,
+      caption:
+        "📦 Nosso menor volume é o saco de *2 kg* — dá pra plantar até *0,5 hectare*.\n\n🌱 É a opção de quem quer testar a variedade na propriedade antes de ampliar.\n\n💡 Muito produtor começa assim e depois aumenta a área com confiança.",
     },
     // Oferta da isca (imagem + Sim/Não). Antes do fechamento porque a última peça precisa
     // ser a lista que pede o CEP. Sem isca cadastrada, some e o fechamento volta pra 490.
     ...(iscasAtivas().length ? [ofertaIsca(iscasAtivas()[0], 490)] : []),
     {
-      ...closingList(),
+      ...closingList({
+        text:
+          "📍 Me informa sua *cidade e estado* (ou o CEP) que já te passo o prazo de entrega pela rota mais próxima.",
+        row: { id: "f5_local", title: "📍 Vou informar" },
+      }) as Peca,
       offset: iscasAtivas().length ? 560 : 490,
     },
   ];
 }
 
-function faseComercialV2(): Peca[] {
+export const FASES: (() => Peca[])[] = [fase1, fase2, fase3, fase4, fase5];
+
+export const FASES_LEGADAS: (() => Peca[])[] = FASES;
+
+// Inícios manuais fora de um lead de anúncio no 5895 preservam a abertura anterior.
+function faseAberturaForaDoAnuncio(): Peca[] {
   return [
     {
       offset: 0,
       kind: "text",
-      text: "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
+      opening: true,
+      text:
+        "Olá! Aqui é o Cícero, da Campo Soberano. Para eu te orientar sem mandar informação que não serve para sua necessidade, escolha um assunto abaixo.",
     },
     {
       offset: 70,
       kind: "list",
+      opening: true,
       text: "Como posso ajudar?",
       buttonLabel: "Escolher assunto",
       sections: [{
@@ -304,40 +390,32 @@ function faseComercialV2(): Peca[] {
     },
   ];
 }
+const FASES_FORA_DO_ANUNCIO: (() => Peca[])[] = [faseAberturaForaDoAnuncio];
+const FIM_ABERTURA_FORA_DO_ANUNCIO = 560;
 
-// FASES representa a jornada usada em novas inscrições. A antiga sequência longa permanece
-// exportada apenas para leitura/teste de filas históricas; nenhum reenvio é feito aqui.
-export const FASES_LEGADAS: (() => Peca[])[] = [
-  fase1,
-  fase2,
-  fase3,
-  fase4,
-  fase5,
-];
-export const FASES: (() => Peca[])[] = [faseComercialV2];
-
-// calcula o timestamp de início (ms) de cada acesso: encadeia GAPS a partir do fim (lista de
-// fechamento) do acesso anterior e aplica horário comercial. Garante que o acesso cabe inteiro.
+// Calcula o início de cada fase encadeando GAPS a partir da peça anterior e aplica a janela
+// comercial. A fase restaurada tem duração de 560 segundos.
 export function iniciosDosAcessos(
   agora: number,
   gaps: number[],
   skipClamp: boolean,
   immediateFirst = false,
+  phaseDurationSec = FIM_ACESSO,
 ): number[] {
   const clamp = (ms: number) =>
-    skipClamp ? ms : clampBusinessTime(ms, FIM_ACESSO);
+    skipClamp ? ms : clampBusinessTime(ms, phaseDurationSec);
   const inicios: number[] = [];
   let fimAnterior = clamp(agora);
   for (let i = 0; i < gaps.length; i++) {
-    // Automático respeita 6h-22h desde a primeira peça. Manual/fast passa skipClamp=true
+    // Automático respeita 6h-20h55 desde a primeira peça. Manual/fast passa skipClamp=true
     // e continua imediato, inclusive fora do horário comercial.
     const ini = i === 0
       ? immediateFirst ? agora : clamp(agora)
       : skipClamp
       ? fimAnterior + gaps[i] * 1000
-      : addBusinessSeconds(fimAnterior, gaps[i], FIM_ACESSO);
+      : addBusinessSeconds(fimAnterior, gaps[i], phaseDurationSec);
     inicios.push(ini);
-    fimAnterior = ini + FIM_ACESSO * 1000;
+    fimAnterior = ini + phaseDurationSec * 1000;
   }
   return inicios;
 }
@@ -346,7 +424,9 @@ export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
   const token = url.searchParams.get("token") ?? "";
-  if (!confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")) {
+  if (
+    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")
+  ) {
     return json({ error: "unauthorized" }, 401);
   }
 
@@ -356,41 +436,150 @@ export async function handle(req: Request): Promise<Response> {
     return json({ error: "chatwoot_conversation_id obrigatório" }, 400);
   }
   const force = body.force === true || body.force === "true";
+  const manual = body.manual === true || body.manual === "true";
+  const repairMissingOpening = body.repair_missing_opening === true ||
+    body.repair_missing_opening === "true";
+  const requestedOpeningReason = body.opening_reason === "intent_answered" ||
+      body.opening_reason === "human_handoff"
+    ? body.opening_reason
+    : null;
+  const skipOpening = body.skip_opening === true &&
+    requestedOpeningReason !== null;
+  const allowedOriginSignals = new Set([
+    "meta_referral",
+    "persisted_ad_origin",
+    "default_ad_message",
+    "social_opening",
+    "configured_keyword",
+  ]);
+  const originSignal = allowedOriginSignals.has(String(body.origin_signal))
+    ? String(body.origin_signal)
+    : null;
 
   const db = admin();
-  const { data: conv } = await db.from("conversations").select(
-    "id, chatwoot_conversation_id, contacts(attributes)",
+  const { data: conv, error: conversationError } = await db.from(
+    "conversations",
+  ).select(
+    "id, channel_id, origem, chatwoot_conversation_id, contacts(attributes)",
   )
     .eq("chatwoot_conversation_id", cwConvId).maybeSingle();
+  if (conversationError) {
+    return json({
+      error: `falha ao consultar conversa: ${conversationError.message}`,
+    }, 500);
+  }
   if (!conv) return json({ error: "conversa não encontrada" }, 404);
+
+  const { data: funnelChannel, error: channelError } = await db.from("channels")
+    .select("name,external_id,phone_number")
+    .eq("id", conv.channel_id).maybeSingle();
+  if (channelError) {
+    return json(
+      { error: `falha ao consultar canal: ${channelError.message}` },
+      500,
+    );
+  }
+  if (!funnelChannel) {
+    return json({ error: "canal da conversa não encontrado" }, 500);
+  }
+  const usaReguaDoCanal = usaNovoFunilNoCanal(
+    funnelChannel,
+    CANAL_ANUNCIO_ALVO,
+  );
+  const funnelId = mainFunnelForChannel(funnelChannel);
+  const fasesDaInscricao = usaReguaDoCanal ? FASES : FASES_FORA_DO_ANUNCIO;
+  const duracaoDaFase = usaReguaDoCanal
+    ? FIM_ACESSO
+    : FIM_ABERTURA_FORA_DO_ANUNCIO;
 
   // Contato marcado com a etiqueta "nao-compra" (bridge/handlers/funil-control.ts,
   // ação marcar-nao-compra) nunca mais entra no funil -- nem auto-enroll, nem clique manual
   // "iniciar funil", nem recuperação, porque os três caminhos convergem nesta função.
   const allowPaid = body.allow_paid === true || body.allow_paid === "true";
-  if (isContactBlocked(conv.contacts) ||
-    (!allowPaid && isContactExcludedFromAutomation(conv.contacts))) {
+  if (
+    isContactBlocked(conv.contacts) ||
+    (!allowPaid && isContactExcludedFromAutomation(conv.contacts))
+  ) {
     return json({ ok: false, blocked: "contato-bloqueado" }, 422);
   }
 
-  // dedup: já está no funil? force=true -> limpa a sequência + a fila antiga e re-enfileira
-  // (re-teste). Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
-  const { data: existing } = await db.from("sales_sequences").select("id")
-    .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
-  if (existing) {
-    if (!force) return json({ ok: true, already: true });
-    await db.from("scheduled_messages").delete().eq("conversation_id", conv.id);
-    await db.from("sales_sequences").delete().eq("conversation_id", conv.id).eq(
-      "funnel",
-      FUNNEL,
-    );
+  // dedup: um comando repetido nunca pode apagar uma sequência em andamento ou pausada.
+  // force fica restrito a sequências terminais e só é usado em re-teste explícito.
+  // Chave por conversation_id (UUID) -- pega linhas com chatwoot_conversation_id nulo.
+  const { data: existing, error: existingError } = await db.from(
+    "sales_sequences",
+  ).select(
+    "id,status",
+  )
+    .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
+  if (existingError) {
+    return json({
+      error: `falha ao consultar sequência: ${existingError.message}`,
+    }, 500);
   }
-
+  if (existing) {
+    const existingStatus = String(existing.status ?? "");
+    const forceEligible = force &&
+      ["completed", "cancelled"].includes(existingStatus);
+    const hasDeliveryEvidence = repairMissingOpening
+      ? await hasFunnelDeliveryEvidence(db, String(conv.id), funnelId)
+      : true;
+    const repairEligible = canRecreateMissingOpening({
+      requested: repairMissingOpening,
+      hasSequence: true,
+      hasDeliveryEvidence,
+    });
+    if (!forceEligible && !repairEligible) {
+      const [openingComplete, openingEvidence] = await Promise.all([
+        openingMessagesComplete(db, String(conv.id), funnelId),
+        hasFunnelDeliveryEvidence(db, String(conv.id), funnelId),
+      ]);
+      return json({
+        ok: true,
+        already: true,
+        sequence_status: existingStatus,
+        opening_complete: openingComplete,
+        opening_evidence: openingEvidence,
+      });
+    }
+    const { error: cancelError } = await db.from("scheduled_messages").update({
+      status: "cancelled",
+    }).eq("conversation_id", conv.id).eq("funnel", funnelId).in(
+      "status",
+      ["pending", "paused"],
+    );
+    if (cancelError) return json({ error: cancelError.message }, 500);
+    const { error: deleteError } = await db.from("sales_sequences").delete().eq(
+      "id",
+      existing.id,
+    );
+    if (deleteError) return json({ error: deleteError.message }, 500);
+  } else if (repairMissingOpening) {
+    const openingEvidence = await hasFunnelDeliveryEvidence(
+      db,
+      String(conv.id),
+      funnelId,
+    );
+    if (openingEvidence) {
+      const openingComplete = await openingMessagesComplete(
+        db,
+        String(conv.id),
+        funnelId,
+      );
+      return json({
+        ok: true,
+        already: true,
+        sequence_status: "missing",
+        opening_complete: openingComplete,
+        opening_evidence: true,
+      });
+    }
+  }
   // carrega a faixa e agrupa por dia+slot pra sortear
   const { data: media } = await db.from("funnel_media").select(
     "day,slot,url,caption,type",
   )
-    .eq("funnel", FUNNEL).eq("active", true);
+    .eq("funnel", FUNNEL_LEGACY).eq("active", true);
   const banco = new Map<string, Json[]>();
   for (const m of (media ?? []) as Json[]) {
     const k = `${m.day}:${m.slot}`;
@@ -402,28 +591,37 @@ export async function handle(req: Request): Promise<Response> {
     return arr[Math.floor(Math.random() * arr.length)];
   };
 
-  const fast = body.fast === true || body.fast === "true";
-  const turbo = body.turbo === true || body.turbo === "true";
-  const manual = body.manual === true || body.manual === "true";
+  // Blindagem de produção: os modos de teste (fast/turbo) colapsam as fases em ~40min e NÃO
+  // podem rodar com lead real. Só valem com FUNIL_ALLOW_TEST_MODE=true no ambiente; sem isso,
+  // ignorados mesmo se o body pedir.
+  const allowTestMode = optionalEnv("FUNIL_ALLOW_TEST_MODE") === "true";
+  const fast = allowTestMode && (body.fast === true || body.fast === "true");
+  const turbo = allowTestMode && (body.turbo === true || body.turbo === "true");
+  if (!allowTestMode && (body.fast || body.turbo)) {
+    console.warn(
+      "funil-enroll: fast/turbo IGNORADO (FUNIL_ALLOW_TEST_MODE != true) — usando ritmo real",
+    );
+  }
   const agora = Date.now();
-  // TURBO (teste): começa agora, mas encadeia cada fase depois do fechamento da anterior.
-  // Assim o teste cabe em ~45min sem misturar as aberturas, mídias e botões das fases.
-  const turboGaps = [0, 0, 0, 0, 0];
+  // TURBO (teste): começa agora e mantém 70s entre momentos, sem horário comercial.
+  const turboGaps = [0, 70, 70, 70, 70];
   const inicios = turbo
-    ? iniciosDosAcessos(agora, turboGaps, true)
+    ? iniciosDosAcessos(agora, turboGaps, true, false, duracaoDaFase)
     : fast
-    ? iniciosDosAcessos(agora, GAPS_FAST, true)
-    : iniciosDosAcessos(agora, GAPS, false, manual);
+    ? iniciosDosAcessos(agora, GAPS_FAST, true, false, duracaoDaFase)
+    : iniciosDosAcessos(agora, GAPS, false, manual, duracaoDaFase);
   const rows: Json[] = [];
-  for (let i = 0; i < FASES.length; i++) {
+
+  for (let i = 0; i < fasesDaInscricao.length; i++) {
     const dia = i + 1;
-    for (const p of FASES[i]()) {
+    for (const p of fasesDaInscricao[i]()) {
+      if (skipOpening && "opening" in p && p.opening) continue;
       const sendAt = new Date(inicios[dia - 1] + p.offset * 1000).toISOString();
       if (p.kind === "text") {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "text",
@@ -434,7 +632,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "text_sequence",
@@ -445,12 +643,17 @@ export async function handle(req: Request): Promise<Response> {
         const header = p.headerSlot
           ? pick(p.mediaDay ?? dia, p.headerSlot)
           : null;
+        if (usaReguaDoCanal && p.headerSlot && !header?.url) {
+          return json({
+            error: `mídia obrigatória ausente: dia ${p.mediaDay ?? dia}, slot ${p.headerSlot}`,
+          }, 503);
+        }
         const payload: Json = { text: p.text, buttons: p.buttons };
         if (header?.url) payload.header_image = header.url;
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "interactive",
@@ -466,7 +669,7 @@ export async function handle(req: Request): Promise<Response> {
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: "list",
@@ -475,14 +678,21 @@ export async function handle(req: Request): Promise<Response> {
         });
       } else {
         const m = pick(p.mediaDay ?? dia, p.slot);
-        if (!m?.url) continue; // sem mídia cadastrada nesse slot -> pula
+        if (!m?.url) {
+          if (usaReguaDoCanal) {
+            return json({
+              error: `mídia obrigatória ausente: dia ${p.mediaDay ?? dia}, slot ${p.slot}`,
+            }, 503);
+          }
+          continue;
+        }
         const payload: Json = { media_url: m.url };
         const cap = (p.caption ?? "") || (m.caption as string ?? "");
         if (cap && p.mediaType !== "audio") payload.caption = cap;
         rows.push({
           conversation_id: conv.id,
           chatwoot_conversation_id: cwConvId,
-          funnel: FUNNEL,
+          funnel: funnelId,
           day: dia,
           step: rows.length,
           type: p.mediaType,
@@ -493,20 +703,57 @@ export async function handle(req: Request): Promise<Response> {
     }
   }
 
-  const { error: sequenceError } = await db.from("sales_sequences").insert({
-    conversation_id: conv.id,
-    chatwoot_conversation_id: cwConvId,
-    funnel: FUNNEL,
-    status: "running",
-  });
+  if (rows.length === 0) {
+    await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "commercial_funnel_opening_skipped",
+      payload: {
+        conversation_id: conv.id,
+        origin_signal: originSignal,
+        opening_reason: skipOpening ? requestedOpeningReason : null,
+      },
+    });
+    return json({ ok: true, enqueued: 0, skipped: true });
+  }
+
+  const sequenceStatus = "running";
+  const enrollmentId = crypto.randomUUID();
+  for (const row of rows) {
+    const messagePayload = row.payload && typeof row.payload === "object"
+      ? row.payload as Json
+      : {};
+    row.payload = { ...messagePayload, __funnel_sequence_id: enrollmentId };
+  }
+  const { data: createdSequence, error: sequenceError } = await db
+    .from("sales_sequences").insert({
+      conversation_id: conv.id,
+      chatwoot_conversation_id: cwConvId,
+      funnel: funnelId,
+      status: sequenceStatus,
+    }).select("id").single();
   if (sequenceError) {
+    if ((sequenceError as { code?: string }).code === "23505") {
+      return json({ ok: true, already: true });
+    }
     return json(
       { error: `falha ao criar sequência: ${sequenceError.message}` },
       500,
     );
   }
-  const { error } = await db.from("scheduled_messages").insert(rows);
-  if (error) return json({ error: error.message }, 500);
+  if (rows.length > 0) {
+    const { error } = await db.from("scheduled_messages").insert(rows);
+    if (error) {
+      const { error: rollbackError } = await db.from("sales_sequences")
+        .delete().eq("id", createdSequence.id);
+      if (rollbackError) {
+        console.error(
+          "funil v2: não foi possível remover sequência sem mensagens",
+          rollbackError,
+        );
+      }
+      return json({ error: error.message }, 500);
+    }
+  }
 
   const { error: versionEventError } = await db.from("events").insert({
     source: "sales-funnel",
@@ -515,13 +762,24 @@ export async function handle(req: Request): Promise<Response> {
       conversation_id: conv.id,
       chatwoot_conversation_id: cwConvId,
       version: 2,
+      origin_signal: originSignal,
+      opening_skipped: skipOpening,
+      opening_reason: skipOpening ? requestedOpeningReason : null,
+      queued_messages: rows.length,
     },
   });
   if (versionEventError) {
-    console.warn("funil v2: falha ao registrar versão:", versionEventError.message);
+    console.warn(
+      "funil v2: falha ao registrar versão:",
+      versionEventError.message,
+    );
   }
 
-  return json({ ok: true, enfileiradas: rows.length });
+  return json({
+    ok: true,
+    enfileiradas: rows.length,
+    sequence_status: sequenceStatus,
+  });
 }
 
 function json(obj: unknown, status = 200): Response {
@@ -532,12 +790,9 @@ function json(obj: unknown, status = 200): Response {
 }
 
 // ── Entrada AUTOMÁTICA no funil (leads de anúncio) ─────────────────────────────
-// Liga via env (desligado se não setar):
-//   FUNIL_AUTO_ENROLL_CHANNEL = nome ou external_id do canal (ex: "5895")
-//   FUNIL_KEYWORD             = (opcional) só entra se a msg contiver a palavra-chave do anúncio
+// Para anúncios, o canal 5895 é fixo; referral/origem/mensagem padrão são os sinais principais.
+//   FUNIL_KEYWORD = fallback opcional por palavra-chave quando não há sinal de anúncio.
 // Chamado pelo hub-webhook a cada entrada. Dedup: 1 funil por conversa (sales_sequences).
-const CANAIS_SOCIAIS = new Set(["facebook", "instagram"]);
-
 /** Frases extras de anúncio, para acrescentar um icebreaker novo sem deploy. */
 export function icebreakersConfigurados(): string[] {
   return (optionalEnv("FUNIL_ICEBREAKERS") ?? "")
@@ -557,23 +812,163 @@ export async function ehAberturaDeAnuncioSocial(
   channel: Json,
   from: string,
   content: string,
-): Promise<boolean> {
-  if (!CANAIS_SOCIAIS.has(String(channel.type ?? ""))) return false;
-  if (!pareceAberturaComercial(content, icebreakersConfigurados())) return false;
+  fromAd = false,
+  activeConversation?: Json | null,
+): Promise<SocialLeadEntry> {
+  if (funnelVersionForChannel(channel) !== SOCIAL_N8N_FUNNEL) return null;
+  const conversation = activeConversation ?? await activeConversationForContact(db, channel, from);
+  if (!conversation?.id) return null;
+  const { count, error: messageCountError } = await db.from("messages")
+    .select("id", { count: "exact", head: true })
+    .eq("conversation_id", conversation.id).eq("direction", "in");
+  if (messageCountError) throw messageCountError;
+  return socialLeadEntry({
+    hasReferral: fromAd,
+    persistedAdOrigin: conversation.origem === "anuncio",
+    inboundCount: count ?? 0,
+    openedAt: typeof conversation.opened_at === "string" ? conversation.opened_at : null,
+    text: content,
+    icebreakers: icebreakersConfigurados(),
+  });
+}
 
-  const { data: contact } = await db.from("contacts").select("id")
+export type AutoEnrollResult = {
+  adOrigin: boolean;
+  humanHandoff: boolean;
+  deferIntent: boolean;
+};
+
+type EnrollOpeningOptions = {
+  skipOpening?: boolean;
+  force?: boolean;
+  repairMissingOpening?: boolean;
+  manual?: boolean;
+  openingReason?: "intent_answered" | "human_handoff";
+  originSignal?: string;
+  conversation?: Json | null;
+};
+
+type EnrollOutcome =
+  | "created"
+  | "already"
+  | "blocked"
+  | "in_progress"
+  | "no_contact"
+  | "no_conversation";
+
+async function activeConversationForContact(
+  db: ReturnType<typeof admin>,
+  channel: Json,
+  from: string,
+): Promise<Json | null> {
+  const { data: contact, error: contactError } = await db.from("contacts")
+    .select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-  if (!contact) return false;
-  const { data: conv } = await db.from("conversations").select("id")
+  if (contactError) throw contactError;
+  if (!contact) return null;
+
+  const { data: conversation, error: conversationError } = await db.from(
+    "conversations",
+  )
+    .select("id, chatwoot_conversation_id, origem, opened_at")
     .eq("contact_id", contact.id).neq("status", "resolved")
     .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-  if (!conv) return false;
+  if (conversationError) throw conversationError;
+  return conversation as Json | null;
+}
 
-  // 1 = a que acabou de ser gravada. Acima disso a conversa já estava em andamento.
-  const { count } = await db.from("messages")
-    .select("id", { count: "exact", head: true })
-    .eq("conversation_id", conv.id).eq("direction", "in");
-  return (count ?? 0) <= 1;
+function parecePerguntaDeAnuncio(content: string): boolean {
+  const text = content.trim();
+  return text.includes("?") ||
+    pareceAberturaComercial(text, icebreakersConfigurados());
+}
+
+async function enqueueDeferredAdRoute(
+  db: ReturnType<typeof admin>,
+  conversation: Json,
+  route: string,
+  sourceMessageId: string | null,
+  funnelId: string,
+): Promise<void> {
+  const conversationId = String(conversation.id ?? "");
+  const chatwootConversationId = Number(conversation.chatwoot_conversation_id);
+  if (!conversationId || !chatwootConversationId) {
+    throw new Error("conversa sem identificador Chatwoot para adiar rota");
+  }
+
+  const { data: existing, error: existingError } = await db.from(
+    "scheduled_messages",
+  ).select("id,status").eq("conversation_id", conversationId)
+    .eq("funnel", funnelId).eq("type", "deferred_intent")
+    .in("status", ["pending", "paused"]).limit(1);
+  if (existingError) throw existingError;
+
+  const { data: openingRows, error: openingError } = await db.from(
+    "scheduled_messages",
+  ).select("step,send_at,type").eq("conversation_id", conversationId)
+    .eq("funnel", funnelId).eq("day", 1).limit(100);
+  if (openingError) throw openingError;
+  const openings = (openingRows ?? []).filter((row: Json) =>
+    row.type !== "deferred_intent"
+  );
+
+  const latestOpeningAt = Math.max(
+    ...openings.map((row: Json) => Date.parse(String(row.send_at ?? "")))
+      .filter(Number.isFinite),
+  );
+  const sendAtMs = Number.isFinite(latestOpeningAt)
+    ? Math.max(Date.now() + 30_000, latestOpeningAt + 20_000)
+    : Date.now() + 120_000;
+  const step = openings.length
+    ? Math.max(
+      ...openings.map((row: Json) => Number(row.step ?? 0)).filter(
+        Number.isFinite,
+      ),
+      0,
+    ) + 1
+    : 2;
+  const claimId = "deferred-ad-route:" + conversationId + ":" +
+    (sourceMessageId ?? "initial");
+  if (!await claimDelivery(db, claimId, "deferred-ad-route")) return;
+
+  try {
+    const payload = {
+      __deferred_action: route,
+      __source_message_id: sourceMessageId,
+    };
+    const error = existing?.length
+      ? (await db.from("scheduled_messages").update({
+        payload,
+        send_at: new Date(sendAtMs).toISOString(),
+      }).eq("id", existing[0].id).in("status", ["pending", "paused"])).error
+      : (await db.from("scheduled_messages").insert({
+        conversation_id: conversationId,
+        chatwoot_conversation_id: chatwootConversationId,
+        funnel: funnelId,
+        day: 1,
+        step,
+        type: "deferred_intent",
+        // O n8n consome somente status=pending. A fila local processa este estado
+        // reservado após a abertura, sem expor um tipo desconhecido ao consumidor externo.
+        status: "paused",
+        payload,
+        send_at: new Date(sendAtMs).toISOString(),
+      })).error;
+    if (error) throw error;
+    await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "ad_route_deferred",
+      payload: {
+        conversation_id: conversationId,
+        route,
+        source_message_id: sourceMessageId,
+        send_at: new Date(sendAtMs).toISOString(),
+      },
+    });
+  } catch (error) {
+    await releaseDelivery(db, claimId);
+    throw error;
+  }
 }
 
 export async function autoEnrollFunil(
@@ -582,15 +977,26 @@ export async function autoEnrollFunil(
   from: string,
   content: string,
   fromAd = false,
-): Promise<void> {
-  // Um pedido já claro deve ir para sua resposta imediata; não deve ganhar uma régua paralela.
-  if (classificarIntencaoComercial(content)) return;
-  // A mensagem pré-preenchida do anúncio e o referral da Meta são sinais
-  // suficientes mesmo sem configuração adicional no ambiente.
-  if (fromAd || isDefaultAdMessage(content)) {
-    await enrollIfNew(db, channel, from);
-    return;
+  options: {
+    responseWillHandle?: boolean;
+    humanHandoffWillHandle?: boolean;
+    sourceMessageId?: string | null;
+  } = {},
+): Promise<AutoEnrollResult> {
+  const funnelId = funnelVersionForChannel(channel);
+  if (!funnelId) {
+    return { adOrigin: false, humanHandoff: false, deferIntent: false };
   }
+  const conversation = await activeConversationForContact(db, channel, from);
+  let originSignal: string | null = funnelId === SOCIAL_N8N_FUNNEL
+    ? null
+    : fromAd
+    ? "meta_referral"
+    : conversation?.origem === "anuncio"
+    ? "persisted_ad_origin"
+    : isDefaultAdMessage(content)
+    ? "default_ad_message"
+    : null;
 
   // Facebook e Instagram: pergunta comercial NA ABERTURA vale como lead de anúncio.
   //
@@ -601,57 +1007,325 @@ export async function autoEnrollFunil(
   // Só na abertura, e só nesses canais. No WhatsApp a inscrição já funciona por outro caminho
   // (63 de 67 aberturas comerciais entraram no funil nos mesmos 5 dias), e alargar a regra lá
   // pegaria quem chega por indicação, não por anúncio.
-  if (await ehAberturaDeAnuncioSocial(db, channel, from, content)) {
-    await enrollIfNew(db, channel, from);
-    return;
+  if (funnelId === SOCIAL_N8N_FUNNEL) {
+    const socialEntry = await ehAberturaDeAnuncioSocial(
+      db,
+      channel,
+      from,
+      content,
+      fromAd,
+      conversation,
+    );
+    originSignal = socialEntry === "ad_referral"
+      ? "meta_referral"
+      : socialEntry === "commercial_fallback"
+      ? "social_opening"
+      : null;
   }
 
-  const alvo = (optionalEnv("FUNIL_AUTO_ENROLL_CHANNEL") ?? "").trim();
-  if (!alvo) return; // desligado por padrão
-  if (channel.name !== alvo && channel.external_id !== alvo) return;
-  const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
-  // match tolerante: ignora maiúscula/minúscula E acentos ("INFORMAÇÕES" == "informacoes"),
-  // e basta a palavra-chave estar CONTIDA na msg (lead pode escrever coisa a mais em volta).
-  if (kw && !foldText(content).includes(foldText(kw))) return;
+  // Sinais de anúncio têm precedência: preço, dúvida técnica e demais intenções não podem
+  // impedir a inscrição quando a Meta ou a conversa já confirmou a origem.
+  if (!originSignal) {
+    if (funnelId === SOCIAL_N8N_FUNNEL) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
+    // Um pedido orgânico já claro deve ir para sua resposta imediata, sem régua paralela.
+    if (classificarIntencaoComercial(content)) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
 
-  await enrollIfNew(db, channel, from);
+    const kw = (optionalEnv("FUNIL_KEYWORD") ?? "").trim();
+    // Sem referral/origem, só a mensagem padrão ou uma palavra-chave explícita são sinais.
+    if (!kw || !foldText(content).includes(foldText(kw))) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
+    originSignal = "configured_keyword";
+  }
+
+  const adFunnelOrigin = isAdFunnelOriginSignal(originSignal);
+  if (funnelId === SOCIAL_N8N_FUNNEL && conversation?.id) {
+    const { data: oldSequences, error: oldSequenceError } = await db
+      .from("sales_sequences").select("id")
+      .eq("conversation_id", conversation.id)
+      .eq("funnel", LEGACY_MAIN_FUNNEL).limit(1);
+    if (oldSequenceError) throw oldSequenceError;
+    if (oldSequences?.length) {
+      return { adOrigin: true, humanHandoff: false, deferIntent: false };
+    }
+  }
+  if (adFunnelOrigin && conversation?.id) {
+    const { data: existingSequence, error: sequenceLookupError } = await db
+      .from("sales_sequences").select("id")
+      .eq("conversation_id", conversation.id).eq("funnel", funnelId)
+      .maybeSingle();
+    if (sequenceLookupError) throw sequenceLookupError;
+    if (!existingSequence) {
+      const { count, error: inboundCountError } = await db.from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversation.id).eq("direction", "in");
+      if (inboundCountError) throw inboundCountError;
+      if (deveIgnorarInscricaoHistorica(
+        false,
+        count ?? 0,
+        typeof conversation.opened_at === "string"
+          ? conversation.opened_at
+          : null,
+      )) {
+        console.log(
+          "autoEnrollFunil: inscrição histórica ignorada",
+          String(conversation.id),
+        );
+        return { adOrigin: true, humanHandoff: false, deferIntent: false };
+      }
+    }
+  }
+  const humanHandoffWillHandle = options.humanHandoffWillHandle === true;
+  const unsupportedQuestion = !options.responseWillHandle &&
+    !humanHandoffWillHandle &&
+    parecePerguntaDeAnuncio(content);
+  // Perguntas iniciais de anúncio recebem a abertura; o handoff ou a rota específica
+  // são executados em seguida, pela fila da etapa adiada.
+  // Na versão restaurada a pergunta de entrega recebe resposta curta e o
+  // roteiro continua. O handoff antigo parava as 31 peças antes da saudação.
+  const automaticHandoff = deveEncaminharPerguntaDeAnuncio(
+    funnelId,
+    unsupportedQuestion,
+  ) ||
+    (adFunnelOrigin && funnelId !== RESTORED_5895_FUNNEL &&
+      funnelId !== SOCIAL_N8N_FUNNEL &&
+      isLogisticaIntent(content));
+  const openingReason = humanHandoffWillHandle || automaticHandoff
+    ? "human_handoff"
+    : options.responseWillHandle
+    ? "intent_answered"
+    : undefined;
+
+  let outcome: EnrollOutcome;
+  try {
+    outcome = await enrollIfNew(db, channel, from, {
+      // A resposta específica ou o handoff humano substitui a abertura genérica
+      // nos outros canais. O 5895 usa sempre a versão fiel do n8n.
+      skipOpening: funnelId === SOCIAL_N8N_FUNNEL
+        ? false
+        : suprimirAberturaGenerica(Boolean(openingReason)),
+      openingReason,
+      originSignal,
+      conversation,
+    });
+  } catch (error) {
+    console.error("autoEnrollFunil inscrição falhou:", error);
+    // O watchdog retenta a mesma ação estável quando o n8n volta. Não inserir
+    // um conteúdo local diferente na conversa durante a falha.
+    outcome = "in_progress";
+  }
+  if (funnelId === SOCIAL_N8N_FUNNEL && outcome === "created" && conversation?.id) {
+    const { error: originEventError } = await db.from("events").insert({
+      source: "sales-funnel",
+      event_type: "social_n8n_enrolled",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conversation.id,
+        funnel_version: funnelId,
+        origin: originSignal === "social_opening" ? "commercial_fallback" : "ad_referral",
+      },
+    });
+    if (originEventError) console.warn("social_n8n_enrolled: falha ao registrar origem");
+  }
+  let deferIntent = shouldDeferInitialAdIntent(originSignal, outcome) &&
+    !openingReason;
+  if (
+    !openingReason && !deferIntent && adFunnelOrigin && outcome === "already" &&
+    conversation?.id
+  ) {
+    try {
+      const conversationId = String(conversation.id);
+      const openingComplete = await openingMessagesComplete(
+        db,
+        conversationId,
+        funnelId,
+      );
+      deferIntent = !openingComplete;
+
+      // Uma sequência sem fila nem mensagem de abertura é lixo de estado:
+      // reabre com o mesmo lock, mas qualquer tentativa registrada bloqueia duplicação.
+      if (!openingComplete) {
+        const hasDeliveryEvidence = await hasFunnelDeliveryEvidence(
+          db,
+          conversationId,
+          funnelId,
+        );
+        if (!hasDeliveryEvidence) {
+          outcome = await enrollIfNew(db, channel, from, {
+            repairMissingOpening: true,
+            originSignal,
+            conversation,
+          });
+          deferIntent = !await openingMessagesComplete(
+            db,
+            conversationId,
+            funnelId,
+          );
+        }
+      }
+    } catch (error) {
+      console.error("autoEnrollFunil leitura da abertura falhou:", error);
+      // Se não der para confirmar que a abertura terminou, não deixe a rota lateral
+      // pausar ou atravessar o funil principal nesta mensagem.
+      deferIntent = true;
+    }
+  }
+  if (deferIntent && adFunnelOrigin && conversation?.id) {
+    const route = deferredAdRoute(content);
+    if (route) {
+      try {
+        await enqueueDeferredAdRoute(
+          db,
+          conversation,
+          route,
+          options.sourceMessageId ?? null,
+          funnelId,
+        );
+      } catch (error) {
+        console.error(
+          "autoEnrollFunil não conseguiu enfileirar a rota pós-abertura:",
+          error,
+        );
+        await db.from("events").insert({
+          source: "sales-funnel",
+          event_type: "deferred_ad_route_failed",
+          payload: {
+            conversation_id: conversation.id,
+            route,
+            source_message_id: options.sourceMessageId ?? null,
+          },
+        });
+      }
+    }
+  }
+
+  // Resposta automática pausa com prazo; handoff humano não retoma sozinho. Vale também
+  // para respostas posteriores. A primeira entrada do anúncio precisa enviar a abertura.
+  if (
+    openingReason && conversation?.id && !deferIntent &&
+    !([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId) &&
+      openingReason === "intent_answered")
+  ) {
+    try {
+      await autoPauseFunil(String(conversation.id), openingReason, {
+        comPrazo: openingReason !== "human_handoff",
+        adOrigin: true,
+        funnel: funnelId,
+      });
+    } catch (error) {
+      console.error("autoEnrollFunil pausa de sequência falhou:", error);
+    }
+  }
+
+  return {
+    adOrigin: true,
+    humanHandoff: !deferIntent &&
+      (humanHandoffWillHandle || automaticHandoff) &&
+      outcome !== "blocked" &&
+      outcome !== "no_contact" && outcome !== "no_conversation",
+    deferIntent,
+  };
 }
 
 export async function enrollIfNew(
   db: ReturnType<typeof admin>,
   channel: Json,
   from: string,
-): Promise<void> {
-  const { data: contact } = await db.from("contacts").select("id")
-    .eq("channel_id", channel.id).eq("external_contact_id", from).maybeSingle();
-  if (!contact) return;
-  const { data: conv } = await db.from("conversations").select(
-    "id, chatwoot_conversation_id",
-  )
-    .eq("contact_id", contact.id).neq("status", "resolved")
-    .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-  if (!conv?.chatwoot_conversation_id) return;
-  const { data: existing } = await db.from("sales_sequences").select("id")
-    .eq("conversation_id", conv.id).eq("funnel", FUNNEL).maybeSingle();
-  if (existing) return;
+  options: EnrollOpeningOptions = {},
+): Promise<EnrollOutcome> {
+  const conv = options.conversation ?? await (async () => {
+    const { data: contact, error: contactError } = await db.from("contacts")
+      .select("id")
+      .eq("channel_id", channel.id).eq("external_contact_id", from)
+      .maybeSingle();
+    if (contactError) throw contactError;
+    if (!contact) return null;
+    const { data: conversation, error: conversationError } = await db.from(
+      "conversations",
+    )
+      .select("id, chatwoot_conversation_id, origem")
+      .eq("contact_id", contact.id).neq("status", "resolved")
+      .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+    if (conversationError) throw conversationError;
+    return conversation as Json | null;
+  })();
+  if (!options.conversation && !conv) return "no_contact";
+  if (!conv) return "no_conversation";
+  if (!conv.chatwoot_conversation_id) return "no_conversation";
+  const funnelId = mainFunnelForChannel(channel);
 
-  const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
-  const res = await handle(
-    new Request(`http://internal/funil-enroll?token=${token}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chatwoot_conversation_id: conv.chatwoot_conversation_id,
+  // Toda porta de inscrição do 5895 (anúncio, macro, saudação e watchdog)
+  // converge no conteúdo do n8n. Uma falha do webhook fica para retentativa;
+  // o roteiro local nunca entra como emissor alternativo.
+  if ([RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)) {
+    const dispatched = await dispatchSoberanoAction({
+      request_id: `funnel-conversation:${conv.id}`,
+      source: options.manual ? "macro" : "ad",
+      chatwoot_conversation_id: Number(conv.chatwoot_conversation_id),
+      action: "funil",
+      funnel_version: funnelId,
+      repair_missing_opening: options.repairMissingOpening === true,
+    });
+    if (!dispatched.ok) throw new Error(`n8n funil: ${dispatched.error}`);
+    return dispatched.duplicate ? "already" : "created";
+  }
+
+  const claimKey = `funil-enroll-${String(conv.id)}`;
+  if (!await claimDeliveryWithTtl(db, claimKey, "funil-enroll", 2 * 60_000)) {
+    return "in_progress";
+  }
+
+  try {
+    const { data: existing, error: existingError } = await db.from(
+      "sales_sequences",
+    ).select("id,status")
+      .eq("conversation_id", conv.id).eq("funnel", funnelId).maybeSingle();
+    if (existingError) throw existingError;
+    const forceEligible = options.force === true && existing &&
+      ["completed", "cancelled"].includes(String(existing.status ?? ""));
+    const repairRequested = options.repairMissingOpening === true;
+    if (existing && !forceEligible && !repairRequested) return "already";
+
+    const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
+    const response = await handle(
+      new Request(`http://internal/funil-enroll?token=${token}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatwoot_conversation_id: conv.chatwoot_conversation_id,
+          force: forceEligible,
+          repair_missing_opening: repairRequested,
+          manual: options.manual === true,
+          skip_opening: options.skipOpening === true,
+          opening_reason: options.openingReason ?? null,
+          origin_signal: options.originSignal ?? null,
+        }),
       }),
-    }),
-  );
-  console.log(
-    "enrollIfNew: conv",
-    conv.chatwoot_conversation_id,
-    "->",
-    res.status,
-    await res.text(),
-  );
+    );
+    const result = await response.json().catch(() => ({})) as Json;
+    if (response.status === 422 && result.blocked) return "blocked";
+    if (!response.ok || result.error) {
+      throw new Error(`funil-enroll HTTP ${response.status}`);
+    }
+    const outcome = result.already === true ? "already" : "created";
+    console.log(
+      "enrollIfNew:",
+      "conv",
+      conv.chatwoot_conversation_id,
+      outcome,
+      "opening_skipped",
+      options.skipOpening === true,
+      "origin_signal",
+      options.originSignal ?? "none",
+    );
+    return outcome;
+  } finally {
+    await releaseDelivery(db, claimKey);
+  }
 }
 
 export async function recoverEligibleFunnels(
@@ -678,18 +1352,25 @@ export async function recoverEligibleFunnels(
   const [existing, inbound, contacts, channels] = await Promise.all([
     consultaEmLotes<Json>(
       conversationIds,
-      (lote) => db.from("sales_sequences").select("conversation_id").in("conversation_id", lote),
+      (lote) =>
+        db.from("scheduled_messages").select("conversation_id")
+          .eq("funnel", RESTORED_5895_FUNNEL)
+          .eq("step", 0)
+          .in("conversation_id", lote),
     ),
     consultaEmLotes<Json>(
       conversationIds,
       (lote) =>
         db.from("messages").select("conversation_id,content,sent_at")
           .in("conversation_id", lote)
-          .eq("direction", "in").order("sent_at", { ascending: false }).limit(3000),
+          .eq("direction", "in").order("sent_at", { ascending: false }).limit(
+            3000,
+          ),
     ),
     consultaEmLotes<Json>(
       contactIds,
-      (lote) => db.from("contacts").select("id,external_contact_id").in("id", lote),
+      (lote) =>
+        db.from("contacts").select("id,external_contact_id").in("id", lote),
     ),
     consultaEmLotes<Json>(
       channelIds,
@@ -700,11 +1381,13 @@ export async function recoverEligibleFunnels(
     (existing ?? []).map((item: Json) => String(item.conversation_id)),
   );
   const latestInbound = new Map<string, string>();
+  const inboundCounts = new Map<string, number>();
   for (const item of inbound ?? []) {
     const key = String(item.conversation_id);
     if (!latestInbound.has(key)) {
       latestInbound.set(key, String(item.content ?? ""));
     }
+    inboundCounts.set(key, (inboundCounts.get(key) ?? 0) + 1);
   }
   const contactMap = new Map(
     (contacts ?? []).map((item: Json) => [String(item.id), item]),
@@ -719,6 +1402,12 @@ export async function recoverEligibleFunnels(
       enrolledIds.has(String(conversation.id)) ||
       !conversation.chatwoot_conversation_id
     ) continue;
+    const channel = channelMap.get(String(conversation.channel_id)) as
+      | Json
+      | undefined;
+    if (!channel || !canalAlvoFunil(channel, CANAL_ANUNCIO_ALVO)) continue;
+    if ((inboundCounts.get(String(conversation.id)) ?? 0) > 1 &&
+      conversation.origem !== "anuncio") continue;
     const content = latestInbound.get(String(conversation.id)) ?? "";
     if (conversation.origem !== "anuncio" && !isDefaultAdMessage(content)) {
       continue;
@@ -727,12 +1416,17 @@ export async function recoverEligibleFunnels(
     const contact = contactMap.get(String(conversation.contact_id)) as
       | Json
       | undefined;
-    const channel = channelMap.get(String(conversation.channel_id)) as
-      | Json
-      | undefined;
     if (!contact?.external_contact_id || !channel) continue;
-    await enrollIfNew(db, channel, String(contact.external_contact_id));
-    enrolled++;
+    const originSignal = conversation.origem === "anuncio"
+      ? "persisted_ad_origin"
+      : "default_ad_message";
+    const outcome = await enrollIfNew(
+      db,
+      channel,
+      String(contact.external_contact_id),
+      { originSignal, conversation, repairMissingOpening: true },
+    );
+    if (outcome === "created") enrolled++;
   }
   return { scanned: conversations.length, eligible, enrolled };
 }

@@ -9,7 +9,7 @@
 // porque alerta não precisa custar mensagem oficial.
 import { optionalEnv } from "./env.ts";
 import type { DbClient } from "./supabase.ts";
-import { claimDeliveryWithTtl } from "./supabase.ts";
+import { claimDeliveryWithTtl, releaseDelivery } from "./supabase.ts";
 import { getHybridRoute, hybridSendText, isHybridRecipient } from "./hybrid.ts";
 import { sendMeta } from "./hub.ts";
 
@@ -31,14 +31,18 @@ const ENTREGAVEIS = new Set([
   "social_token_invalid",
   "channel_silent",
   "inbound_lost",
+  "inbound_unprocessed",
   // Número conectado na uazapi sem canal cadastrado: cliente escrevendo, bridge descartando.
   // Exige ação humana imediata (cadastrar o canal) e o conserto é de minutos.
   "canal_nao_cadastrado",
   "failed_messages_15m",
   "overdue_funnel_queue",
+  "5895_video_receipt_overdue",
+  "5895_media_blocked",
   // Instância uazapi fora do ar com o canal `active` no banco: a uazapi aceita o envio e
   // nada sai. Em 10/09 o 6836 caiu no meio de um disparo e quem percebeu foi o dono.
   "uazapi_instance_disconnected",
+  "uazapi_webhook_missing",
   // Arquivo do funil sumido do storage: a peça sai sem imagem e só repondo o arquivo resolve.
   "midia_indisponivel",
   // Mensagem de cliente que só apareceu na varredura (não veio pelo webhook): entrou sem
@@ -57,14 +61,18 @@ const TITULOS: Record<string, string> = {
   catchup_degradado: "Varredura de entrada da uazapi degradada (mensagem perdida pode não ser recuperada)",
   inbound_recovered: "Mensagem de cliente recuperada fora do webhook (responder no Chatwoot)",
   uazapi_instance_disconnected: "Número WhatsApp desconectado na uazapi (reconectar o QR)",
+  uazapi_webhook_missing: "Número WhatsApp sem webhook ativo para este Hub (respostas dos clientes não chegam)",
   midia_indisponivel: "Mídia do funil sumiu do storage (peça saindo sem imagem)",
   channel_disconnected: "Canal desconectado",
   social_token_invalid: "Token de canal social inválido",
   channel_silent: "Canal ativo parou de receber mensagem",
   inbound_lost: "Mensagem de cliente perdida na ingestão",
+  inbound_unprocessed: "Entrada ou clique do cliente pendente; abrir Monitor de eventos",
   canal_nao_cadastrado: "Número recebendo sem canal cadastrado",
   failed_messages_15m: "Falhas de envio agora",
   overdue_funnel_queue: "Fila do funil atrasada",
+  "5895_video_receipt_overdue": "Vídeo do funil 5895 aguardando confirmação de entrega",
+  "5895_media_blocked": "Funil 5895 bloqueado por mídia sem confirmação (revisar antes de reenviar)",
 };
 
 // Instância uazapi caída enquanto o canal segue `active` no banco.
@@ -79,6 +87,28 @@ const TITULOS: Record<string, string> = {
 // - híbrido (5895, 6836): canal oficial cujo número é o `owner` de uma instância. Se o
 //   `owner` vier vazio, vale a instância com o mesmo nome do canal.
 export type InstanciaUazapi = { name: string; number: string | null; status: string };
+
+export function temWebhookUazapiDoHub(
+  webhooks: unknown,
+  basePublica: string,
+): boolean {
+  let destino: URL;
+  try {
+    destino = new URL("/uazapi-webhook", basePublica);
+  } catch {
+    return false;
+  }
+  return Array.isArray(webhooks) && webhooks.some((hook) => {
+    if (!hook || typeof hook !== "object" || hook.enabled !== true) return false;
+    if (!Array.isArray(hook.events) || !hook.events.includes("messages")) return false;
+    try {
+      const url = new URL(String(hook.url ?? ""));
+      return url.origin === destino.origin && url.pathname === destino.pathname;
+    } catch {
+      return false;
+    }
+  });
+}
 
 // Igualdade, nunca substring: "disconnected" contém "connected".
 export function instanciaConectada(status: string | null | undefined): boolean {
@@ -101,7 +131,11 @@ export function avaliarInstanciasUazapi(
     const externo = String(canal.external_id ?? "").trim();
 
     if (externo && !canal.phone_number_id) {
-      const inst = instancias.find((i) => i.name === externo);
+      const numero = digitos(canal.phone_number);
+      const inst = instancias.find((i) => i.name === externo) ??
+        (numero.length >= 10
+          ? instancias.find((i) => digitos(i.number) === numero)
+          : undefined);
       if (!inst) caidas.push(`${nome}: instância ${externo} não existe na uazapi`);
       else if (!instanciaConectada(inst.status)) {
         caidas.push(`${nome}: instância ${inst.name} ${inst.status}`);
@@ -218,7 +252,9 @@ export function formatarAlerta(issues: OperationalIssue[], agora: Date): string 
     "",
     ...linhas,
     "",
-    "Detalhe em /operational-health no painel.",
+    issues.some((issue) => issue.key === "inbound_unprocessed")
+      ? "Detalhe em Monitor de eventos no painel."
+      : "Detalhe em /operational-health no painel.",
   ].join("\n");
 }
 
@@ -228,6 +264,7 @@ export async function entregarAlertas(
   db: DbClient,
   issues: OperationalIssue[],
   agora: Date,
+  options?: { dedupeKey: string; ttlMs: number },
 ): Promise<{ enviado: boolean; motivo?: string }> {
   const entregaveis = alertasParaEntregar(issues);
   if (entregaveis.length === 0) return { enviado: false, motivo: "sem-critico" };
@@ -237,10 +274,90 @@ export async function entregarAlertas(
 
   // Um alerta por hora no máximo: o monitor roda a cada 15min e repetir o mesmo texto
   // quatro vezes por hora vira ruído que o time aprende a ignorar.
-  const chave = `alerta-op-${entregaveis.map((i) => i.key).sort().join("+")}`;
-  if (!await claimDeliveryWithTtl(db, chave, "operational-alert", 60 * 60_000, agora)) {
+  const chave = options?.dedupeKey ??
+    `alerta-op-${entregaveis.map((i) => i.key).sort().join("+")}`;
+  if (!await claimDeliveryWithTtl(
+    db, chave, "operational-alert", options?.ttlMs ?? 60 * 60_000, agora,
+  )) {
     return { enviado: false, motivo: "ja-avisado-nesta-hora" };
   }
+
+  const nomeCanal = optionalEnv("ALERT_CHANNEL_NAME") ?? "5895";
+  const { data: canal } = await db.from("channels")
+    .select("id,name,phone_number,phone_number_id")
+    .eq("name", nomeCanal).eq("type", "whatsapp").maybeSingle();
+  if (!canal?.phone_number_id) {
+    if (options) await releaseDelivery(db, chave);
+    return { enviado: false, motivo: `canal ${nomeCanal} sem phone_number_id` };
+  }
+
+  let delivered = false;
+  try {
+    const texto = formatarAlerta(entregaveis, agora);
+    const rota = isHybridRecipient(destino)
+      ? await getHybridRoute(
+        canal.id as string,
+        canal.phone_number_id as string,
+        canal.phone_number as string,
+      )
+      : null;
+
+    let ok = false;
+    if (rota) {
+      const r = await hybridSendText(rota, destino, texto);
+      ok = Boolean(r?.ok);
+    }
+    if (!ok) {
+      // Sem rota híbrida (ou ela falhou) o alerta vale a mensagem oficial: perder o aviso
+      // custa mais caro que a mensagem.
+      const r = await sendMeta(
+        (await db.from("channel_secrets").select("channel_token")
+          .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string,
+        `${canal.phone_number_id}/messages`,
+        {
+          messaging_product: "whatsapp",
+          to: destino,
+          type: "text",
+          text: { body: texto },
+        },
+      );
+      ok = r.ok;
+      if (!ok) {
+        console.error(
+          "operational-alert: envio falhou",
+          r.status,
+          JSON.stringify(r.data).slice(0, 200),
+        );
+      }
+    }
+
+    await db.from("events").insert({
+      source: "operational-monitor",
+      event_type: ok ? "alert_delivered" : "alert_delivery_failed",
+      payload: {
+        keys: entregaveis.map((i) => i.key),
+        destino_sufixo: destino.slice(-4),
+        ...(options ? { dedupe_key: chave } : {}),
+      },
+    }).then(() => {}, () => {});
+    delivered = ok;
+    return { enviado: ok, motivo: ok ? undefined : "envio-falhou" };
+  } finally {
+    // A chave específica do 5895 só fica retida se houve entrega confirmada.
+    if (!delivered && options) await releaseDelivery(db, chave);
+  }
+}
+
+// Envia um texto de alerta pronto por WhatsApp pro ALERT_WHATSAPP_TO, reusando o canal de
+// alerta operacional (rota híbrida uazapi quando dá, fallback oficial). Usado pelo endpoint
+// /grafana-alert, que recebe o webhook do Alertmanager/Grafana e manda o resumo pro WhatsApp.
+// NÃO aplica throttle nem claim: o Alertmanager já agrupa/repete no ritmo dele.
+export async function enviarTextoAlerta(
+  db: DbClient,
+  texto: string,
+): Promise<{ enviado: boolean; motivo?: string }> {
+  const destino = (optionalEnv("ALERT_WHATSAPP_TO") ?? "").replace(/\D/g, "");
+  if (!destino) return { enviado: false, motivo: "ALERT_WHATSAPP_TO ausente" };
 
   const nomeCanal = optionalEnv("ALERT_CHANNEL_NAME") ?? "5895";
   const { data: canal } = await db.from("channels")
@@ -250,7 +367,6 @@ export async function entregarAlertas(
     return { enviado: false, motivo: `canal ${nomeCanal} sem phone_number_id` };
   }
 
-  const texto = formatarAlerta(entregaveis, agora);
   const rota = isHybridRecipient(destino)
     ? await getHybridRoute(
       canal.id as string,
@@ -265,35 +381,16 @@ export async function entregarAlertas(
     ok = Boolean(r?.ok);
   }
   if (!ok) {
-    // Sem rota híbrida (ou ela falhou) o alerta vale a mensagem oficial: perder o aviso
-    // custa mais caro que a mensagem.
-    const r = await sendMeta(
-      (await db.from("channel_secrets").select("channel_token")
-        .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string,
-      `${canal.phone_number_id}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: destino,
-        type: "text",
-        text: { body: texto },
-      },
-    );
+    const token = (await db.from("channel_secrets").select("channel_token")
+      .eq("channel_id", canal.id).maybeSingle()).data?.channel_token as string;
+    const r = await sendMeta(token, `${canal.phone_number_id}/messages`, {
+      messaging_product: "whatsapp",
+      to: destino,
+      type: "text",
+      text: { body: texto },
+    });
     ok = r.ok;
-    if (!ok) {
-      console.error(
-        "operational-alert: envio falhou",
-        r.status,
-        JSON.stringify(r.data).slice(0, 200),
-      );
-    }
   }
-
-  await db.from("events").insert({
-    source: "operational-monitor",
-    event_type: ok ? "alert_delivered" : "alert_delivery_failed",
-    payload: { keys: entregaveis.map((i) => i.key), destino_sufixo: destino.slice(-4) },
-  }).then(() => {}, () => {});
-
   return { enviado: ok, motivo: ok ? undefined : "envio-falhou" };
 }
 

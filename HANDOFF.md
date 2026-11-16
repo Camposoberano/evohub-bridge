@@ -1,5 +1,108 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+> **Leia primeiro o bloco de 2026-11-02 abaixo.** Depois o de 2026-11-01. O resto é
+> histórico (06/10 e 17/10).
+
+## ESTADO ATUAL — 2026-11-02 (madrugada, ~01:30 BRT)
+
+**Branches:** `main == master == a561dfa` — **divergência RESOLVIDA** (era o pior pending).
+`AGENTS.md` agora vive no `main`.
+
+**Deploys desta sessão (bridge/SERVIDOR, todos confirmados por `uptime_s` baixo):** 3 deploys —
+channel-sync (`dcc50f1`), resíduo funnel-queue (`ccf0bf9`), 5895 age-out (`dfc7b93`) e monitor
+kill-switch (`76bc190`) foram ao ar. **`a561dfa` (data-cleanup) NÃO foi deployado** (adiado a
+pedido do dono — vai no próximo deploy, já está no `main`). Build label do `/version` segue
+`2026-11-01-...` (cosmético, não bumpei; confirmar por uptime). Todos os deploys foram pós-20h/
+madrugada (fora da janela 8-20h).
+
+**Feito nesta sessão (tudo pushado main+master):**
+1. **Divergência main↔master zerada.** Diagnóstico por CONTEÚDO (two-dot) mostrou que só 7 docs
+   estavam presos no master (código já cherry-pickado); trouxe os 7 (incl. `AGENTS.md`) pro main
+   (`365bb81`) e resetei master=main. Ver [[deploy-main-divergencia]].
+2. **Mega Sorgo FB roteamento.** `channels.page_id` apontava pra página errada (101431... vs real
+   112114627195174 do token/hub) → entrada do FB cairia em silêncio. Corrigi o dado ao vivo + o
+   `channel-sync` pra casar id na diferença (`dcc50f1`). O "erro #10" era falso rastro (token OK).
+   Ver [[channel-sync-page-id-stale]].
+3. **Resíduo do fix #42.** 5 ramos de defer/cancel do funnel-queue passaram a casar `pending|paused`
+   (`ccf0bf9`). Ver [[pump-head-of-line-defer]].
+4. **5895 mídia.** 3 peças presas (#3728,#971,#3677) expiradas no banco (last_outcome→expired, NÃO
+   sent) + age-out de 72h no código p/ não reacumular (`dfc7b93`). Ver [[reconcile-5895-age-out]].
+5. **Monitor fora do kill-switch** (`76bc190`): operational-monitor roda sempre; pausar operação
+   não cega mais o alerta. Ver [[monitor-fora-do-kill-switch]].
+6. **data-cleanup erro-objeto** (`a561dfa`, não deployado): `describeError` em `shared/error-detail.ts`
+   loga a causa real do PostgrestError. Ver [[erro-objeto-esconde-causa]].
+
+**Pendente (ordem de risco):**
+1. **Token admin Chatwoot exposto** — responde 200 desde setembro; rotacionar (precisa do dono na UI).
+2. **Deploy do `a561dfa`** (data-cleanup) — vai no próximo deploy do SERVIDOR automaticamente.
+3. **~40 call sites com `instanceof Error ? ... : String(e)`** — latentes p/ PostgrestError; migrar
+   pra `describeError` ao tocar em cada um.
+4. 2 peças de texto presas failed+uncertain de OUTROS funis: **#4319** (mega-sorgo, seq *running* —
+   cuidado) e **#4333** (social, fria). Não entram no alerta 5895.
+5. Mega Sorgo: nome de página confirmado; nada mais pendente nesse canal.
+6. build label travado em `server.ts` (cosmético, `/version` mente — confirmar deploy por uptime).
+7. Melhoria futura: reconcile-5895 confirmar p/ `sent` quando recibo Delivered/Read já no meta
+   (não apareceu ao vivo; o age-out drena de qualquer forma).
+
+**Avisos:** não deployar/reiniciar 8-20h BRT com disparo ativo; disparo frio FICA PARADO (decisão
+do dono, vai pro n8n); VPS é caixa única de 2 vCPU; `.env` (tokens/keys) no checkout principal
+`E:\Projetos_Novos\evohub\.env`, nunca no worktree.
+
+## ESTADO ANTERIOR — 2026-11-01 (noite, ~20:50 BRT)
+
+**Deploy de hoje (bridge):** build `2026-11-01-funnel-queue-stale-head-of-line-fix`
+no `main` via Coolify (`POST /deploy?uuid=<SERVIDOR>` → 200). `/version` confirmou
+build + feature flag + 0 erro pós-boot.
+
+**Feito nesta sessão:**
+- **funnel-queue — churn eliminado (fix deployado).** O pump repetia
+  `found:10 / sent:0` + "canceladas 10 velhas" a cada ~30s sem nunca limpar. Causa:
+  (1) age-out cancelava com `.eq("status","pending")`, mas os candidatos também vêm
+  do set `paused + deferred_intent` → `staleCancelled++` logava sem cancelar de fato;
+  (2) branch `deferred_intent && sequence!=running` fazia `held++` sem mover `send_at`
+  (head-of-line). 10 zumbis starvavam **16 leads reais** com vídeo adiado legítimo.
+  Fix: age-out `.in(["pending","paused"])` + contagem real; sequence morta→cancela,
+  paused→defere `send_at`. Commits `24979db`+`758bb8d`, merge PR #42 `cd37396`.
+  Mitigação one-shot no banco: 13 peças zumbis canceladas → 16 leads receberam o vídeo.
+- **0595 cecape:** reconectado pelo dono; cancelei os **925 itens frios** pausados do
+  canal (campaign_queue paused→cancelled). Funil já 0. Inbound intacto.
+- **build label** bumpado (estava travado em 2026-10-10).
+
+**Pendente (ordem de risco):**
+1. **Divergência `main`↔`master`** (PIOR): `main` +2 commits à frente (fix de hoje),
+   `master` 152 atrás. `AGENTS.md` só existe no `master`; `HANDOFF.md` duplicado nos dois.
+   Precisa de decisão de reconciliação — é o maior risco e PIORA a cada deploy no main.
+2. Resíduo do #42: ramos de defer `muted`/fora-de-hora/`dispatchDeferredIntent` null
+   ainda usam `.eq("status","pending")` (latente p/ `paused`).
+3. macro-poll convs 4094/4744 presas em `cmd-enviar-video` (limpar etiqueta mata de vez).
+4. Mega Sorgo Santa Elisa page_id/token (#10); token admin Chatwoot exposto;
+   `startOperationalMonitorLoop` fora do kill-switch.
+
+**Decisão travada (anti-repetir-erro):** num worker `ORDER <tempo> ASC LIMIT N`,
+nenhum caminho pode deixar o item na cabeça sem avançá-lo; e quando o set de
+candidatos inclui `paused`, todo UPDATE de defer/cancel deve casar `pending|paused`,
+nunca só `pending` (senão o log mente e a peça volta pra sempre). (AGENTS.md mora no
+`master` — gravar lá quando a divergência for reconciliada.)
+
+---
+
+## Publicação verificada — 17/10/2026, 18h21 BRT
+
+- A [PR #24](https://github.com/Camposoberano/evohub-bridge/pull/24) foi incorporada à `main` no commit `c074a419afca3bab289099c2de4dcbe480d5d1a8`. Coolify concluiu o deploy do bridge `irxjcc7no7ebrhfdrsfemsha` às 18h17 BRT e do painel `31f0pkvppiparhapv6qz6uzy` às 18h20 BRT, ambos no mesmo commit.
+- `/health` do bridge e `/eventos` do painel responderam HTTP 200. A rota nova `/inbound-incidents` recusou requisição sem autenticação com HTTP 401. O bundle publicado contém o painel de entradas.
+- O loop `inbound-watchdog` iniciou no bridge e o evento `alert_delivered` para `inbound_unprocessed` foi registrado às 18h18 BRT. A auditoria pós-publicação ainda mostra 3 entradas registradas com atraso e uma pendência: `menu_nutricao` da conversa 3693.
+- Por escolha explícita do usuário, o clique antigo da conversa 3693 **não foi reprocessado** e ficou para atendimento manual. O claim de ação continua ausente; a publicação não enviou resposta ao cliente para esse clique.
+
+## Atualização — 17/10/2026: entradas UAZAPI atrasadas e clique 3693
+
+- Base de comparação: `origin/main` em `b0391a3`, versão publicada em 16/10. A seção antiga abaixo descreve o estado de 06/10 e deve ser tratada como histórico.
+- Auditoria de leitura dos últimos 3 dias, às 17h47 BRT: 373 webhooks individuais de entrada, 3 mensagens registradas com 35–42 minutos de atraso no canal 5895. A conversa 3693 contém o clique `menu_nutricao` recebido às 16h43 BRT e registrado só pela varredura às 17h25; o clique não iniciou a ação e não há resposta nutricional confirmada. Os outros dois casos são as conversas 3673 (15/10) e 3692 (16/10).
+- Causa confirmada para 3693: `handleInbound` aguardava `/instance/all` para obter token mesmo em clique sem mídia. A consulta expirou após 45 segundos, já depois do HTTP 200 ao webhook. A varredura posterior registrou a mensagem, mas não executou a ação. Para os dois casos anteriores, o sintoma é igual; a causa específica não foi comprovada por logs antigos.
+- Correção local: textos e cliques deixam de consultar `/instance/all`; o token só é buscado para mídia. Falhas geram eventos com motivo seguro e referência ao webhook. `/inbound-incidents` compara webhook, mensagem e claim da ação; o watchdog reprocessa entradas recentes sem claim e envia alertas quando restam pendências. O painel `/eventos` mostra pendências, atrasos, link da conta correta do Chatwoot e botão de reprocessamento. A varredura deixa de tratar `call_` como mensagem e preserva o título de cliques de lista.
+- O botão de recuperação pode iniciar resposta ao cliente. **Não foi acionado** nesta auditoria. O claim da ação indica início do handler, não confirmação de entrega; a conversa deve ser conferida após reprocessar. Falha após início fica para revisão humana, sem reenvio automático incerto.
+- Leitura anterior à publicação: 373 entradas, 3 atrasadas, 1 pendência (`5895`, conversa 3693, `menu_nutricao`). `ALERT_WHATSAPP_TO` está configurado no Coolify e `AUTO_LOOPS_ENABLED=true` no ambiente de produção (preview usa `false`); os valores sensíveis não foram expostos.
+- Validação local: `deno check` nos módulos alterados, 41 testes focados, build Next.js e `git diff --check` passaram. A consulta em lote inicial recebeu 502; lotes de 25 IDs passaram e reproduziram os 3 atrasos e a pendência.
+
 > **Documento de estado do projeto — atualizado em 06/10/2026 (America/Fortaleza).** Leia esta seção antes de retomar. As notas abaixo de “Contexto histórico” são registros antigos e podem estar desatualizadas.
 
 ## Estado atual — 06/10/2026

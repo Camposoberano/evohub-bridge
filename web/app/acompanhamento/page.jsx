@@ -74,11 +74,18 @@ export default function Acompanhamento() {
 
   // Lista de campanhas vem da própria fila: campanha sem fila não tem o que acompanhar.
   const carregarCampanhas = useCallback(async () => {
-    const { data } = await supabase.schema("public").from("campaign_queue")
-      .select("campaign_id,created_at").order("created_at", { ascending: false }).limit(2000);
+    // PostgREST corta em 1000 linhas por resposta — o .limit() não passa disso. Pagina por
+    // Range e deduplica, senão o dropdown só mostra a campanha mais recente (ex.: só 0595-uz,
+    // que sozinho enche os 1000 primeiros). Varre até ~15 campanhas grandes.
     const vistos = new Map();
-    for (const r of data ?? []) {
-      if (!vistos.has(r.campaign_id)) vistos.set(r.campaign_id, r.created_at);
+    for (let from = 0; from < 15000; from += 1000) {
+      const { data } = await supabase.schema("public").from("campaign_queue")
+        .select("campaign_id,created_at").order("created_at", { ascending: false }).range(from, from + 999);
+      if (!data || !data.length) break;
+      for (const r of data) {
+        if (!vistos.has(r.campaign_id)) vistos.set(r.campaign_id, r.created_at);
+      }
+      if (data.length < 1000) break;
     }
     const lista = [...vistos.entries()].map(([id, criada]) => ({ id, criada }));
     setCampanhas(lista);
@@ -89,16 +96,26 @@ export default function Acompanhamento() {
     if (!campanhaId) return;
     setCarregando(true);
     try {
-      const [q, f] = await Promise.all([
-        supabase.schema("public").from("campaign_queue")
-          .select("contact_key,status,sent_at,attempts,last_error")
-          .eq("campaign_id", campanhaId).limit(5000),
-        supabase.schema("public").from("campaign_flow_state")
-          .select("contact_key,step_id,status,waiting_since,updated_at")
-          .eq("campaign_id", campanhaId).limit(5000),
+      // PostgREST corta em 1000/resposta — pagina por Range senão campanha com >1000 contatos
+      // aparece subcontada (ex.: 0595 mostrava "1000" em vez de 1202).
+      const scanCamp = async (table, select) => {
+        const out = [];
+        for (let from = 0; from < 8000; from += 1000) {
+          const { data } = await supabase.schema("public").from(table).select(select)
+            .eq("campaign_id", campanhaId).range(from, from + 999);
+          if (!data || !data.length) break;
+          out.push(...data);
+          if (data.length < 1000) break;
+        }
+        return out;
+      };
+      const [qData, fData] = await Promise.all([
+        scanCamp("campaign_queue", "contact_key,status,sent_at,attempts,last_error"),
+        scanCamp("campaign_flow_state", "contact_key,step_id,status,waiting_since,updated_at"),
       ]);
-      setFila(q.data ?? []);
-      setEstados(f.data ?? []);
+      const q = { data: qData };
+      setFila(qData);
+      setEstados(fData);
 
       // Quem respondeu: mensagem de entrada depois do disparo. Uma consulta só, pelos
       // contatos que já receberam.

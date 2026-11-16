@@ -2,7 +2,7 @@
 // Alimenta o monitor de eventos do painel e ingesta inbound de mensagens no Chatwoot.
 // Auth: ?token=<UAZAPI_WEBHOOK_TOKEN|CHATWOOT_WEBHOOK_SECRET>.
 import { confereSegredo } from "../shared/segredo-bridge.ts";
-import { admin, claimDelivery } from "../shared/supabase.ts";
+import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { type InboundAttachment, ingestInbound } from "../shared/inbound.ts";
@@ -10,10 +10,13 @@ import { accountForChannel } from "../shared/accounts.ts";
 import { instPost, listInstances, tokenForInstance } from "../shared/uazapi.ts";
 import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
+import { aiLaneEnabled, routeContactToAiLane } from "../shared/ai-lane.ts";
 import { isNegativeIntent } from "../shared/negative-intent.ts";
 import { stopContactAutomation } from "../shared/stop-contact.ts";
+import { ensureNoPurchaseLabels } from "../shared/commercial-outcome-labels.ts";
 import { continueFlowOnReply } from "../shared/flow-inbound.ts";
 import {
+  isLogisticaIntent,
   isNutricaoIntent,
   isPlantioIntent,
   isPrecoIntent,
@@ -21,18 +24,23 @@ import {
   transcribeAudio,
 } from "../shared/intent.ts";
 import { autoEnrollFunil } from "./funil-enroll.ts";
+import { sendFirstAdFunnelPieceNow } from "../shared/ad-opening.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
+import { isRestoredFunnelButton } from "../shared/restored-funnel-buttons.ts";
 import {
   normalizeHybridButtonReply,
   normalizeHybridMenuClick,
 } from "../shared/hybrid-menu.ts";
 import {
+  handleHumanRequest,
   handleMenuClick,
   handleNutricaoClick,
   handlePlantioClick,
   handlePrecoClick,
+  recordInboundCommercialIntent,
   resumeCampaign,
 } from "./hub-webhook.ts";
+import { classificarIntencaoComercial } from "../shared/funil-comercial.ts";
 import {
   handleCatalogClick,
   handleQualificationReply,
@@ -41,9 +49,20 @@ import {
   sendCatalogJourneyReminder,
 } from "./catalog.ts";
 import { catalogTextClaimKey, clickDomain } from "../shared/journey-router.ts";
+import { confirmedVideoNotice } from "../shared/uazapi-video-status.ts";
+import { reconcile5895VideoNotice } from "../shared/reconcile-5895.ts";
 
 type Json = Record<string, unknown>;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
+function inboundErrorReason(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (/await_response|timeout|timed out/.test(message)) return "Consulta à UAZAPI expirou";
+  if (/chatwoot|502|503/.test(message)) return "Chatwoot indisponível";
+  if (/n8n/.test(message)) return "Ação do n8n falhou";
+  if (/token|credencia/.test(message)) return "Credencial da instância indisponível";
+  return error instanceof Error ? error.name : "Falha desconhecida";
+}
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") {
@@ -66,15 +85,35 @@ export async function handle(req: Request): Promise<Response> {
 
   const eventType = rotuloDeEvento(p);
   const db = admin();
-  db.from("events").insert({
+  const eventId = crypto.randomUUID();
+  const { error: eventError } = await db.from("events").insert({
+    id: eventId,
     source: "uazapi",
     event_type: eventType,
     payload: redactSecrets(p),
-  }).then(() => {}, () => {});
+  });
+  if (eventError) {
+    // A Uazapi pode tentar novamente quando não recebe 200. Confirmar antes de
+    // responder evita perder um recibo de entrega em uma falha transitória do banco.
+    console.error("uazapi-webhook: persistência do evento falhou", eventError.code ?? "database_error");
+    return new Response("temporarily unavailable", { status: 503 });
+  }
+
+  const videoNotice = confirmedVideoNotice(eventType, p);
+  if (videoNotice) {
+    // O cron de um minuto permanece como recuperação se este processo cair.
+    // Não reter o webhook enquanto a consulta ao histórico do provedor ocorre.
+    reconcile5895VideoNotice(videoNotice, db).catch((error) =>
+      console.error(
+        "uazapi-webhook: reconciliação do vídeo falhou",
+        error instanceof Error ? error.name : "unknown",
+      )
+    );
+  }
 
   if (isInboundUazapiEvent(eventType, p)) {
-    handleInbound(db, p).catch((e) =>
-      console.error("uazapi-webhook handleInbound erro:", e)
+    processInboundUazapiEvent(db, p, eventId).catch((e) =>
+      console.error("uazapi-webhook handleInbound erro:", eventId, inboundErrorReason(e))
     );
   }
 
@@ -118,7 +157,27 @@ function isInboundUazapiEvent(eventType: string, p: Json): boolean {
   return false;
 }
 
-async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
+export async function processInboundUazapiEvent(
+  db: ReturnType<typeof admin>,
+  p: Json,
+  rawEventId = "",
+): Promise<void> {
+  try {
+    await handleInbound(db, p, rawEventId);
+  } catch (error) {
+    await db.from("events").insert({
+      source: "uazapi",
+      event_type: "inbound_processing_failed",
+      payload: {
+        raw_event_id: rawEventId || null,
+        reason: inboundErrorReason(error),
+      },
+    }).then(() => {}, () => {});
+    throw error;
+  }
+}
+
+async function handleInbound(db: ReturnType<typeof admin>, p: Json, rawEventId = "") {
   const data = (p.data && typeof p.data === "object") ? p.data as Json : p;
   const instanceName = firstString(
     (p.instanceData as Json | undefined)?.instance,
@@ -134,6 +193,25 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
 
   const channel = await findChannelForInstance(db, instanceName, data);
   if (!channel) {
+    // A uazapi é COMPARTILHADA (multi-tenant): tanto o webhook quanto o catch-up (que usa o
+    // admintoken e varre `/instance/all`) enxergam instâncias de OUTROS clientes — ex.:
+    // INSTITUTO BELEM. Sem este filtro, a entrada de um terceiro sem canal nosso virava
+    // alerta `canal_nao_cadastrado` no nosso WhatsApp (falso positivo). EVO_UAZAPI_INSTANCES
+    // lista, por nome e separado por vírgula, as instâncias que SÃO nossas; fora dela, não é
+    // problema do EvoHub e não alertamos. Sem a env, mantém o comportamento antigo (alerta).
+    const allowRaw = optionalEnv("EVO_UAZAPI_INSTANCES");
+    if (allowRaw) {
+      const allow = new Set(
+        allowRaw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+      );
+      if (!allow.has(instanceName.trim().toLowerCase())) {
+        console.warn(
+          "uazapi-webhook sem canal p/ instancia de outro tenant (ignorada):",
+          instanceName,
+        );
+        return;
+      }
+    }
     // Número novo conectado na uazapi sem linha em `channels`: a mensagem do cliente chega
     // aqui e não tem onde ser gravada. Antes isso morria num console.warn que some do log
     // em horas -- mesma forma de perda silenciosa que engoliu 73 mensagens em 29/08.
@@ -168,8 +246,15 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
   }
 
   const acct = await accountForChannel(channel.id as string);
-  const instanceToken = await tokenForInstance(instanceName);
+  // Textos e cliques não precisam de credencial da instância. Uma consulta lenta ao
+  // /instance/all jamais deve impedir a resposta do cliente de entrar.
+  let instanceToken: string | null = null;
+  let tokenLookupDone = false;
   for (const rawMsg of messages) {
+    if (!tokenLookupDone && requiresInstanceToken(rawMsg)) {
+      tokenLookupDone = true;
+      instanceToken = await tokenForInstance(instanceName);
+    }
     const msg = await parseUazapiMessage(rawMsg, p, instanceToken ?? undefined);
     // Saida gerada pela API ja foi criada no Chatwoot pelo webhook de origem.
     // Saida digitada no aparelho precisa entrar como echo na conversa.
@@ -200,10 +285,21 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
             msg.menuClickId,
             acct,
+            msg.metaMessageId ?? undefined,
           );
         }
       } catch (e) {
-        console.error("uazapi-webhook click erro:", e);
+        console.error("uazapi-webhook click erro:", rawEventId, inboundErrorReason(e));
+        await db.from("events").insert({
+          source: "uazapi",
+          event_type: "inbound_action_failed",
+          channel_id: channel.id,
+          payload: {
+            raw_event_id: rawEventId || null,
+            meta_message_id: msg.metaMessageId ?? null,
+            reason: inboundErrorReason(e),
+          },
+        }).then(() => {}, () => {});
       }
     }
 
@@ -211,7 +307,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
     // pelo ingestInbound, então a retentativa do webhook volta a ser possível; o evento
     // existe pra essa perda aparecer em vez de sumir no log do container.
     try {
-      await ingestInbound(db, channel as Json, {
+      const ingest = await ingestInbound(db, channel as Json, {
         from: msg.from,
         name: msg.name,
         metaMessageId: msg.metaMessageId,
@@ -223,18 +319,27 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         acct,
         referral: msg.referral,
       });
+      // O catchup antigo salvava cliques de lista com conteúdo vazio. No replay,
+      // reparar o texto visível sem criar outra mensagem.
+      if (!ingest.inserted && msg.menuClickId && msg.content && msg.metaMessageId) {
+        await db.from("messages").update({ content: msg.content })
+          .eq("channel_id", channel.id)
+          .eq("meta_message_id", msg.metaMessageId)
+          .eq("content", "");
+      }
     } catch (e) {
-      console.error("uazapi-webhook: ingest falhou", msg.metaMessageId, e);
+      console.error("uazapi-webhook: ingest falhou", rawEventId, inboundErrorReason(e));
       await db.from("events").insert({
         source: "uazapi",
         event_type: "inbound_ingest_failed",
         channel_id: channel.id,
         payload: {
           meta_message_id: msg.metaMessageId ?? null,
-          from: msg.from,
+          raw_event_id: rawEventId || null,
+          from_suffix: sufixoContato(msg.from),
           msg_type: msg.msgType,
           direction: msg.direction,
-          erro: e instanceof Error ? e.message : String(e),
+          reason: inboundErrorReason(e),
         },
       }).then(() => {}, () => {});
       continue;
@@ -249,7 +354,12 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
             msg.from,
             "explicit-reply",
           );
-          console.log("uazapi: contato bloqueado por desinteresse", JSON.stringify(result));
+          const labels = await ensureNoPurchaseLabels(db, String(channel.id), msg.from);
+          if (labels.errors.length) console.warn("uazapi: etiquetas de recusa pendentes", labels.errors);
+          console.log(
+            "uazapi: contato bloqueado por desinteresse",
+            JSON.stringify(result),
+          );
         } catch (e) {
           console.error("uazapi: falha ao encerrar desinteresse", e);
         }
@@ -261,7 +371,10 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
       // sem isso o alerta que cai no 11910 aciona o bot de intenção, que responde pro 5895,
       // que ingere de volta: laço entre dois números da casa.
       if (msg.from && await isNumeroDaCasa(db, msg.from)) {
-        console.log("entrada de número interno: automação ignorada,", sufixoContato(msg.from));
+        console.log(
+          "entrada de número interno: automação ignorada,",
+          sufixoContato(msg.from),
+        );
         continue;
       }
 
@@ -272,8 +385,35 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         msg.from &&
         await isBotMutedForContact(db, String(channel.id), msg.from)
       ) {
-        console.log("bot-mute: entrada uazapi ignorada pelo bot,", sufixoContato(msg.from));
+        console.log(
+          "bot-mute: entrada uazapi ignorada pelo bot,",
+          sufixoContato(msg.from),
+        );
         continue;
+      }
+
+      // A origem Meta vem antes das rotas de preço, catálogo e fluxo conversacional.
+      // Algumas delas consomem a primeira entrada e impediam a inscrição do funil.
+      if (msg.fromAd && msg.from) {
+        try {
+          await autoEnrollFunil(db, channel as Json, msg.from, "", true, {
+            sourceMessageId: msg.metaMessageId ?? null,
+          });
+          const { data: contact } = await db.from("contacts").select("id")
+            .eq("channel_id", channel.id)
+            .eq("external_contact_id", msg.from).maybeSingle();
+          if (contact) {
+            const { data: conversation } = await db.from("conversations")
+              .select("id").eq("contact_id", contact.id)
+              .neq("status", "resolved")
+              .order("opened_at", { ascending: false }).limit(1).maybeSingle();
+            if (conversation?.id) {
+              await sendFirstAdFunnelPieceNow(db, String(conversation.id));
+            }
+          }
+        } catch (error) {
+          console.error("uazapi: abertura imediata do anúncio falhou", error);
+        }
       }
 
       // Lead no meio de um fluxo conversacional responde à pergunta do fluxo, não ao bot
@@ -286,6 +426,7 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
               channel as Json,
               msg.from,
               msg.menuClickId ?? null,
+              msg.content,
             )
           ) continue;
         } catch (e) {
@@ -379,17 +520,6 @@ async function handleInbound(db: ReturnType<typeof admin>, p: Json) {
         !msg.menuClickId && !consumedByQualification && !consumedByCatalog
       ) {
         try {
-          await autoEnrollFunil(
-            db,
-            channel as Json,
-            msg.from,
-            msg.content,
-            msg.fromAd,
-          );
-        } catch (e) {
-          console.error("uazapi-webhook auto-enroll erro:", e);
-        }
-        try {
           await handleUazapiIntent(db, channel as Json, msg, acct);
         } catch (e) {
           console.error("uazapi-webhook intent erro:", e);
@@ -405,6 +535,7 @@ async function handleUazapiClick(
   from: string,
   id: string,
   acct: Awaited<ReturnType<typeof accountForChannel>>,
+  inboundMessageId?: string,
 ): Promise<void> {
   const domain = clickDomain(id);
   if (
@@ -416,16 +547,33 @@ async function handleUazapiClick(
     return;
   }
 
-  if (id.startsWith("menu_")) {
-    await handleMenuClick(db, channel, from, id, acct);
+  try {
+    await autoEnrollFunil(db, channel, from, id, false, {
+      responseWillHandle: id !== "menu_humano",
+      humanHandoffWillHandle: id === "menu_humano",
+    });
+  } catch (error) {
+    console.error("uazapi-webhook click auto-enroll erro:", error);
+  }
+
+  if (id.startsWith("menu_") || isRestoredFunnelButton(id)) {
+    // Espelha o caminho Meta (hub-webhook handleWhatsApp): clique no menu de preço/uso é
+    // intenção comercial do lead. Sem isto o funil 5895 (uazapi) não registrava
+    // `intencao_identificada` e o relatório via o topo do funil quase zerado.
+    if (id === "menu_preco") {
+      await recordInboundCommercialIntent(db, channel, from, "preco", inboundMessageId);
+    } else if (id === "menu_uso") {
+      await recordInboundCommercialIntent(db, channel, from, "interesse_geral", inboundMessageId);
+    }
+    await handleMenuClick(db, channel, from, id, acct, inboundMessageId);
   } else if (
     id.startsWith("preco_") || id.startsWith("tam_") || id.startsWith("pag_")
   ) {
-    await handlePrecoClick(db, channel, from, id, acct);
+    await handlePrecoClick(db, channel, from, id, acct, inboundMessageId);
   } else if (id.startsWith("plantio_")) {
-    await handlePlantioClick(db, channel, from, id, acct);
+    await handlePlantioClick(db, channel, from, id, acct, inboundMessageId);
   } else if (id.startsWith("nutricao_")) {
-    await handleNutricaoClick(db, channel, from, id, acct);
+    await handleNutricaoClick(db, channel, from, id, acct, inboundMessageId);
   } else if (
     id.startsWith("grp_") || id.startsWith("cat_") ||
     id.startsWith("prod_") || id.startsWith("acao_") || id.startsWith("pg_") ||
@@ -456,13 +604,28 @@ async function handleUazapiIntent(
         "uazapi-webhook: áudio recebido, mas não foi transcrito",
         msg.metaMessageId,
       );
-      return;
+    } else {
+      intentText = transcription;
+      console.log(
+        "uazapi-webhook: áudio transcrito",
+        msg.metaMessageId,
+        JSON.stringify(transcription.slice(0, 160)),
+      );
     }
-    intentText = transcription;
-    console.log(
-      "uazapi-webhook: áudio transcrito",
-      msg.metaMessageId,
-      JSON.stringify(transcription.slice(0, 160)),
+  }
+
+  // Intenção comercial do lead por TEXTO/ÁUDIO (preco | uso | interesse_geral | duvida_tecnica),
+  // mesma classificação do caminho Meta (hub-webhook:589). O detector estreito abaixo só cobre
+  // preco/video/plantio/nutricao e decide a RESPOSTA do bot; aqui registramos a intenção comercial
+  // pro funil independentemente disso. Dedup por messageId é feito dentro de recordInboundCommercialIntent.
+  const commercialIntent = classificarIntencaoComercial(intentText);
+  if (commercialIntent) {
+    await recordInboundCommercialIntent(
+      db,
+      channel,
+      from,
+      commercialIntent,
+      msg.metaMessageId ?? null,
     );
   }
 
@@ -474,8 +637,84 @@ async function handleUazapiIntent(
     ? { name: "plantio", menu: "menu_plantio" }
     : isNutricaoIntent(intentText)
     ? { name: "nutricao", menu: "menu_nutricao" }
+    : isLogisticaIntent(intentText)
+    ? { name: "logistica", menu: "menu_logistica" }
     : null;
-  if (!intent) return;
+  let enrollment: Awaited<ReturnType<typeof autoEnrollFunil>> | null = null;
+  try {
+    enrollment = await autoEnrollFunil(
+      db,
+      channel,
+      from,
+      intentText,
+      msg.fromAd,
+      {
+        responseWillHandle: Boolean(intent),
+        sourceMessageId: msg.metaMessageId ?? null,
+      },
+    );
+  } catch (error) {
+    console.error("uazapi-webhook auto-enroll erro:", error);
+  }
+
+  if (enrollment?.deferIntent) {
+    console.log(
+      "uazapi-webhook: rota adiada até a abertura do funil",
+      sufixoContato(from),
+    );
+    return;
+  }
+
+  if (!intent) {
+    if (enrollment?.humanHandoff) {
+      const messageId = msg.metaMessageId ?? msg.sentAt ?? null;
+      const handoffClaimId = messageId
+        ? `ad-question-handoff-${channel.id}-${from}-${messageId}`
+        : null;
+      const claimed = await claimDelivery(
+        db,
+        handoffClaimId,
+        "ad-question-handoff",
+      );
+      if (claimed) {
+        try {
+          if (isLogisticaIntent(intentText)) {
+            await handleHumanRequest(db, channel, from, "whatsapp", acct, {
+              tipo_pedido: "logistica",
+              pergunta: intentText.slice(0, 400),
+              message_id: messageId,
+            });
+          } else {
+            await handleMenuClick(
+              db,
+              channel,
+              from,
+              "menu_humano",
+              acct,
+              messageId ?? undefined,
+            );
+          }
+        } catch (error) {
+          await releaseDelivery(db, handoffClaimId);
+          throw error;
+        }
+      }
+    }
+    // Texto livre sem porta determinística → lane de IA (quando ligada). Mesmo boundary
+    // do webhook oficial; não entra se o lead já pediu humano no fluxo de anúncio.
+    if (!enrollment?.humanHandoff && aiLaneEnabled()) {
+      try {
+        await routeContactToAiLane(db, String(channel.id), from, acct);
+      } catch (e) {
+        console.error("uazapi ai-lane enter erro:", e);
+      }
+    }
+    return;
+  }
+
+  // A resposta logística de um anúncio complementa o funil restaurado; não é
+  // uma solicitação para parar as cinco fases ou atribuir atendimento humano.
+  if (intent.name === "logistica" && enrollment?.adOrigin !== true) return;
 
   const intentKey = msg.metaMessageId ?? new Date().toISOString();
   const claimed = await claimDelivery(
@@ -491,13 +730,21 @@ async function handleUazapiIntent(
     const { data: conversation } = await db.from("conversations").select("id")
       .eq("contact_id", contact.id).neq("status", "resolved")
       .order("opened_at", { ascending: false }).limit(1).maybeSingle();
-    if (conversation?.id) {
-      await autoPauseFunil(conversation.id as string, intent.name);
+    if (conversation?.id && intent.name !== "logistica") {
+      await autoPauseFunil(conversation.id as string, intent.name, {
+        adOrigin: enrollment?.adOrigin === true,
+      });
     }
   }
 
-  await handleMenuClick(db, channel, from, intent.menu, acct);
-  console.log("uazapi-webhook: intent disparado", intent.name, sufixoContato(from));
+  await handleMenuClick(
+    db, channel, from, intent.menu, acct, msg.metaMessageId ?? undefined,
+  );
+  console.log(
+    "uazapi-webhook: intent disparado",
+    intent.name,
+    sufixoContato(from),
+  );
 }
 
 // Cache curto: a lista de números próprios muda quando alguém cadastra canal, não a cada
@@ -550,7 +797,17 @@ async function findChannelForInstance(
   const waFastId = getString(chat, "wa_fastid") ?? getString(data, "wa_fastid");
   const waChatId = getString(chat, "wa_chatid") ?? getString(data, "wa_chatid");
 
+  // `owner` é o NOSSO número (a conta que recebeu) — casa com `channels`. Já os campos
+  // phone/wa_chatid/jid do chat são do CLIENTE. Precisa vir PRIMEIRO: quando o nome da
+  // instância não bate com o canal (ex.: instância "0595 cecape" x canal "0595"), o match
+  // caía no número do cliente, nenhuma linha de `channels` batia e a entrada do cliente era
+  // descartada como "sem canal" (29 eventos do 0595 em 23/10). Ver findChannelForInstance.
+  const ownerNumber = firstString(
+    getString(chat, "owner"),
+    getString(data, "owner"),
+  );
   const instanceNumber = firstString(
+    ownerNumber,
     getString(data, "number"),
     getString(data, "phone"),
     getString(chat, "phone"),
@@ -561,7 +818,6 @@ async function findChannelForInstance(
     getString(sender, "jid"),
     getString(sender, "lid"),
     getString(sender, "sender_pn"),
-    getString(data, "owner"),
     waChatId,
     waFastId,
   );
@@ -747,6 +1003,7 @@ async function parseUazapiMessage(
     getString(message, "content"),
     getString(getJson(message, "content"), "text"),
     getString(getJson(message, "content"), "body"),
+    getString(getJson(message, "content"), "title"),
     getString(message, "text"),
     getString(message, "vote"),
     getString(context, "text"),
@@ -956,6 +1213,19 @@ function isMediaType(msgType: string): boolean {
   const normalized = msgType.toLowerCase();
   return ["audio", "ptt", "image", "video", "document", "sticker"]
     .some((type) => normalized.includes(type));
+}
+
+export function requiresInstanceToken(message: Json): boolean {
+  const content = getJson(message, "content");
+  const type = firstString(
+    message.mediaType,
+    message.messageType,
+    content?.PTT === true ? "ptt" : undefined,
+    content?.mimetype,
+    getJson(message, "media")?.type,
+    message.type,
+  ) ?? "text";
+  return isMediaType(type);
 }
 
 function hasAdReferral(message: Json, context: Json): boolean {

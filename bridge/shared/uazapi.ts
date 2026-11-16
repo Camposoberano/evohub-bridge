@@ -10,17 +10,30 @@ const REQUEST_TIMEOUT_MS = 45_000;
 
 type Json = Record<string, unknown>;
 
+export class UazapiResponseError extends Error {
+  constructor(
+    readonly stage: "await_response" | "read_body" | "invalid_body",
+    readonly elapsedMs: number,
+    cause: unknown,
+  ) {
+    super(`uazapi ${stage} após ${elapsedMs}ms`, { cause });
+    this.name = "UazapiResponseError";
+  }
+}
+
 export function uazapiConfigured(): boolean {
   return Boolean(BASE() && ADMIN());
 }
 
-async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown }) {
+async function call(path: string, opts: { method?: string; headers: Record<string, string>; body?: unknown; timeoutMs?: number }) {
   const controller = new AbortController();
+  const startedAt = Date.now();
+  let stage: "await_response" | "read_body" = "await_response";
   let timedOut = false;
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, opts.timeoutMs ?? REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(`${BASE()}${path}`, {
       method: opts.method ?? "GET",
@@ -28,22 +41,20 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: controller.signal,
     });
+    stage = "read_body";
     let data: Json = {};
     try {
       data = await res.json();
     } catch (e) {
-      if (timedOut) {
-        throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms ao ler a resposta`, { cause: e });
-      }
+      if (timedOut) throw new UazapiResponseError("read_body", Date.now() - startedAt, e);
       if (res.ok && opts.method === "POST" && path.startsWith("/send/")) {
-        throw new Error("UAZAPI aceitou a requisição mas devolveu resposta ilegível", { cause: e });
+        throw new UazapiResponseError("invalid_body", Date.now() - startedAt, e);
       }
     }
     return { ok: res.ok, status: res.status, data };
   } catch (e) {
-    if (timedOut) {
-      throw new Error(`uazapi timeout após ${REQUEST_TIMEOUT_MS}ms`, { cause: e });
-    }
+    if (e instanceof UazapiResponseError) throw e;
+    if (timedOut) throw new UazapiResponseError(stage, Date.now() - startedAt, e);
     throw e;
   } finally {
     clearTimeout(timer);
@@ -53,7 +64,7 @@ async function call(path: string, opts: { method?: string; headers: Record<strin
 export const adminGet = (path: string) => call(path, { headers: { admintoken: ADMIN() } });
 export const adminPost = (path: string, body?: unknown) => call(path, { method: "POST", headers: { admintoken: ADMIN() }, body });
 export const instGet = (path: string, token: string) => call(path, { headers: { token } });
-export const instPost = (path: string, token: string, body?: unknown) => call(path, { method: "POST", headers: { token }, body });
+export const instPost = (path: string, token: string, body?: unknown, timeoutMs?: number) => call(path, { method: "POST", headers: { token }, body, timeoutMs });
 export const instPut = (path: string, token: string, body?: unknown) => call(path, { method: "PUT", headers: { token }, body });
 export const instDelete = (path: string, token: string, body?: unknown) => call(path, { method: "DELETE", headers: { token }, body });
 

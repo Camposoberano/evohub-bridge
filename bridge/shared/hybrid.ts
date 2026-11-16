@@ -11,6 +11,7 @@ import {
   tokenForInstance,
   uazapiConfigured,
 } from "./uazapi.ts";
+import { waitForVideoReceipt } from "./async-video-receipt.ts";
 import { optionalEnv } from "./env.ts";
 import { admin } from "./supabase.ts";
 import { configuredChannel, readHybridConfig } from "./hybrid-config.ts";
@@ -272,8 +273,14 @@ export async function hybridSendMedia(
   to: string,
   mediaUrl: string,
   mediaType: string,
-  opts: { caption?: string; fileName?: string; isVoice?: boolean },
+  opts: {
+    caption?: string;
+    fileName?: string;
+    isVoice?: boolean;
+    asyncReceipt?: { trackId: string; startedAt: number; maxWaitMs?: number; trackSource?: string };
+  },
 ): Promise<SendResult | null> {
+  const startedAt = Date.now();
   try {
     const body: Json = {
       number: to,
@@ -281,6 +288,11 @@ export async function hybridSendMedia(
       type: mediaType === "document" ? "document" : mediaType,
       text: opts.caption || undefined,
     };
+    if (opts.asyncReceipt) {
+      body.async = true;
+      body.track_source = opts.asyncReceipt.trackSource ?? "evohub-5895-funnel";
+      body.track_id = opts.asyncReceipt.trackId;
+    }
     // `docName`, não `fileName`: é o nome do campo na uazapi (openapi-bundled.json,
     // POST /send/media). Com o nome errado o documento chegava sem nome no WhatsApp.
     if (mediaType === "document") body.docName = opts.fileName ?? "arquivo";
@@ -293,7 +305,7 @@ export async function hybridSendMedia(
     console.log(
       "hybrid-media-req:",
       endpoint,
-      JSON.stringify(body).slice(0, 400),
+      mediaType,
     );
     const r = await uazInstPost(endpoint, route.token, body);
     if (!r.ok) {
@@ -312,12 +324,91 @@ export async function hybridSendMedia(
       );
       return null;
     }
+    if (opts.asyncReceipt) {
+      const queued = (r.data ?? {}) as Json;
+      const providerId = typeof queued.id === "string" ? queued.id : null;
+      const receipt = await waitForVideoReceipt(route, {
+        recipient: to,
+        mediaUrl,
+        trackId: opts.asyncReceipt.trackId,
+        providerId,
+        startedAt: opts.asyncReceipt.startedAt,
+      }, { maxWaitMs: opts.asyncReceipt.maxWaitMs });
+      await recordRouteEvent(route, "send_success", mediaType, to, r.status);
+      return {
+        ok: true,
+        status: r.status,
+        data: {
+          message_id: receipt.id,
+          provider_status: receipt.status,
+          confirmed_from: "uazapi_message_history",
+        },
+        via: "uazapi",
+      };
+    }
     await recordRouteEvent(route, "send_success", mediaType, to, r.status);
     return { ok: true, status: r.status, data: r.data, via: "uazapi" };
   } catch (e) {
+    const receipt = opts.asyncReceipt ? null : await confirmedMediaReceipt(
+      route,
+      to,
+      mediaUrl,
+      mediaType,
+      startedAt,
+    ).catch(() => null);
+    if (receipt) {
+      await recordRouteEvent(route, "receipt_reconciled", mediaType, to, 200);
+      return receipt;
+    }
     await recordRouteEvent(route, "send_uncertain", mediaType, to, 0);
     throw e instanceof UncertainDeliveryError ? e : new UncertainDeliveryError(e);
   }
+}
+
+async function confirmedMediaReceipt(
+  route: HybridRoute,
+  to: string,
+  mediaUrl: string,
+  mediaType: string,
+  startedAt: number,
+): Promise<SendResult | null> {
+  const recipient = to.replace(/\D/g, "");
+  if (!/^55\d{10,11}$/.test(recipient)) return null;
+  const messages: Json[] = [];
+  for (let offset = 0; offset <= 400; offset += 200) {
+    const page = await uazInstPost("/message/find", route.token, {
+      chatid: `${recipient}@s.whatsapp.net`,
+      limit: 200,
+      offset,
+    });
+    if (!page.ok) return null;
+    const found = Array.isArray((page.data as Json).messages)
+      ? (page.data as Json).messages as Json[]
+      : [];
+    messages.push(...found);
+    if (found.length < 200) break;
+  }
+  const matches = messages.filter((message) => {
+    const sentAt = Number(message.messageTimestamp);
+    const sendPayload = (message.sendPayload ?? {}) as Json;
+    return message.fromMe === true &&
+      String(message.messageType).toLowerCase().includes(mediaType) &&
+      sendPayload.file === mediaUrl &&
+      ["Delivered", "Read", "Played"].includes(String(message.status)) &&
+      sentAt >= startedAt - 30_000 && sentAt <= Date.now() + 30_000;
+  });
+  if (matches.length !== 1) return null;
+  const message = matches[0];
+  return {
+    ok: true,
+    status: 200,
+    via: "uazapi",
+    data: {
+      message_id: message.id == null ? null : String(message.id),
+      provider_status: message.status,
+      reconciled_from: "uazapi_message_history",
+    },
+  };
 }
 
 // Envia botões nativos pela rota híbrida. A uazapi devolve o título selecionado
@@ -395,7 +486,11 @@ export async function hybridSendList(
 
 async function recordRouteEvent(
   route: HybridRoute,
-  eventType: "send_success" | "fallback_requested" | "send_uncertain",
+  eventType:
+    | "send_success"
+    | "fallback_requested"
+    | "send_uncertain"
+    | "receipt_reconciled",
   messageType: string,
   recipient: string,
   status: number,

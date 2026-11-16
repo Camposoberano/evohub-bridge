@@ -25,6 +25,7 @@ export type FlowStepKind =
   | "api"
   | "input"
   | "goto"
+  | "template"
   | "wait"
   | "end";
 
@@ -75,6 +76,22 @@ export type FlowCond = {
   value?: string;
 };
 
+/**
+ * Abridor oficial de janela fria. Lista fria no WhatsApp oficial tem a janela de 24h
+ * fechada: a Meta recusa texto/mídia/botão interativo e SÓ aceita um template aprovado
+ * (ver flow-runner). Este step manda esse template (com os botões quick-reply que já estão
+ * aprovados nele) e ESPERA o clique, igual a um `buttons`. O header de imagem é preenchido
+ * no envio por `headerMedia`. Só sai pelo canal oficial — nunca pela uazapi.
+ */
+export type FlowTemplate = {
+  /** nome do template aprovado na Meta (por WABA) */
+  name: string;
+  /** código do idioma, ex.: "pt_BR" */
+  language?: string;
+  /** header de mídia preenchido no envio (a imagem que faz o lead lembrar da marca) */
+  headerMedia?: { type: "image" | "video" | "document"; url: string };
+};
+
 export type FlowStep = {
   id: string;
   kind: FlowStepKind;
@@ -86,8 +103,19 @@ export type FlowStep = {
     url: string;
     fileName?: string;
   };
+  /** kind=template — abridor oficial de janela fria (ver FlowTemplate) */
+  template?: FlowTemplate;
   /** etiquetas aplicadas à conversa depois que a saída for aceita pelo provedor */
   labels?: string[];
+  /**
+   * Ao enviar este step, registra pedido de humano: pausa o funil SEM prazo, levanta o
+   * alerta e atribui ao Cícero. É o mesmo handoff do funil ramificado (shared/pedido-humano),
+   * mas disparado de dentro do fluxo — a resposta da campanha passa por `continueFlowOnReply`,
+   * não por `handleMenuClick`, então sem isto o lead que pede cotação ficaria só com etiqueta.
+   * `handoffContexto` entra no evento `pediu_humano` (ex.: { area_hectares: 2 }).
+   */
+  pedirHumano?: boolean;
+  handoffContexto?: Record<string, unknown>;
   /** kind=buttons — o WhatsApp aceita no máximo 3 */
   buttons?: FlowButton[];
   /** imagem no topo do cartão de botões */
@@ -169,7 +197,7 @@ export type Flow = {
 /** Steps que param o fluxo aguardando o lead. `wait` pausa por tempo, não por resposta. */
 export function esperaResposta(step: FlowStep): boolean {
   return step.kind === "buttons" || step.kind === "list" ||
-    step.kind === "ai" || step.kind === "input";
+    step.kind === "ai" || step.kind === "input" || step.kind === "template";
 }
 
 export function stepById(flow: Flow, id: string): FlowStep | undefined {
@@ -513,6 +541,21 @@ export function validateFlow(flow: Flow): FlowProblema[] {
       if (!s.ctaUrl?.trim()) problemas.push({ stepId: s.id, problema: "botão de link sem URL" });
       else if (!/^https?:\/\//i.test(s.ctaUrl.trim())) {
         problemas.push({ stepId: s.id, problema: "URL do botão deve começar com http:// ou https://" });
+      }
+    }
+    if (s.kind === "template") {
+      if (!s.template?.name) {
+        problemas.push({ stepId: s.id, problema: "template sem name" });
+      }
+      // A resposta a um template quick-reply chega como `type:"button"`, que o webhook
+      // entrega sem id de botão (replyId null) -> o avanço só acha caminho por fallbackNext.
+      // Sem ele, quem clica fica preso depois de abrir a janela, que é o pior dos mundos:
+      // pagou o template e não entregou o que prometeu.
+      if (!s.fallbackNext && !Object.keys(s.branches ?? {}).length) {
+        problemas.push({
+          stepId: s.id,
+          problema: "template sem fallbackNext/branches — o clique não teria pra onde ir",
+        });
       }
     }
     if (s.kind === "text" && !s.text?.trim()) {

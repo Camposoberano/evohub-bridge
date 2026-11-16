@@ -29,6 +29,7 @@ export async function getMeta(
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const res = await fetch(`${HUB()}/meta/${path.replace(/^\/+/, "")}`, {
     headers: { "Authorization": `Bearer ${channelToken}` },
+    signal: AbortSignal.timeout(10_000),
   });
   const data = await res.json().catch(() => ({}));
   return { ok: res.ok, status: res.status, data };
@@ -127,9 +128,11 @@ export async function createMessagesWebhook(hubChannelId: string, webhookUrl: st
   const res = await fetch(`${HUB()}/api/v1/webhooks`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${env("EVOLUTION_HUB_API_KEY")}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ name: "mensagens", channel_id: hubChannelId, url: webhookUrl, events, secret }),
+    body: JSON.stringify({ name: "mensagens", channels: [hubChannelId], all_channels: false, url: webhookUrl, events, secret }),
   });
-  return res.ok;
+  if (!res.ok) return false;
+  const webhook = await res.json() as { channel_ids?: string[] };
+  return webhook.channel_ids?.includes(hubChannelId) ?? false;
 }
 
 // URL pública do link de conexão (cliente final loga na Meta).

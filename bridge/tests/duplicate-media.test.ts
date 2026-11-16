@@ -25,6 +25,19 @@ Deno.test("echo marcado não acessa banco nem envia mídia pelo webhook ou polli
   assertEquals(recentOutgoingCandidates([message], 0), []);
 });
 
+Deno.test("saída importada com source_id do provedor não volta ao WhatsApp", async () => {
+  const message = {
+    id: 164701,
+    message_type: "outgoing",
+    content: "Mensagem já enviada pelo aparelho",
+    source_id: "5519971596836:A5FD9A63829FB89A0A1C2C834533537E",
+    content_attributes: {},
+  };
+  const db = { from: () => { throw new Error("não deve consultar ou enviar"); } } as unknown as DbClient;
+  await handleOutgoing(db, message);
+  assertEquals(recentOutgoingCandidates([message], 0), []);
+});
+
 Deno.test("registro de mídia leva marcador antes do webhook poder ocorrer", async () => {
   const original = globalThis.fetch;
   try {

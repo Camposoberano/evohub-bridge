@@ -8,7 +8,7 @@ import {
   normalizeHybridButtonReply,
   normalizeHybridMenuClick,
 } from "../shared/hybrid-menu.ts";
-import { FASES } from "../handlers/funil-enroll.ts";
+import { FASES_LEGADAS } from "../handlers/funil-enroll.ts";
 
 Deno.test("matchIsca separa Sim, Não e ignora desconhecido", () => {
   assertEquals(matchIsca("menu_isca_silagem")?.acao, "sim");
@@ -29,10 +29,26 @@ Deno.test("no uazapi o título do botão volta pro id (Sim e Não)", () => {
   // A resposta de botão na uazapi chega como o TÍTULO; hybrid-menu mapeia de volta pro id.
   // Sem isso o "Quero o material" não roteia e o PDF nunca sai no canal do funil (6836).
   for (const i of iscasAtivas()) {
-    assertEquals(normalizeHybridButtonReply(i.tituloSim), i.botaoSim, `${i.id} Sim`);
-    assertEquals(normalizeHybridButtonReply(i.tituloNao), i.botaoNao, `${i.id} Não`);
-    assertEquals(normalizeHybridMenuClick(i.tituloSim), i.botaoSim, `${i.id} Sim menu`);
-    assertEquals(normalizeHybridMenuClick(i.tituloNao), i.botaoNao, `${i.id} Não menu`);
+    assertEquals(
+      normalizeHybridButtonReply(i.tituloSim),
+      i.botaoSim,
+      `${i.id} Sim`,
+    );
+    assertEquals(
+      normalizeHybridButtonReply(i.tituloNao),
+      i.botaoNao,
+      `${i.id} Não`,
+    );
+    assertEquals(
+      normalizeHybridMenuClick(i.tituloSim),
+      i.botaoSim,
+      `${i.id} Sim menu`,
+    );
+    assertEquals(
+      normalizeHybridMenuClick(i.tituloNao),
+      i.botaoNao,
+      `${i.id} Não menu`,
+    );
   }
 });
 
@@ -52,7 +68,9 @@ Deno.test("claimDailyTag: primeira reivindica, segunda no mesmo dia é barrada",
   const db: any = {
     from: () => ({
       insert: () =>
-        Promise.resolve(n++ === 0 ? { error: null } : { error: { code: "23505" } }),
+        Promise.resolve(
+          n++ === 0 ? { error: null } : { error: { code: "23505" } },
+        ),
       delete: () => ({ eq: () => Promise.resolve({ error: null }) }),
     }),
   };
@@ -65,15 +83,21 @@ Deno.test("claimDailyTag: primeira reivindica, segunda no mesmo dia é barrada",
 });
 
 Deno.test("fase 5 oferta a isca (interativo com capa + Sim/Não) antes do fechamento", () => {
-  const fase5 = FASES[FASES.length - 1]();
+  const fase5 = FASES_LEGADAS[FASES_LEGADAS.length - 1]();
   // deno-lint-ignore no-explicit-any
   const interativos = fase5.filter((p: any) => p.kind === "interactive");
   for (const i of iscasAtivas()) {
     const oferta = interativos.find((p) =>
       // deno-lint-ignore no-explicit-any
-      ((p as any).buttons ?? []).some((b: { id: string }) => b.id === i.botaoSim)
+      ((p as any).buttons ?? []).some((b: { id: string }) =>
+        b.id === i.botaoSim
+      )
     );
-    assertEquals(Boolean(oferta), true, `isca ${i.id} não é ofertada na fase 5`);
+    assertEquals(
+      Boolean(oferta),
+      true,
+      `isca ${i.id} não é ofertada na fase 5`,
+    );
     // deno-lint-ignore no-explicit-any
     const p = oferta as any;
     assertEquals(p.headerSlot, i.capaSlot, "oferta sem a capa como header");
@@ -86,6 +110,10 @@ Deno.test("fase 5 oferta a isca (interativo com capa + Sim/Não) antes do fecham
     // a oferta vem antes do fechamento (lista), que é a última peça
     const fechamento = fase5.reduce((a, b) => (b.offset > a.offset ? b : a));
     assertEquals(fechamento.kind, "list");
-    assertEquals(p.offset < fechamento.offset, true, "oferta não vem antes do fechamento");
+    assertEquals(
+      p.offset < fechamento.offset,
+      true,
+      "oferta não vem antes do fechamento",
+    );
   }
 });

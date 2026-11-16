@@ -9,15 +9,25 @@ export function fold(s: string): string {
   return s.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
 
-// "preço", "valor", "quanto custa/sai/fica/tá/é/vale", "custa", "orçamento", "tabela de preço".
+// "preço", "custo", "valor", "quanto custa/sai/fica/tá/é/vale", "orçamento".
 // "tabela" sozinha NÃO conta (colide com "tabela nutricional" do menu).
 const PRECO_RE =
-  /(\bprecos?\b|\bvalor(es)?\b|\borcamento\b|quanto\s+(custa|sai|fica|ta|vale|e)\b|\bcusta\b|tabela\s+de\s+preco)/;
+  /(\bprecos?\b|\bcustos?\b|\bvalor(es)?\b|\borcamento\b|quanto\s+(custa|sai|fica|ta|vale|e)\b|\bcusta\b|tabela\s+de\s+preco)/;
 
 export function isPrecoIntent(text: string): boolean {
   const t = fold(text ?? "");
   if (!t.trim()) return false;
   return PRECO_RE.test(t);
+}
+
+// DÚVIDA DE ENTREGA/FRETE: não confirmar cobertura ou condição sem consultar a equipe.
+const LOGISTICA_RE =
+  /(\bfrete\b|\bentreg\w*\b|\btransportadora\b|\benvio\b|\benvia\b|\benviam\b|\benviar\b|\bprazo\s+de\s+entrega\b|\brastre\w*\b)/;
+
+export function isLogisticaIntent(text: string): boolean {
+  const t = fold(text ?? "");
+  if (!t.trim() || PRECO_RE.test(t)) return false;
+  return LOGISTICA_RE.test(t);
 }
 
 // DÚVIDA TÉCNICA — pergunta de quem está avaliando comprar, mas sobre COMO usar, não sobre

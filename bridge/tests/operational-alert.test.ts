@@ -5,6 +5,7 @@ import {
   formatarAlerta,
   avaliarSilencio,
   instanciaConectada,
+  temWebhookUazapiDoHub,
 } from "../shared/operational-alert.ts";
 import { DESLIGAMENTO_INTENCIONAL } from "../handlers/operational-health.ts";
 
@@ -43,6 +44,15 @@ Deno.test("contagem zerada não vira alerta", () => {
     ]),
     [],
   );
+});
+
+Deno.test("entrada pendente gera alerta com destino no painel", () => {
+  const issues = alertasParaEntregar([{
+    key: "inbound_unprocessed", severity: "critical", count: 1,
+    detail: "5895 ••••1151: clique pendente",
+  }]);
+  assertEquals(issues.length, 1);
+  assertEquals(formatarAlerta(issues, new Date("2026-10-17T20:00:00Z")).includes("Monitor de eventos"), true);
 });
 
 Deno.test("texto nomeia o problema e carrega o detalhe", () => {
@@ -181,6 +191,23 @@ Deno.test("instância sem canal (outro projeto) não alarma", () => {
   assertEquals(r.some((l) => l.includes("CECAPE")), false);
 });
 
+Deno.test("0595 conectado com apelido da instância não gera alerta falso", () => {
+  const comApelido = INSTANCIAS.map((i) =>
+    i.name === "0595" ? { ...i, name: "0595 cecape" } : i
+  );
+  assertEquals(avaliarInstanciasUazapi([CANAIS[3]], comApelido), []);
+});
+
+Deno.test("webhook do Hub precisa estar ativo no destino correto e receber mensagens", () => {
+  const base = "https://cofre.camposoberano.com.br";
+  const antigo = { url: "https://bridge.cecape.cloud/uazapi-webhook?token=antigo", enabled: true, events: ["messages"] };
+  const correto = { url: `${base}/uazapi-webhook?token=valido`, enabled: true, events: ["messages"] };
+  assertEquals(temWebhookUazapiDoHub([antigo], base), false);
+  assertEquals(temWebhookUazapiDoHub([{ ...correto, enabled: false }], base), false);
+  assertEquals(temWebhookUazapiDoHub([{ ...correto, events: ["connection"] }], base), false);
+  assertEquals(temWebhookUazapiDoHub([antigo, correto], base), true);
+});
+
 Deno.test("uazapi puro com instância caída ou sumida alarma", () => {
   const caida = INSTANCIAS.map((i) =>
     i.name === "0595" ? { ...i, status: "disconnected" } : i
@@ -236,4 +263,15 @@ Deno.test("instância caída é entregue e o texto diz o que fazer", () => {
   const texto = formatarAlerta([issue], new Date("2026-09-10T23:40:00Z"));
   assertEquals(texto.includes("reconectar o QR"), true);
   assertEquals(texto.includes("6836: instância 6836 disconnected"), true);
+});
+
+Deno.test("mídia bloqueadora do 5895 é alertável com a conversa e a etapa", () => {
+  const issues = alertasParaEntregar([{
+    key: "5895_media_blocked", severity: "critical", count: 2,
+    detail: "#3677 etapa 24 audio; #3728 etapa 5 video",
+  }]);
+  assertEquals(issues.length, 1);
+  const text = formatarAlerta(issues, new Date("2026-10-18T06:00:00Z"));
+  assertEquals(text.includes("#3677 etapa 24"), true);
+  assertEquals(text.includes("#3728 etapa 5"), true);
 });

@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { rotuloDeEvento } from "../handlers/uazapi-webhook.ts";
+import { requiresInstanceToken, rotuloDeEvento } from "../handlers/uazapi-webhook.ts";
 
 // A uazapi às vezes manda `event` como OBJETO. O `as string` que havia deixava o objeto
 // inteiro virar o rótulo em events.event_type — levando telefone do cliente junto e
@@ -43,4 +43,11 @@ Deno.test("nenhum telefone sobrevive no rótulo", () => {
     event: { sender_pn: "553488413727@s.whatsapp.net" },
   });
   assertEquals(r.includes("553488413727"), false);
+});
+
+Deno.test("clique e texto não aguardam /instance/all; mídia precisa do token", () => {
+  assertEquals(requiresInstanceToken({ mediaType: "list_response", buttonOrListid: "menu_nutricao" }), false);
+  assertEquals(requiresInstanceToken({ messageType: "Conversation", text: "Qual o preço?" }), false);
+  assertEquals(requiresInstanceToken({ messageType: "AudioMessage" }), true);
+  assertEquals(requiresInstanceToken({ content: { mimetype: "image/jpeg" } }), true);
 });

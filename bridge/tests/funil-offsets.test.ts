@@ -19,8 +19,7 @@ Deno.test("peças de uma fase ficam >=70s uma da outra", () => {
   });
 });
 
-// A fase seguinte começa em ini+FIM_ACESSO. Peça além do teto cai dentro da próxima fase e
-// mistura as aberturas — foi o motivo de a fase 5 parar em 490 ao ganhar a arte de logística.
+// O último item de cada fase precisa caber antes do início da próxima.
 Deno.test("nenhuma peça passa do teto do acesso", () => {
   FASES.forEach((fase, i) => {
     const ultimo = Math.max(...fase().map((p) => p.offset));
@@ -30,21 +29,9 @@ Deno.test("nenhuma peça passa do teto do acesso", () => {
   });
 });
 
-// A nova jornada é curta, sem mídia genérica e com ações que levam a ramos reais.
-Deno.test("nova entrada recebe só abertura e menu acionável, sem régua longa", () => {
-  assertEquals(FASES.length, 1);
-  const pecas = FASES[0]();
-  assertEquals(pecas.length, 2);
-  assertEquals(pecas.some((p) => p.kind === "media"), false);
-  const menu = pecas.find((p) => p.kind === "list");
-  assertEquals(menu?.kind, "list");
-  if (menu?.kind !== "list") throw new Error("menu inicial ausente");
-  assertEquals(menu.sections[0].rows.map((row) => row.id), [
-    "menu_preco",
-    "menu_uso",
-    "menu_humano",
-  ]);
-  assertEquals(menu.text.toLowerCase().includes("preço"), false);
+// A fase 5 não ganhou um vídeo novo: o catálogo de 30/09 não possuía esse slot.
+Deno.test("fase 5 não depende de vídeo ausente", () => {
+  assertEquals(FASES[4]().some((p) => p.kind === "media" && p.mediaType === "video"), false);
 });
 
 // Artes do catálogo vivem em day=0, que não é fase nenhuma. Sem mediaDay o pick() procura
