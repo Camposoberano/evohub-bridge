@@ -239,8 +239,13 @@ export async function handle(req: Request): Promise<Response> {
   }
   // Última barreira para toda peça ligada a scheduled_messages, incluindo chamadas
   // do n8n que não passam pelo pump local. Mensagens manuais continuam fora desta regra.
+  // Exceção: a ABERTURA do 7d (dia 1) é resposta ao lead que acabou de escrever (janela de
+  // 24h aberta), então dispara QUALQUER hora; o ensaio noturno controlado também. A cadência
+  // (dia 2+) segue deferida pra próxima janela quando chega fora de hora.
+  const sevenDayOpeningOutbound = funnelLink.funnel === "mega-sorgo-7d-v1" &&
+    (isSevenDayNightTest(cwConvId) || Number(funnelLink.funnel_day) === 1);
   if (funnelLink.scheduled_message_id && !isWithinFunnelSendHours() &&
-    !(funnelLink.funnel === "mega-sorgo-7d-v1" && isSevenDayNightTest(cwConvId))) {
+    !sevenDayOpeningOutbound) {
     const nextSendAt = new Date(nextFunnelSendAt()).toISOString();
     const { data: deferred, error: deferError } = await db
       .from("scheduled_messages")
