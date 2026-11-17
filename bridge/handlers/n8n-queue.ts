@@ -56,18 +56,32 @@ export function shouldCancelTerminal5895(funnel: unknown, blocked: string | null
 /** Lista IDs, nunca payload, para o workflow não carregar conteúdo nem segredo do banco. */
 async function due(): Promise<Response> {
   if (!isWithinFunnelSendHours()) {
-    if (!isSevenDayNightTestWindow()) return json([]);
     const db = admin();
-    const { data, error } = await db.from("scheduled_messages")
-      .select("id,chatwoot_conversation_id")
-      .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
-      .in("chatwoot_conversation_id", [5004, 5005])
-      .lte("send_at", new Date().toISOString())
-      .order("send_at", { ascending: true }).limit(20);
-    if (error) return json({ ok: false, error: "falha ao consultar teste noturno" }, 503);
-    return json(((data ?? []) as Json[])
-      .filter((row: Json) => isSevenDayNightTest(Number(row.chatwoot_conversation_id)))
-      .map((row: Json) => ({ id: row.id })));
+    const nowIso = new Date().toISOString();
+    const ids = new Map<string, Json>();
+    // Abertura do 7d (dia 1) dispara QUALQUER hora — o lead acabou de escrever (janela aberta).
+    const opening = await db.from("scheduled_messages")
+      .select("id")
+      .eq("status", "pending").like("funnel", `${MEGA_SORGO_7D_VERSION}%`)
+      .eq("day", 1).lte("send_at", nowIso)
+      .order("send_at", { ascending: true }).limit(QUEUE_LIMIT);
+    if (opening.error) return json({ ok: false, error: "falha ao consultar abertura 7d" }, 503);
+    for (const row of (opening.data ?? []) as Json[]) ids.set(String(row.id), { id: row.id });
+    // Ensaio noturno controlado (5004/5005) — inalterado.
+    if (isSevenDayNightTestWindow()) {
+      const { data, error } = await db.from("scheduled_messages")
+        .select("id,chatwoot_conversation_id")
+        .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
+        .in("chatwoot_conversation_id", [5004, 5005])
+        .lte("send_at", nowIso)
+        .order("send_at", { ascending: true }).limit(20);
+      if (error) return json({ ok: false, error: "falha ao consultar teste noturno" }, 503);
+      for (
+        const row of ((data ?? []) as Json[])
+          .filter((r: Json) => isSevenDayNightTest(Number(r.chatwoot_conversation_id)))
+      ) ids.set(String(row.id), { id: row.id });
+    }
+    return json([...ids.values()]);
   }
   const db = admin();
   const now = new Date().toISOString();
@@ -133,7 +147,10 @@ async function send(req: Request): Promise<Response> {
   }
   const isSevenDay = queueBaseVersion(row.funnel) === MEGA_SORGO_7D_VERSION;
   const nightTest = isSevenDay && isSevenDayNightTest(Number(row.chatwoot_conversation_id));
-  if (!isWithinFunnelSendHours() && !nightTest) {
+  // Disparo do 7d (dia 1) = resposta ao lead que acabou de escrever: fura a janela, envia
+  // QUALQUER hora. A trava 08h–20h vale só pra cadência (dia 2+).
+  const sevenDayOpening = isSevenDay && Number(row.day) === 1;
+  if (!isWithinFunnelSendHours() && !nightTest && !sevenDayOpening) {
     return json({ ok: true, sent: false, blocked: "horario-comercial" });
   }
   if (row.status === "sent") return json({ ok: true, sent: true, duplicate: true });
@@ -143,9 +160,12 @@ async function send(req: Request): Promise<Response> {
   if (Date.parse(String(row.send_at)) > Date.now()) {
     return json({ ok: true, sent: false, not_due: true });
   }
-  if (isSevenDay && ((!isSevenDaySendHour() && !nightTest) ||
-    !sevenDayConversationAllowed(Number(row.chatwoot_conversation_id)))) {
+  if (isSevenDay && !sevenDayConversationAllowed(Number(row.chatwoot_conversation_id))) {
     return json({ ok: true, sent: false, blocked: "teste-7d-nao-autorizado" });
+  }
+  // Cadência (dia 2+) só na janela; a abertura (dia 1) pode à noite.
+  if (isSevenDay && !sevenDayOpening && !isSevenDaySendHour() && !nightTest) {
+    return json({ ok: true, sent: false, blocked: "fora-janela-7d" });
   }
   const { data: conversation, error: conversationError } = await db.from("conversations")
     .select("id,channel_id,chatwoot_conversation_id,outcome,labels,bot_muted_at,contacts(*)")

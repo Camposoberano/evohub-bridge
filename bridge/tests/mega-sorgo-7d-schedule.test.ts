@@ -29,21 +29,22 @@ Deno.test("ensaio percorre o catálogo a cada 5 minutos sem envio após 20h", ()
   ]);
 });
 
-Deno.test("abertura sai na hora: 1ª peça na entrada e só o excedente rola pra manhã seguinte", () => {
-  // 2026-11-09T22:50:00Z = 19:50 BRT, perto do fim da janela.
-  const rows = scheduleSevenDayPieces(
-    Array.from({ length: 12 }, (_, i) => ({ code: String(i + 1), day: 1 })),
-    Date.parse("2026-11-09T22:50:00Z"),
-  );
-  // 1ª e 2ª saem hoje (19:50 e 19:55 BRT); a partir das 20h rola pro 08h do dia seguinte.
-  assertEquals(rows[0].sendAt, "2026-11-09T22:50:00.000Z");
-  assertEquals(rows[1].sendAt, "2026-11-09T22:55:00.000Z");
-  assertEquals(rows[2].sendAt, "2026-11-10T11:00:00.000Z");
-  assertEquals(rows[3].sendAt, "2026-11-10T11:05:00.000Z");
-  // firstStart agora é a própria entrada, não a manhã seguinte.
+Deno.test("disparo (dia 1) sai na hora da entrada, QUALQUER hora; cadência respeita a janela", () => {
+  // 2026-11-10T00:30:00Z = 21:30 BRT (09/11), já fora da janela 08h–20h.
+  const rows = scheduleSevenDayPieces([
+    { code: "1", day: 1 }, { code: "2", day: 1 }, { code: "3", day: 1 },
+    { code: "d2", day: 2 },
+  ], Date.parse("2026-11-10T00:30:00Z"));
+  // Dia 1 dispara na hora, 5 em 5 min, à noite — não adia nem rola pra manhã.
+  assertEquals(rows[0].sendAt, "2026-11-10T00:30:00.000Z");
+  assertEquals(rows[1].sendAt, "2026-11-10T00:35:00.000Z");
+  assertEquals(rows[2].sendAt, "2026-11-10T00:40:00.000Z");
+  // Dia 2 (cadência) já respeita a janela: 09h BRT do dia seguinte à ENTRADA (09/11 local → 10/11 09h).
+  assertEquals(rows[3].sendAt, "2026-11-10T12:00:00.000Z");
+  // firstStart = a própria entrada, qualquer hora.
   assertEquals(
-    new Date(sevenDayFirstStart(Date.parse("2026-11-09T22:50:00Z"), 12)).toISOString(),
-    "2026-11-09T22:50:00.000Z",
+    new Date(sevenDayFirstStart(Date.parse("2026-11-10T00:30:00Z"), 12)).toISOString(),
+    "2026-11-10T00:30:00.000Z",
   );
 });
 

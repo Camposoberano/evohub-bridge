@@ -45,12 +45,16 @@ function sequentialWindowSlots(enteredAt: number, count: number): number[] {
   return slots;
 }
 
-/** Instante da 1ª peça do dia 1: na hora da entrada (encaixada na janela), nunca adia o bloco todo. */
+/**
+ * Instante da 1ª peça do dia 1 = a própria entrada, QUALQUER hora. O disparo é resposta ao
+ * lead que acabou de escrever (janela de 24h aberta), então não respeita a trava 08h–20h —
+ * essa trava vale só pra cadência (dia 2+) e pro resume.
+ */
 export function sevenDayFirstStart(enteredAt: number, firstDayCount: number): number {
   if (!Number.isFinite(enteredAt) || !Number.isInteger(firstDayCount) || firstDayCount < 1) {
     throw new Error("entrada ou número de peças inválido");
   }
-  return sequentialWindowSlots(enteredAt, 1)[0];
+  return enteredAt;
 }
 
 export type SevenDayPiece = { code: string; day: number };
@@ -74,15 +78,16 @@ export function scheduleSevenDayPieces(
       throw new Error(`dia ${day} não cabe na janela`);
     }
   }
-  const day1Slots = sequentialWindowSlots(enteredAt, counts.get(1)!);
-  const firstLocalDay = localDayUtc(day1Slots[0]);
+  // Disparo (dia 1) sai na hora da entrada, 5 em 5 min, QUALQUER hora — inclusive à noite.
+  // A trava 08h–20h vale só pra cadência (dia 2+).
+  const firstLocalDay = localDayUtc(enteredAt);
   const used = new Map<number, number>();
   return pieces.map((piece, position) => {
     const index = used.get(piece.day) ?? 0;
     used.set(piece.day, index + 1);
     if (piece.day === 1) {
-      // Dia 1 já vem encaixado na janela (excedente rolado pra manhã seguinte).
-      return { ...piece, position, sendAt: new Date(day1Slots[index]).toISOString() };
+      const timestamp = enteredAt + index * PIECE_GAP_MINUTES * MINUTE_MS;
+      return { ...piece, position, sendAt: new Date(timestamp).toISOString() };
     }
     const timestamp = atLocalMinute(firstLocalDay + (piece.day - 1) * DAY_MS,
       9 * 60 + index * PIECE_GAP_MINUTES);
