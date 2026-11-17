@@ -1,7 +1,9 @@
 // ai-gate — endpoint do contactAuth do fazer.ai. O agente "Vendedor Agro" consulta
-// aqui ANTES de cada resposta: só libera (`authorized:true`) se a conversa estiver na
-// lane de IA (label `ai-vendas`) e o bot não estiver calado à mão (`bot-off`). Qualquer
-// outra coisa nega — e o fazer.ai é fail-closed, então negar = nenhum turno.
+// aqui ANTES de cada resposta. Política (invertida em 2026-11-17): LIBERA por padrão e
+// nega só em dois casos — bot calado à mão (`bot-off`) ou lead em funil de 7 dias
+// rodando (o funil é dono). A label `ai-vendas` deixou de ser pré-requisito: na prática
+// quase nenhuma conversa a tinha, e exigir a lane calava o agente em ~todas. O fazer.ai
+// é fail-closed, então negar = nenhum turno.
 //
 // Contrato (fazer.ai docs/contact-auth.md):
 //   POST application/json
@@ -17,9 +19,6 @@ import { admin } from "../shared/supabase.ts";
 import { optionalEnv } from "../shared/env.ts";
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { isBotMutedForContact } from "../shared/bot-mute.ts";
-import { accountForChannel } from "../shared/accounts.ts";
-import { getConversationLabels } from "../shared/chatwoot.ts";
-import { hasAiLaneLabel } from "../shared/ai-lane.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
 
 type Json = Record<string, unknown>;
@@ -82,17 +81,13 @@ export async function handle(req: Request): Promise<Response> {
 
     // Lead em funil de 7 dias: o funil é dono da conversa (abre, nutre, fecha). O agente
     // não entra enquanto a sequência está "running" — volta sozinho quando ela sai de running
-    // (terminou/pausou/cancelou), aí o /ai-gate libera de novo pela label.
+    // (terminou/pausou/cancelou).
     const { data: seq7d } = await db.from("sales_sequences").select("status")
       .eq("chatwoot_conversation_id", cwConversationId)
       .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "running").maybeSingle();
     if (seq7d) return deny("em_funil_7d");
 
-    // A lane é a label no Chatwoot (fonte da verdade, visível pro operador).
-    const acct = await accountForChannel(String(channel.id));
-    const labels = await getConversationLabels(cwConversationId, acct);
-    if (!hasAiLaneLabel(labels)) return deny("not_in_ai_lane");
-
+    // Fora desses dois bloqueios, o agente responde (gate invertido — ver cabeçalho).
     return allow();
   } catch (e) {
     // Erro → 500. O fazer.ai conta como ERRO (fail-closed): não responde e avisa o
