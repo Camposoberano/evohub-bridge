@@ -32,6 +32,18 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Destravar peça do MEIO da cadeia 7d (n8n-queue `due()`): o `send_at` dela tem que ficar ANTES
+  das pendentes seguintes, senão o dedup por conversa starva (2026-11-17, destrava da 5125).** O
+  despacho do 7d é o `due()`+`send()` em `handlers/n8n-queue.ts` (o cron n8n `pQFCtRhzQTKqXTjS`
+  puxa), NÃO o `pumpFunnelQueue` (ver [[pump-head-of-line-defer]], que é outro dispatcher). `due()`
+  devolve **1 peça por conversa por ciclo**, a de `send_at` mais cedo. Ao reenviar uma peça do meio
+  (ex.: áudio que falhou em 401 transitório) flipando `failed→pending`, se o `send_at` dela ficar
+  DEPOIS das peças seguintes (que já estão pending mais cedo), `due()` pega a seguinte — que está
+  bloqueada atrás da falhada — e a cadeia inteira trava (deadlock). Fix na 5125: reposicionei o
+  `send_at` da peça falhada pra ANTES da próxima pendente → ela saiu, cascata destravou. **Regra:**
+  destravar no meio da cadeia = reenfileirar com `send_at` ≤ ao da próxima peça pendente daquela
+  conversa, nunca `now` cru se `now` for maior que as seguintes. (401/UNAUTHORIZED isolado em 1 áudio
+  entre dezenas é transitório — basta o retry; não é bug de código.)
 - **Disparo do 7d (dia 1) sai QUALQUER hora; a trava 08h–20h vale só pra cadência (dia 2+)
   (2026-11-17, commits `f2ed382`+`4df7e75`).** A abertura é resposta ao lead que acabou de
   escrever (janela de 24h aberta), então fura a janela. Mas tinha **3 travas de horário
