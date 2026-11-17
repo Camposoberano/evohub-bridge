@@ -32,6 +32,39 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Disparo do 7d (dia 1) sai QUALQUER hora; a trava 08h–20h vale só pra cadência (dia 2+)
+  (2026-11-17, commits `f2ed382`+`4df7e75`).** A abertura é resposta ao lead que acabou de
+  escrever (janela de 24h aberta), então fura a janela. Mas tinha **3 travas de horário
+  empilhadas** — pra o disparo noturno funcionar, TODAS precisaram mudar:
+  1. **Nó n8n** `Janela de envio 06h–21h Fortaleza` no workflow `pQFCtRhzQTKqXTjS` dropava tudo
+     fora de 06:00–20:55 → virou pass-through (`return $input.all()`); o BRIDGE é a autoridade de
+     horário agora (condiz com "lógica SEMPRE no bridge").
+  2. **`n8n-queue`** (`due()` + `send()`): `due()` fora da janela agora surfa as peças de `day=1`
+     pendentes/vencidas; `send()` deixa a abertura (`sevenDayOpening = day===1`) furar
+     `horario-comercial` e a janela 08-20 (`fora-janela-7d` só pega dia 2+).
+  3. **`send-outbound`** "última barreira" (defere `scheduled_message` fora de 07-20h): a abertura
+     7d (`funnel_day===1`) agora fura, junto com o ensaio noturno.
+  No agendador, `scheduleSevenDayPieces` dia-1 = `enteredAt + 5min*i` sem janela; dia 2+ ancorado
+  09h local com guarda. `scheduleSevenDayRemainingPieces` (resume) segue windowed (é cadência, não
+  disparo). **Regra:** ao mexer em horário de envio do funil, lembrar que há 3 camadas (n8n node,
+  n8n-queue, send-outbound) — mudar 1 só não resolve. Provado: 5119 entrou 20:49 BRT e recebeu
+  12/12 peças da abertura à noite. Ver [[funil-7d-disparo-qualquer-hora]].
+- **`/ai-gate` INVERTIDO: libera por padrão, nega só `bot-off` e `7d running` (2026-11-17,
+  commit `a64b533`).** O gate exigia a label `ai-vendas` pra liberar — mas só **2 de 1000**
+  conversas abertas tinham a lane, então ligar o gate como estava calaria o agente em ~todas.
+  Por isso o `contactAuth` vivia DESLIGADO e o agente respondia tudo, inclusive leads do 7d
+  (colidindo com o funil + quebrando no 429). Nova política: LIBERA por padrão; nega só (a)
+  `bot-off` e (b) conversa com sequência `mega-sorgo-7d-v1` em `running` (o funil é dono — reason
+  `em_funil_7d`). `contactAuth.enabled` do agente 2 (fazer.ai agro) foi LIGADO (consulta o gate
+  por mensagem). Provado ao vivo: 5119 (7d)→`authorized:false em_funil_7d`; 2216 (normal)→
+  `authorized:true`. **Regra:** a lane `ai-vendas` deixou de ser pré-requisito; o agente volta
+  sozinho ao lead quando a sequência 7d sai de running. Ver [[ai-gate-invertido]].
+- **Agente agro quebra em HTTP 429 da OpenAI — STT (whisper) + chat; conserto é crédito/tier,
+  não código (2026-11-16/17).** Sob volume do 7d, o "Vendedor Agro" (agente 2, fazer.ai agro)
+  estoura 429 em todo áudio (whisper-1) e em parte do chat (5 runs → unanswered) → joga o lead
+  pra equipe. Config do agente está SAUDÁVEL; o gargalo é a conta OpenAI (credencial `vault:4`):
+  **adicionar crédito / subir o rate tier em platform.openai.com → billing.** Não dá pra consertar
+  do bridge. Mitigação de código possível (não feita): setar `modelFallback`. Ver [[openai-429-agro]].
 - **Funil 7d GO-LIVE = feature de modo-ao-vivo, NUNCA "só config" (2026-11-16, commit `066915b`).**
   Por 3 dias tentou-se "botar o 7d pra rodar" mexendo em config e nunca rodava: o único gate que
   existia era a allowlist de TESTE (`MEGA_SORGO_7D_TEST_CONVERSATIONS`, fail-closed) + enroll que
