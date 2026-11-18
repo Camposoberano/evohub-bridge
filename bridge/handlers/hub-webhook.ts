@@ -23,6 +23,7 @@ import {
 import { autoEnrollFunil, enrollIfNew } from "./funil-enroll.ts";
 import { mainFunnelForChannel, RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
 import { dispatchSoberanoAction, enabledN8nActions } from "../shared/n8n-action-router.ts";
+import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
 import { autoPauseFunil } from "../shared/funnel-state.ts";
 import {
   isRestoredFunnelButton,
@@ -3810,6 +3811,43 @@ export async function handleMenuClick(
   };
   const intent = intentByMenu[menuId];
   if (intent) {
+    // GUARDA ANTI-DUPLICAÇÃO (funil antigo × 7d): se a conversa já está em `mega-sorgo-7d-v1`
+    // running, o 7d é DONO da conversa — NÃO disparar o burst do funil ANTIGO
+    // (:preco/:plantio/:video/:nutricao) por cima. Era a origem da duplicação: o clique de menu
+    // caía no handler antigo e agendava peça velha em cima da cadência do 7d (ex.: conv 3453/5117).
+    // O 7d é cadência (não responde clique on-demand) e o agente está off → o clique de um lead do
+    // 7d vai pro HUMANO (Cícero), sem dead-air e sem peça duplicada. Ver CLAUDE.md "funil duplicado".
+    {
+      const seventConv = await resolveSocialConversation(db, channel, from);
+      const seventCwId = Number(seventConv?.chatwoot_conversation_id);
+      if (seventCwId) {
+        const { data: seq7d } = await db.from("sales_sequences").select("status")
+          .eq("chatwoot_conversation_id", seventCwId)
+          .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "running").maybeSingle();
+        if (seq7d) {
+          const { error: evErr } = await db.from("events").insert({
+            source: "funil",
+            event_type: "funil_7d_intent_para_humano",
+            channel_id: channel.id,
+            payload: {
+              menu_id: menuId,
+              intent,
+              chatwoot_conversation_id: seventCwId,
+              motivo: "conversa em mega-sorgo-7d-v1 running; burst do funil antigo suprimido",
+            },
+          });
+          if (evErr) console.warn("evt funil_7d_intent_para_humano:", evErr.message);
+          const origem = channel.type === "facebook" || channel.type === "instagram"
+            ? "social"
+            : "whatsapp";
+          const sent = await handleHumanRequest(db, channel, from, origem, acct, {
+            tipo_pedido: menuId === "menu_preco" ? "cotacao" : "atendimento",
+            ...(inboundMessageId ? { message_id: inboundMessageId } : {}),
+          });
+          return { sent };
+        }
+      }
+    }
     const daily = await claimDailyIntent(db, String(channel.id), from, intent);
     if (!daily.claimed) {
       // Lead que INSISTE no preço: já recebeu a resposta de preço hoje e pede de novo. Antes o
