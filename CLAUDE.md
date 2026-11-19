@@ -32,6 +32,27 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Funil ANTIGO (`mega-sorgo-5895-20260930` + `mega-sorgo`) DESLIGADO em 2026-11-19 — o 7d é o ÚNICO;
+  NÃO religar sem decisão do dono.** O antigo rodava em PARALELO com o 7d e duplicava peça no MESMO
+  lead (clique de menu → burst antigo `:preco/:plantio/:video` por cima da cadência 7d; 9 convs em
+  17/11, 10 em 18/11, ex. 3453/5117). Matrícula no antigo já tinha parado no go-live (16/11), mas os
+  disparos seguiam vivos. **O corte (feito ao vivo 19/11, autorizado pelo dono):**
+  1. **Banco:** cancelei **277 peças pendentes** (`scheduled_messages` status→cancelled, funnel
+     `like.mega-sorgo-5895*` + `eq.mega-sorgo`) + **85 sequências running** (`sales_sequences`
+     status→cancelled). Sanity antes: 0 conversa do antigo estava também em 7d running (corte não
+     tocou o 7d). 7d intacto (738 pending / 39 running depois).
+  2. **n8n:** desativei 11 workflows antigos — `Soberano 5895 — Preço/Vídeo/Plantio/Nutrição`,
+     `Funil completo 30-09` (= o `-20260930`), `Recuperação 1/2/3/4`, `Voltar ao Mega Sorgo`,
+     `Retomar funil`. **MANTIDOS (infra/7d, NÃO desligar):** `Funil Mega Sorgo - Fila (cron 1min)`
+     (`pQFCtRhzQTKqXTjS`, dispacha o 7d), `Conferir envios incertos` (reconcile), `Abrir catálogo`,
+     `Pausar/Parar funil` (controle, só param).
+  3. **Código:** guarda em `handleMenuClick` (`hub-webhook.ts`, commit `3860340`): se a conversa está
+     em `mega-sorgo-7d-v1` running, NÃO dispara o burst antigo — roteia o clique pro humano
+     (`cotacao` p/ preço, `atendimento` p/ os demais), evento `funil_7d_intent_para_humano`. Deployado
+     (dispatcher 7d pausado durante o restart, >20h BRT).
+  **Regra:** nada do funil antigo volta a disparar sozinho. Se um dos 85 leads cortados responder, a
+  decisão do dono é ativar OUTRO funil pra ele à mão (não religar o antigo em massa). Os 85 NÃO migram
+  pro 7d sozinhos. Ver [[funil-antigo-desligado]].
 - **Destravar peça do MEIO da cadeia 7d (n8n-queue `due()`): o `send_at` dela tem que ficar ANTES
   das pendentes seguintes, senão o dedup por conversa starva (2026-11-17, destrava da 5125).** O
   despacho do 7d é o `due()`+`send()` em `handlers/n8n-queue.ts` (o cron n8n `pQFCtRhzQTKqXTjS`
