@@ -49,7 +49,7 @@ import {
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
 import { resumeSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
 
 /**
@@ -146,7 +146,14 @@ export async function handle(req: Request): Promise<Response> {
     !sevenDayConversationAllowed(cwConvId))) {
     return json({ error: "conversa de teste não autorizada", terminal: true }, 422);
   }
-  const funnelId = sevenDayTest ? MEGA_SORGO_7D_VERSION : mainFunnelForChannel(controlChannel);
+  // Macros do 5895/6836 agora operam sobre o funil 7d (o antigo foi DESLIGADO 2026-11-19, inclusive os
+  // workflows n8n). Em modo live, qualquer ação de macro nesses canais usa o 7d — NÃO o
+  // `mainFunnelForChannel` (= antigo), que dispararia o n8n morto e dava 404 (ex.: "Iniciar Funil" na
+  // 485). Ver CLAUDE.md "macros apontam pro 7d".
+  const sevenDayLive = sevenDayLiveMode() && isSevenDayWhatsAppChannel(controlChannel);
+  const funnelId = (sevenDayTest || sevenDayLive)
+    ? MEGA_SORGO_7D_VERSION
+    : mainFunnelForChannel(controlChannel);
   const n8nAlias: Record<string, string> = {
     iniciar: "funil",
     "start-funil": "funil",
@@ -638,7 +645,8 @@ export async function handle(req: Request): Promise<Response> {
     try {
       // No 5895 a resposta solicitada entra entre as pausas da apresentação.
       // A sequência fiel de 30/09 continua; não fica presa após preço/vídeo.
-      const funnelPaused = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL].includes(funnelId)
+      const funnelPaused =
+        [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL, MEGA_SORGO_7D_VERSION].includes(funnelId)
         ? false
         : await autoPauseFunil(
           String(conv.id),
