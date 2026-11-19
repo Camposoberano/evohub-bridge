@@ -32,6 +32,14 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Macros do Chatwoot no 5895/6836 operam sobre o 7d, NÃO o funil antigo (2026-11-19, commit `b3816fb`).**
+  Depois de desligar o antigo, as macros (Iniciar Funil, Enviar Preço, etc.) davam **404**: `funil-control`
+  usava `funnelId = mainFunnelForChannel` (= antigo) e despachava pro webhook n8n morto. Fix: quando
+  `sevenDayLiveMode() && isSevenDayWhatsAppChannel(controlChannel)` → `funnelId = MEGA_SORGO_7D_VERSION`
+  (pula o dispatch antigo; "Iniciar Funil" cai no `enrollIfNew`→7d; preço/vídeo/etc → `handleMenuClick`;
+  não auto-pausa o 7d). **"Iniciar Funil" é a macro pra pôr no 7d, à mão, um lead ANTIGO que voltou a
+  falar** (o 7d não re-matricula sozinho quem já existia). Provado na 485: `created`, 41 peças 7d. Macros
+  "Recuperar 1-4"/"Voltar ao Mega Sorgo" seguem antigas (decidir desativar/repontar). Ver [[macros-apontam-7d]].
 - **Oferta BLACK FRIDAY só pra lead que veio da BF (2026-11-19, commit `27e8671`).** Em `handleMenuClick`,
   no topo do `if (intent)`: se `menu_preco` + `isBlackFridayLead` (a conversa recebeu de nós uma msg
   outgoing com "Black Friday") → manda `BF_IMAGE_URL` (imagem no bucket `soberano-out`) + `BF_PRECO_TEXTO`
