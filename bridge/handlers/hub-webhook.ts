@@ -3737,6 +3737,35 @@ const TABELA_PRECO_7D = [
   "📐 Acima de 4 hectares, me diga sua área e cidade/UF que calculamos o volume certo pra você.",
 ].join("\n");
 
+// BLACK FRIDAY (2026-11-19, decisão do dono): lead que veio do opener de Black Friday, ao pedir preço,
+// recebe a oferta BF (imagem + este texto, 30% no 20kg) em vez da tabela normal, e ganha a etiqueta
+// BF_LABEL (pra equipe saber quem teve interesse na Black). Só pra lead BF; os demais seguem normal.
+const BF_LABEL = "black-friday-interesse";
+const BF_IMAGE_URL =
+  "https://bancortovital.soberano.pro/storage/v1/object/public/soberano-out/mega-sorgo/black-friday/bf-mega-sorgo-20kg-safra2027.jpg";
+const BF_PRECO_TEXTO = [
+  "🔥 *BLACK FRIDAY — Mega Sorgo Santa Elisa* 🔥",
+  "",
+  "*20 kg — cobre até 4 hectares*",
+  "De ~R$ 1.798,00~ por *R$ 1.258,60* — *30% OFF*",
+  "🚚 Frete grátis pro Brasil todo · ⏳ só esta semana",
+  "",
+  "Planta mais de 4 ha? Me diga a área e a cidade/UF que eu fecho seu desconto de Black Friday. 🚜",
+].join("\n");
+
+// É um lead da Black Friday? (a conversa recebeu de nós o opener/oferta de Black Friday)
+async function isBlackFridayLead(db: Db, conversationId: string): Promise<boolean> {
+  try {
+    const { data } = await db.from("messages").select("id")
+      .eq("conversation_id", conversationId).eq("direction", "out")
+      .ilike("content", "%Black Friday%").limit(1).maybeSingle();
+    return Boolean(data);
+  } catch (e) {
+    console.warn("isBlackFridayLead:", (e as Error).message);
+    return false;
+  }
+}
+
 // Empurra a PRÓXIMA peça pendente do 7d da conversa pra frente (respiro), pra a resposta à pergunta
 // não colar na peça agendada. O funil segue — só ganha fôlego. Nunca cancela nem pausa a sequência.
 async function darRespiro7d(db: Db, cwConvId: number, horas: number): Promise<void> {
@@ -3849,12 +3878,42 @@ export async function handleMenuClick(
   };
   const intent = intentByMenu[menuId];
   if (intent) {
-    // GUARDA ANTI-DUPLICAÇÃO (funil antigo × 7d): se a conversa já está em `mega-sorgo-7d-v1`
-    // running, o 7d é DONO da conversa — NÃO disparar o burst do funil ANTIGO
-    // (:preco/:plantio/:video/:nutricao) por cima. Era a origem da duplicação: o clique de menu
-    // caía no handler antigo e agendava peça velha em cima da cadência do 7d (ex.: conv 3453/5117).
-    // O 7d é cadência (não responde clique on-demand) e o agente está off → o clique de um lead do
-    // 7d vai pro HUMANO (Cícero), sem dead-air e sem peça duplicada. Ver CLAUDE.md "funil duplicado".
+    // BLACK FRIDAY: lead que veio do opener de Black Friday, ao pedir PREÇO, recebe a oferta BF
+    // (imagem + texto, 30% no 20kg) em vez da tabela normal, e ganha a etiqueta de interesse pra a
+    // equipe saber quem se interessou na Black. Vale esteja ou não em 7d; respiro só se em 7d.
+    // Ver CLAUDE.md "preço black friday".
+    if (menuId === "menu_preco") {
+      const bfConv = await resolveSocialConversation(db, channel, from);
+      const bfConvId = bfConv?.id as string | undefined;
+      const bfCwId = Number(bfConv?.chatwoot_conversation_id) || undefined;
+      if (bfConvId && await isBlackFridayLead(db, bfConvId)) {
+        const sent = await sendWhatsAppPiece(db, channel, from,
+          { type: "image", image: { link: BF_IMAGE_URL, caption: BF_PRECO_TEXTO } },
+          BF_PRECO_TEXTO, "image", acct);
+        if (bfCwId) {
+          try {
+            const atuais = await getConversationLabels(bfCwId, acct);
+            if (!atuais.includes(BF_LABEL)) {
+              await setConversationLabels(bfCwId, [...atuais, BF_LABEL], acct);
+            }
+          } catch (e) {
+            console.warn("etiqueta black-friday:", (e as Error).message);
+          }
+          await darRespiro7d(db, bfCwId, RESPIRO_7D_HORAS);
+          const { error: evErr } = await db.from("events").insert({
+            source: "funil",
+            event_type: "black_friday_preco_enviado",
+            channel_id: channel.id,
+            payload: { chatwoot_conversation_id: bfCwId },
+          });
+          if (evErr) console.warn("evt black_friday_preco_enviado:", evErr.message);
+        }
+        return { sent };
+      }
+    }
+    // PERGUNTA NÃO ATROPELA O 7D: se a conversa está em `mega-sorgo-7d-v1` running, o 7d é dono —
+    // responde a pergunta na hora e dá respiro na próxima peça (NÃO dispara o burst antigo por cima,
+    // NÃO pausa, NÃO mata a cadência). Ver CLAUDE.md "pergunta 7d" / "funil antigo desligado".
     {
       const seventConv = await resolveSocialConversation(db, channel, from);
       const seventCwId = Number(seventConv?.chatwoot_conversation_id);
