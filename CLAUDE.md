@@ -32,6 +32,15 @@
 
 ## Decisões travadas (correções que NÃO se repetem)
 
+- **Oferta BLACK FRIDAY só pra lead que veio da BF (2026-11-19, commit `27e8671`).** Em `handleMenuClick`,
+  no topo do `if (intent)`: se `menu_preco` + `isBlackFridayLead` (a conversa recebeu de nós uma msg
+  outgoing com "Black Friday") → manda `BF_IMAGE_URL` (imagem no bucket `soberano-out`) + `BF_PRECO_TEXTO`
+  (20kg, de R$1.798 por R$1.258,60, 30% OFF, frete grátis, só esta semana) + etiqueta
+  **`black-friday-interesse`** (via `setConversationLabels`, append) + evento `black_friday_preco_enviado`;
+  retorna (não cai na tabela normal). Vale esteja ou não em 7d; respiro só se em 7d. Quem NÃO é BF segue
+  normal. Arte: tipográfica (sem foto falsa de lavoura, sem preço na arte — preço só no texto). Manutenção:
+  preço/validade = `BF_PRECO_TEXTO`; trocar arte = subir no bucket + atualizar `BF_IMAGE_URL`; fim da promo
+  = remover o branch. Ver [[black-friday-oferta]].
 - **Funil ANTIGO (`mega-sorgo-5895-20260930` + `mega-sorgo`) DESLIGADO em 2026-11-19 — o 7d é o ÚNICO;
   NÃO religar sem decisão do dono.** O antigo rodava em PARALELO com o 7d e duplicava peça no MESMO
   lead (clique de menu → burst antigo `:preco/:plantio/:video` por cima da cadência 7d; 9 convs em
