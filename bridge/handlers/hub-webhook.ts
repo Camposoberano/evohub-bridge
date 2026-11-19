@@ -3719,6 +3719,44 @@ export async function handleHumanRequest(
   );
 }
 
+// Pergunta de lead em 7d NÃO atropela o funil (2026-11-19): o funil 7d nunca para (é a trilha de
+// educação). A pergunta é respondida na hora; a próxima peça ganha este "respiro" (empurrada N horas)
+// pra não colar na resposta.
+const RESPIRO_7D_HORAS = 3;
+// Tabela de preço AUTOMÁTICA do 7d. Decisão do dono (2026-11-19) reverteu a trava "bot não manda R$":
+// valores confirmados por ele (base R$ 89,90/kg, desconto por volume). Acima de 4 ha → Cícero cota.
+const TABELA_PRECO_7D = [
+  "🌱 *Mega Sorgo Santa Elisa — pacotes e valores*",
+  "",
+  "• *2 kg* — até ½ hectare → *R$ 179,90*",
+  "• *4 kg* — até 1 hectare → *R$ 341,62*",
+  "• *10 kg* — até 2 hectares → *R$ 764,15*",
+  "• *20 kg* — até 4 hectares → *R$ 1.437,90*",
+  "",
+  "🚚 Frete grátis para todo o Brasil.",
+  "📐 Acima de 4 hectares, me diga sua área e cidade/UF que calculamos o volume certo pra você.",
+].join("\n");
+
+// Empurra a PRÓXIMA peça pendente do 7d da conversa pra frente (respiro), pra a resposta à pergunta
+// não colar na peça agendada. O funil segue — só ganha fôlego. Nunca cancela nem pausa a sequência.
+async function darRespiro7d(db: Db, cwConvId: number, horas: number): Promise<void> {
+  try {
+    const { data: next } = await db.from("scheduled_messages")
+      .select("id,send_at").eq("chatwoot_conversation_id", cwConvId)
+      .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "pending")
+      .order("send_at", { ascending: true }).limit(1).maybeSingle();
+    if (!next) return;
+    const atual = new Date(String(next.send_at)).getTime();
+    const base = Math.max(Date.now(), atual);
+    const novo = new Date(base + horas * 3_600_000).toISOString();
+    const { error } = await db.from("scheduled_messages").update({ send_at: novo })
+      .eq("id", next.id).eq("status", "pending");
+    if (error) console.warn("darRespiro7d:", error.message);
+  } catch (e) {
+    console.warn("darRespiro7d err:", (e as Error).message);
+  }
+}
+
 export async function handleMenuClick(
   db: Db,
   channel: Json,
@@ -3825,25 +3863,52 @@ export async function handleMenuClick(
           .eq("chatwoot_conversation_id", seventCwId)
           .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "running").maybeSingle();
         if (seq7d) {
+          // Lead em 7d perguntou algo. REGRA (2026-11-19): o 7d NUNCA para (trilha de educação). A
+          // pergunta é respondida NA HORA e a próxima peça ganha um respiro (~3h) pra não colar. Preço
+          // = tabela automática (dono reverteu "bot não manda R$"); acima de 4 ha a tabela manda falar
+          // com o Cícero. Info (nutrição/plantio/vídeo) = conteúdo + nota privada avisando o Cícero.
+          // NÃO pausa, NÃO cancela, NÃO faz handoff que mate a cadência. Ver CLAUDE.md "pergunta 7d".
+          let sent = false;
+          if (menuId === "menu_preco") {
+            sent = await sendWhatsAppPiece(db, channel, from,
+              { type: "text", text: { body: TABELA_PRECO_7D } }, TABELA_PRECO_7D, "text", acct);
+          } else if (menuId === "menu_depoimento") {
+            await handleVideoSequence(db, channel, from, acct);
+            sent = true;
+          } else if (menuId === "menu_plantio") {
+            await handlePlantioSequence(db, channel, from, acct);
+            sent = true;
+          } else {
+            await handleNutricaoSequence(db, channel, from, acct);
+            sent = true;
+          }
+          // Info (não-preço): avisa o Cícero por nota privada pra complementar se precisar.
+          if (intent !== "preco") {
+            try {
+              await createConversationMessage(seventCwId, {
+                content:
+                  `🤖 Funil 7d respondeu automático "${intent}" ao lead. Complemente se precisar — a sequência segue.`,
+                messageType: "outgoing",
+                private: true,
+              }, acct);
+            } catch (e) {
+              console.warn("nota privada 7d-info:", (e as Error).message);
+            }
+          }
+          await darRespiro7d(db, seventCwId, RESPIRO_7D_HORAS);
           const { error: evErr } = await db.from("events").insert({
             source: "funil",
-            event_type: "funil_7d_intent_para_humano",
+            event_type: "funil_7d_pergunta_respondida",
             channel_id: channel.id,
             payload: {
               menu_id: menuId,
               intent,
               chatwoot_conversation_id: seventCwId,
-              motivo: "conversa em mega-sorgo-7d-v1 running; burst do funil antigo suprimido",
+              avisa_cicero: intent !== "preco",
+              respiro_horas: RESPIRO_7D_HORAS,
             },
           });
-          if (evErr) console.warn("evt funil_7d_intent_para_humano:", evErr.message);
-          const origem = channel.type === "facebook" || channel.type === "instagram"
-            ? "social"
-            : "whatsapp";
-          const sent = await handleHumanRequest(db, channel, from, origem, acct, {
-            tipo_pedido: menuId === "menu_preco" ? "cotacao" : "atendimento",
-            ...(inboundMessageId ? { message_id: inboundMessageId } : {}),
-          });
+          if (evErr) console.warn("evt funil_7d_pergunta_respondida:", evErr.message);
           return { sent };
         }
       }

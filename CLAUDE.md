@@ -161,12 +161,29 @@
 - **Deploy é do `main`, não `master` (ver memória [[deploy-main-divergencia]]).** Os 2 apps Coolify
   buildam do `main`; `master` divergiu. Deploy = cherry-pick pro `main` + `POST /deploy?uuid=<app>`
   (a seção Deploy acima ainda diz "master" — está desatualizada).
-- **Preço NÃO tem número no automático — é por volume, o Cícero cota (2026-10-26).** O bot nunca manda
-  R$; responde "escolha o pacote, o Cícero confirma o valor". NÃO reintroduzir tabela de preço no bot
-  sem decisão explícita (histórico de número errado: "30%" que não existe). `shared/ancoragem-preco.ts`
-  é código MORTO (não ligado em lugar nenhum) — não religar achando que é o fluxo de abertura.
-  **Regra:** lead que insiste no preço (2º pedido/dia) = fast-track pro humano em `handleMenuClick`
-  (pausa funil + `handleHumanRequest` cotação), NUNCA dead-air. Ver [[preco-sem-numero-fast-track]].
+- **REVERTIDO 2026-11-19 → preço AGORA é automático (tabela de pacotes) pra lead em 7d. A regra
+  abaixo "bot não manda R$" vale só FORA do 7d.** Decisão do dono: no funil 7d, pedido de preço (botão
+  ou texto) responde com tabela fixa de pacotes COM valor (`TABELA_PRECO_7D` em `hub-webhook.ts`):
+  2kg/½ha R$179,90 · 4kg/1ha R$341,62 · 10kg/2ha R$764,15 · 20kg/4ha R$1.437,90, frete grátis; **acima
+  de 4 ha → Cícero cota**. Valores confirmados pelo dono (base R$89,90/kg, desconto por volume), tabela
+  FIXA (sem validade; ele avisa quando mudar). Ao mexer no preço do 7d, mexer em `TABELA_PRECO_7D`, não
+  reintroduzir número de outro jeito. Ver [[preco-auto-tabela-7d]], [[pergunta-nao-atropela-7d]].
+- **Preço NÃO tem número no automático — é por volume, o Cícero cota (2026-10-26; vale FORA do 7d).**
+  O bot nunca manda R$; responde "escolha o pacote, o Cícero confirma o valor". NÃO reintroduzir tabela
+  de preço no bot sem decisão explícita (histórico de número errado: "30%" que não existe).
+  `shared/ancoragem-preco.ts` é código MORTO (não ligado em lugar nenhum) — não religar achando que é o
+  fluxo de abertura. **Regra:** lead que insiste no preço (2º pedido/dia) = fast-track pro humano em
+  `handleMenuClick` (pausa funil + `handleHumanRequest` cotação), NUNCA dead-air. Ver
+  [[preco-sem-numero-fast-track]]. (No 7d, a regra de cima tem precedência: preço automático.)
+- **Pergunta de lead em 7d NÃO atropela nem mata o funil (2026-11-19).** O 7d é trilha de EDUCAÇÃO —
+  nunca para quando o lead pergunta. Guarda em `handleMenuClick` (`hub-webhook.ts`): se a conversa está
+  em `mega-sorgo-7d-v1` running, a pergunta é RESPONDIDA na hora e a próxima peça ganha um "respiro"
+  (`darRespiro7d`, empurra +3h o próximo `scheduled_messages` pendente) pra não colar — NÃO pausa, NÃO
+  cancela, NÃO faz handoff que mate a cadência. Preço → `TABELA_PRECO_7D`. Info (nutrição/plantio/vídeo)
+  → `handleNutricao/Plantio/VideoSequence` (conteúdo nativo do bridge, roda mesmo com agente off) + nota
+  privada avisando o Cícero. Evento `funil_7d_pergunta_respondida`. Pega botão E texto (ambos passam por
+  `handleMenuClick`). **Regra:** nunca parar o funil numa pergunta; responder + respiro + seguir. Ver
+  [[pergunta-nao-atropela-7d]].
 - **Pump do funil não pode SEGURAR peça sem mover o `send_at` (head-of-line, 2026-10-26).**
   `pumpFunnelQueue` seleciona `pending AND send_at<=now ORDER send_at ASC LIMIT N`. Se um ramo de hold
   (bot travado, `not_due`, `deferred_business_window`, `deferred_intent`) deixa a peça `pending` com o
