@@ -218,6 +218,22 @@
   NÃO deployar/reiniciar o SERVIDOR entre 8–20h BRT (horário de disparo)** — restart no meio do envio
   vira incerto e re-pausa. Retomar = flip paused→pending no `campaign_queue` das campanhas afetadas.
   Follow-up de código: pausar só o item, não a campanha. Ver [[campanha-auto-pause-incerto]].
+- **Canal oficial morto (6836) mata PREÇO/VÍDEO, não o funil (2026-11-20).** O 6836 ficou `status=inactive`
+  no EVO Hub (token 401 "Invalid channel token" desde recriação 12/11) → reativar exige RECONECTAR a conta
+  WhatsApp Business na Meta pelo painel `app.evohub.evolutionfoundation.com.br` (login do dono); flipar
+  `channels.status` no banco NÃO resolve. O funil 7d (peças agendadas) continua saindo por **uazapi**, mas
+  **preço/vídeo 7d em `handleMenuClick` vão por `sendWhatsAppPiece`→`sendMeta` = rota OFICIAL** → 401 no 6836
+  → "sequência não confirmou envio" → macro `cmd-enviar-preco` trava. **Regra:** lead em canal com oficial
+  caído recebe funil mas NÃO preço/vídeo; mandar na mão por `POST /send-outbound` (rota híbrida/uazapi).
+  Diagnóstico do token = `GET {HUB}/meta/{pnid}` (channel_token vem de `GET {HUB}/api/v1/channels/{id}`,
+  não é coluna do banco). Follow-up: rotear preço/vídeo por uazapi. Ver [[canal-6836-morto-preco-oficial]].
+- **1 peça 7d `failed` congela a fila INTEIRA da conversa (2026-11-20).** O `due()` não avança além de uma
+  peça não-enviada → as 20-30 pendentes atrás ficam presas por dias (mediu 12 conversas, inclusive 1 no 5895
+  SAUDÁVEL → não é só canal). **Destravar:** (1) peça `failed` → `cancelled`; (2) reescalonar as pendentes
+  pelo modelo `scheduleSevenDayRemainingPieces` ancorado em AGORA (dia-corrente de 5/5min desde now na janela
+  08-20h; dias seguintes re-ancorados pra frente) — NUNCA todas pra `now` cru (despeja/starva). Confirmado
+  (3565 + 11 do 6836 voltaram a fluir). Follow-up: `due()` deveria PULAR peça `failed`, não congelar a
+  conversa. Ver [[destravar-7d-deadlock-failed]], [[due-destrava-send-at-ordem]].
 
 ---
 
