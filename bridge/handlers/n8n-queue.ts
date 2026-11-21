@@ -12,7 +12,7 @@ import { handle as sendOutbound } from "./send-outbound.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "../shared/lead-block.ts";
 import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDaySocialChannel, isSevenDayWhatsAppChannel, sevenDayConversationAllowed } from "../shared/mega-sorgo-7d-gate.ts";
 import { isSevenDaySendHour } from "../shared/mega-sorgo-7d-schedule.ts";
 import { isSevenDayNightTest, isSevenDayNightTestWindow } from "../shared/mega-sorgo-7d-night-test.ts";
 import { transitionSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
@@ -179,8 +179,11 @@ async function send(req: Request): Promise<Response> {
   const { data: channel, error: channelError } = await db.from("channels")
     .select("id,type,name,external_id,phone_number")
     .eq("id", conversation.channel_id).maybeSingle();
+  // Cobertura IG do 7d: a peça pode estar num canal social (instagram/facebook) habilitado
+  // na allowlist do 7d, além dos WhatsApp 5895/6836. Sem isso o despacho (due()+send()) daria
+  // 422 e a peça nunca sairia.
   if (channelError || !channel || (isSevenDay
-    ? !isSevenDayWhatsAppChannel(channel)
+    ? !(isSevenDayWhatsAppChannel(channel) || isSevenDaySocialChannel(channel))
     : funnelVersionForChannel(channel) !== queueBaseVersion(row.funnel))) {
     return json({ ok: false, error: "canal ou versão não autorizada" }, 422);
   }

@@ -51,8 +51,10 @@ import { buildHybridListFallback, type HybridListSection } from "../shared/hybri
 import { UazapiResponseError } from "../shared/uazapi.ts";
 import { AsyncVideoReceiptError, shouldUseAsyncVideoReceipt } from "../shared/async-video-receipt.ts";
 import { renderSocialFunnelMessages, socialPartReceiptPayload } from "../shared/social-funnel.ts";
-import { holdSocialWindowMessages } from "../shared/social-window-hold.ts";
+import { holdSocialWindowMessages, isN8nManagedFunnel } from "../shared/social-window-hold.ts";
 import { SOCIAL_N8N_FUNNEL } from "../shared/funnel-identity.ts";
+import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
+import { shouldSkipSevenDaySocialAudio } from "../shared/mega-sorgo-7d-gate.ts";
 import {
   allowsContinuationAfterUnconfirmedVideo,
   isAwaitingVideoReceipt,
@@ -459,6 +461,33 @@ export async function handle(req: Request): Promise<Response> {
     }
   };
 
+  // Decisão do dono: Instagram (e Facebook) não faz nota de voz — peça de áudio do 7d em canal
+  // social é PULADA. Não envia, marca a peça como entregue e avança a cadência, pra não
+  // congelar a fila da conversa (ver [[destravar-7d-deadlock-failed]]). Só o 7d em canal social;
+  // o funil social n8n antigo mantém sua conversão (toSocialAudio) mais abaixo. Os demais tipos
+  // do 7d seguem pela tradução social (renderSocialFunnelMessages).
+  if (
+    scheduledRow &&
+    shouldSkipSevenDaySocialAudio(channel.type, funnelLink.funnel, type)
+  ) {
+    const skippedAt = new Date().toISOString();
+    await writeDeliveryOutcome("sent", "sent");
+    await advanceFunnelSequence(skippedAt);
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "social_audio_skipped",
+      channel_id: channel.id,
+      payload: {
+        conversation_id: conv.id,
+        chatwoot_conversation_id: cwConvId,
+        scheduled_message_id: funnelLink.scheduled_message_id,
+        funnel: funnelLink.funnel,
+        channel_type: channel.type,
+      },
+    });
+    return json({ ok: true, sent: false, skipped: "social-audio-nao-suportado" });
+  }
+
   if (scheduledRow && deliveryState?.last_outcome === "started") {
     const lastAttemptAt = Date.parse(deliveryState.last_attempt_at ?? "");
     if (
@@ -544,8 +573,13 @@ export async function handle(req: Request): Promise<Response> {
     if (!win.aberta) {
       if (scheduledRow &&
         ["facebook", "instagram"].includes(String(channel.type ?? "")) &&
-        String(funnelLink.funnel ?? "").startsWith(SOCIAL_N8N_FUNNEL)) {
-        await holdSocialWindowMessages(db, String(conv.id));
+        isN8nManagedFunnel(funnelLink.funnel)) {
+        // Segura as peças do funil que gerencia esta conversa (social n8n antigo OU 7d).
+        const holdPrefix =
+          String(funnelLink.funnel ?? "").startsWith(MEGA_SORGO_7D_VERSION)
+            ? MEGA_SORGO_7D_VERSION
+            : SOCIAL_N8N_FUNNEL;
+        await holdSocialWindowMessages(db, String(conv.id), holdPrefix);
       }
       const dia = new Date().toISOString().slice(0, 10);
       if (await claimDelivery(db, `wnote-${cwConvId}-${dia}`, "window-note")) {
