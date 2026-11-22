@@ -67,8 +67,11 @@ import {
 import {
   getDirectUazapiRoute,
   getHybridRoute,
+  hybridSendList,
   hybridSendMedia,
   hybridSendText,
+  isHybridRecipient,
+  UncertainDeliveryError,
 } from "../shared/hybrid.ts";
 import { directInstanceCandidates } from "../shared/journey-router.ts";
 import { toVoiceOgg } from "../shared/audio.ts";
@@ -1313,10 +1316,14 @@ async function handlePrecoSequence(
   ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) {
-    throw new Error(
-      "canal sem channel_token ou phone_number_id para enviar preço",
-    );
+  const priceHybrid = channel.name === "6836"
+    ? await getHybridRoute(String(channel.id), phone, String(channel.phone_number ?? ""))
+    : null;
+  if (channel.name === "6836" && (!priceHybrid || !isHybridRecipient(from))) {
+    throw new Error("rota híbrida do 6836 indisponível para enviar preço");
+  }
+  if (!priceHybrid && (!token || !phone)) {
+    throw new Error("canal sem channel_token ou phone_number_id para enviar preço");
   }
   const path = `${phone}/messages`;
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1411,22 +1418,35 @@ async function handlePrecoSequence(
       continue;
     }
 
-    const r = await sendMeta(token, path, {
-      messaging_product: "whatsapp",
-      to: from,
-      ...p.body,
-    });
+    const interactive = p.body.interactive as Json;
+    const action = interactive.action as Json;
+    const r = priceHybrid
+      ? await hybridSendList(
+        priceHybrid,
+        from,
+        String((interactive.body as Json).text ?? ""),
+        action.sections as { title: string; rows: { id: string; title: string; description?: string }[] }[],
+        String(action.button ?? "Escolher pacote"),
+      )
+      : await sendMeta(token!, path, {
+        messaging_product: "whatsapp",
+        to: from,
+        ...p.body,
+      });
+    if (!r) throw new UncertainDeliveryError("lista de preço não aceita; imagens anteriores podem ter saído");
     const metaId = (r.data as Json)?.messages
       ? (((r.data as Json).messages as Json[])[0]?.id as string)
+      : typeof (r.data as Json)?.id === "string"
+      ? (r.data as Json).id as string
       : null;
     // chatwoot_message_id no insert é OBRIGATÓRIO: sem ele o pull-loop sync-chatwoot-out acha a
     // msg "órfã" no Chatwoot e reenvia como texto (duplicação vista no teste v3).
     let cwMsgId: number | null = null;
-    if (r.ok && metaId && conv?.chatwoot_conversation_id) {
+    if (r.ok && (priceHybrid || metaId) && conv?.chatwoot_conversation_id) {
       try {
         const cw = await createConversationMessage(
           conv.chatwoot_conversation_id as number,
-          { content: p.registro, messageType: "outgoing" },
+          { content: p.registro, messageType: "outgoing", alreadySent: true },
           acct,
         );
         cwMsgId = (cw?.id as number) ?? null;
@@ -1447,11 +1467,11 @@ async function handlePrecoSequence(
     });
     // A imagem promocional é opcional, mas o CTA interativo é a entrega que confirma
     // o comando. Sem aceite + message_id da Meta, a macro deve permanecer pendente.
-    if (p.tipo === "interactive" && (!r.ok || !metaId)) {
+    if (p.tipo === "interactive" && (!r.ok || (!priceHybrid && !metaId))) {
       const detail = JSON.stringify(r.data).slice(0, 300);
-      throw new Error(
-        `Meta não confirmou CTA de preço (${r.status}): ${detail}`,
-      );
+      throw priceHybrid
+        ? new UncertainDeliveryError(`CTA de preço não confirmado (${r.status}): ${detail}`)
+        : new Error(`Meta não confirmou CTA de preço (${r.status}): ${detail}`);
     }
     if (i < pecas.length - 1) await pause(2500);
   }
@@ -1612,16 +1632,34 @@ async function sendWhatsAppPiece(
   ).eq("channel_id", channel.id).maybeSingle();
   const token = secret?.channel_token as string | undefined;
   const phone = channel.phone_number_id as string | undefined;
-  if (!token || !phone) return false;
-  const response = await sendMeta(token, `${phone}/messages`, {
-    messaging_product: "whatsapp",
-    to: from,
-    ...body,
-  });
+  const hybrid = channel.name === "6836" && isHybridRecipient(from)
+    ? await getHybridRoute(String(channel.id), phone, String(channel.phone_number ?? ""))
+    : null;
+  if (channel.name === "6836" && !hybrid) return false;
+  let response: { ok: boolean; status: number; data: unknown } | null = null;
+  if (hybrid) {
+    if (body.type === "text") {
+      response = await hybridSendText(hybrid, from, String((body.text as Json)?.body ?? ""));
+    } else if (body.type === "image") {
+      const image = body.image as Json;
+      response = await hybridSendMedia(hybrid, from, String(image.link ?? ""), "image", {
+        caption: String(image.caption ?? content),
+      });
+    }
+  } else if (token && phone) {
+    response = await sendMeta(token, `${phone}/messages`, {
+      messaging_product: "whatsapp",
+      to: from,
+      ...body,
+    });
+  }
+  if (!response) return false;
   const metaId = (response.data as Json)?.messages
     ? (((response.data as Json).messages as Json[])[0]?.id as string)
+    : typeof (response.data as Json)?.id === "string"
+    ? (response.data as Json).id as string
     : null;
-  if (!response.ok || !metaId) return false;
+  if (!response.ok || (!hybrid && !metaId)) return false;
 
   const { data: contact } = await db.from("contacts").select("id")
     .eq("channel_id", channel.id).eq("external_contact_id", from)
@@ -1636,7 +1674,7 @@ async function sendWhatsAppPiece(
     try {
       const cw = await createConversationMessage(
         conv.chatwoot_conversation_id as number,
-        { content, messageType: "outgoing" },
+        { content, messageType: "outgoing", alreadySent: true },
         acct,
       );
       chatwootMessageId = (cw?.id as number) ?? null;
@@ -4026,7 +4064,9 @@ export async function handleMenuClick(
       } else await handleNutricaoSequence(db, channel, from, acct);
       return { sent: true };
     } catch (error) {
-      await releaseDailyIntent(db, daily.key);
+      if (!(error instanceof UncertainDeliveryError)) {
+        await releaseDailyIntent(db, daily.key);
+      }
       throw error;
     }
   }

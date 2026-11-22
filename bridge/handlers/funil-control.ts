@@ -30,6 +30,7 @@ import { confirmN8nRecovery } from "../shared/n8n-recovery.ts";
 import { sendRecoveryTemplate } from "../shared/recovery-template.ts";
 import { windowState } from "../shared/window.ts";
 import { isMetaThreadControlError } from "../shared/meta-errors.ts";
+import { UncertainDeliveryError } from "../shared/hybrid.ts";
 import {
   autoPauseFunil,
   hasFunnelDeliveryEvidence,
@@ -685,6 +686,14 @@ export async function handle(req: Request): Promise<Response> {
       });
     } catch (e) {
       const detail = String(e).slice(0, 240);
+      if (e instanceof UncertainDeliveryError) {
+        await nota(
+          cwConvId,
+          `⚠️ *Preço sem confirmação completa.* Confira a entrega antes de tentar novamente. ${detail}`,
+          acct,
+        );
+        return json({ ok: false, terminal: true, error: detail }, 409);
+      }
       if (isMetaThreadControlError(detail)) {
         await nota(
           cwConvId,
