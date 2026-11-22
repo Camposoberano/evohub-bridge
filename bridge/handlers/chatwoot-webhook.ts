@@ -36,6 +36,7 @@ import {
   metaDeliveryStatus,
 } from "../shared/meta-errors.ts";
 import { readConversationAssigneeUpdate } from "../shared/chatwoot-assignee.ts";
+import { alreadySentByBridge, chatwootAttributes } from "../shared/chatwoot-attributes.ts";
 import {
   isProviderEchoOutgoing,
   isUazapiSystemNotice,
@@ -126,8 +127,7 @@ function isOutgoing(p: Json): boolean {
 }
 
 export async function handleOutgoing(db: Db, p: Json) {
-  const attributes = (p.content_attributes ?? {}) as Json;
-  if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") return;
+  if (alreadySentByBridge(p.content_attributes)) return;
   // Outgoing messages imported from WhatsApp/Meta already carry the provider's
   // source_id. Sending them again creates a new provider echo and an endless loop.
   if (isProviderEchoOutgoing(p)) return;
@@ -142,7 +142,6 @@ export async function handleOutgoing(db: Db, p: Json) {
   const attachment = attachments[0];
 
   const cwMsgId = p.id as number | undefined;
-  let retryingFailedMessage: Json | null = null;
   if (!cwConversationId || (!content && !attachment)) return;
 
   // Anti-duplicata de LISTA/INTERATIVO: o n8n do funil manda a lista interativa ("Ver opções")
@@ -164,19 +163,13 @@ export async function handleOutgoing(db: Db, p: Json) {
   }
 
   if (cwMsgId) {
-    // Falha anterior libera o claim antes de uma nova tentativa. Mensagem já entregue continua
-    // bloqueada, mantendo a proteção contra duplicação.
+    // Uma falha também pode significar timeout depois do aceite do provedor.
+    // Nunca reenviar automaticamente a mesma mensagem de Chatwoot.
     const { data: dup } = await db.from("messages").select(
       "id,status,direction,meta_message_id",
     )
       .eq("chatwoot_message_id", cwMsgId).limit(1).maybeSingle();
-    if (dup?.status === "failed") {
-      retryingFailedMessage = dup as Json;
-      await db.from("deliveries").delete().eq(
-        "delivery_id",
-        `cw-out-${cwMsgId}`,
-      );
-    } else if (dup) {
+    if (dup) {
       console.log("msg já ingerida (echo) — não reenvia", cwMsgId);
       return;
     }
@@ -606,17 +599,10 @@ export async function handleOutgoing(db: Db, p: Json) {
   };
   // primeira mídia ENTREGUE, não a última tentada
   if (resumo?.mediaUrl) messageRow.media_url = resumo.mediaUrl;
-  if (retryingFailedMessage?.id) {
-    await db.from("messages").update(messageRow).eq(
-      "id",
-      retryingFailedMessage.id,
-    );
-  } else {
-    await db.from("messages").insert(messageRow);
-  }
+  await db.from("messages").insert(messageRow);
 
   const sender = (p.sender ?? {}) as Json;
-  const contentAttributes = (p.content_attributes ?? {}) as Json;
+  const contentAttributes = chatwootAttributes(p.content_attributes);
   if (
     entregouAlgo && conv?.id && sender.type === "user" && p.private !== true &&
     contentAttributes.evohub_generated !== true
@@ -711,9 +697,8 @@ async function reportOutgoingException(db: Db, p: Json, error: unknown) {
   const cwConversationId = (conversation.id ?? p.conversation_id) as number | undefined;
   const cwInboxId = (inbox.id ?? p.inbox_id) as number | undefined;
   const uncertain = error instanceof Error && error.name === "UncertainDeliveryError";
-  if (cwMsgId && !uncertain) {
-    await db.from("deliveries").delete().eq("delivery_id", `cw-out-${cwMsgId}`);
-  }
+  // Um erro após o aceite pelo provedor também pode parecer interno. Preservar a
+  // claim até a entrega ser reconciliada evita duplicação pelo polling/webhook.
   if (!cwConversationId || !cwInboxId) return;
   const { data: channel } = await db.from("channels").select("id")
     .eq("chatwoot_inbox_id", cwInboxId).maybeSingle();
@@ -724,7 +709,7 @@ async function reportOutgoingException(db: Db, p: Json, error: unknown) {
   await createConversationMessage(cwConversationId, {
     content: uncertain
       ? `Envio sem confirmação. Não reenviar automaticamente: conferir a entrega antes de tentar novamente. ${detail}`
-      : `Falha interna ao enviar. O envio foi liberado para nova tentativa. ${detail}`,
+      : `Falha interna ou confirmação incompleta. Confira a entrega antes de tentar novamente. ${detail}`,
     messageType: "outgoing",
     private: true,
   }, noteAcct).catch(() => {});

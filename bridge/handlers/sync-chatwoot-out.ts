@@ -10,6 +10,7 @@ import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { listConversationMessages } from "../shared/chatwoot.ts";
 import { handleOutgoing } from "./chatwoot-webhook.ts";
+import { alreadySentByBridge } from "../shared/chatwoot-attributes.ts";
 import {
   isProviderEchoOutgoing,
   isUazapiSystemNotice,
@@ -21,7 +22,6 @@ type Db = ReturnType<typeof admin>;
 type SyncCandidate = {
   chatwootMessageId: number;
   message: Json;
-  retryingFailedMessage: boolean;
 };
 
 export async function handle(req: Request): Promise<Response> {
@@ -114,26 +114,11 @@ export async function handle(req: Request): Promise<Response> {
         const content = (m.content as string | undefined) ?? "";
         const attachments = (m.attachments as Json[] | undefined) ?? [];
         const existingStatus = existingByMessageId.get(cwMsgId);
-        // O status do Chatwoot pode continuar "failed" mesmo depois de um retry aceito
-        // pelo provedor. O registro local "sent" é a confirmação do bridge e deve encerrar
-        // novas tentativas; caso contrário a mesma mensagem sai a cada ciclo de 20s.
-        if (existingStatus !== undefined && existingStatus !== "failed") {
+        // O provedor pode ter aceitado antes do timeout; não repetir falhas ambíguas.
+        if (existingStatus !== undefined) {
           totals.already_known++;
           totals.skipped++;
           continue;
-        }
-        // Uma mensagem falha recebe no maximo uma nova tentativa automatica. A claim
-        // separada e duravel impede que o polling repita a mesma midia vencida a cada ciclo.
-        if (existingStatus === "failed" || candidate.retryingFailedMessage) {
-          const retryClaimed = await claimRetry(db, cwMsgId);
-          if (!retryClaimed) {
-            totals.skipped++;
-            continue;
-          }
-          await db.from("deliveries").delete().eq(
-            "delivery_id",
-            `cw-out-${cwMsgId}`,
-          );
         }
 
         // monta o payload no formato do webhook do Chatwoot e reusa handleOutgoing
@@ -173,10 +158,10 @@ export function recentOutgoingCandidates(
 ): SyncCandidate[] {
   const byId = new Map<number, SyncCandidate>();
   for (const message of messages) {
-    const attributes = (message.content_attributes ?? {}) as Json;
-    if (attributes.bridge_already_sent === true || attributes.bridge_already_sent === "true") continue;
+    if (alreadySentByBridge(message.content_attributes)) continue;
     if (isProviderEchoOutgoing(message)) continue;
     if (!isOutgoing(message) || message.private === true) continue;
+    if (message.status === "failed" || message.status === 3) continue;
     const created = createdAtMs(message.created_at);
     if (created && created < cutoffMs) continue;
     const chatwootMessageId = Number(message.id);
@@ -193,20 +178,9 @@ export function recentOutgoingCandidates(
     byId.set(chatwootMessageId, {
       chatwootMessageId,
       message,
-      retryingFailedMessage: message.status === "failed",
     });
   }
   return [...byId.values()];
-}
-
-async function claimRetry(db: Db, cwMsgId: number): Promise<boolean> {
-  const { error } = await db.from("deliveries").insert({
-    delivery_id: `cw-retry-${cwMsgId}`,
-    source: "sync-chatwoot-out",
-  });
-  if (!error) return true;
-  if ((error as { code?: string }).code === "23505") return false;
-  throw error;
 }
 
 function isOutgoing(m: Json): boolean {

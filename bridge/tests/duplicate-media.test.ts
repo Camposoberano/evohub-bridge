@@ -25,6 +25,20 @@ Deno.test("echo marcado não acessa banco nem envia mídia pelo webhook ou polli
   assertEquals(recentOutgoingCandidates([message], 0), []);
 });
 
+Deno.test("echo com atributos serializados não é reenviado", async () => {
+  const message = {
+    id: 3220,
+    message_type: "outgoing",
+    content: "preço",
+    content_attributes: '{"evohub_generated":true,"bridge_already_sent":"true"}',
+  };
+  const db = {
+    from: () => { throw new Error("não deve consultar nem enviar"); },
+  } as unknown as DbClient;
+  await handleOutgoing(db, message);
+  assertEquals(recentOutgoingCandidates([message], 0), []);
+});
+
 Deno.test("saída importada com source_id do provedor não volta ao WhatsApp", async () => {
   const message = {
     id: 164701,

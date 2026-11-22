@@ -901,6 +901,30 @@ const CMD_FILTER_PAYLOAD = JSON.stringify({
 
 function startMacroCommandLoop() {
   if (optionalEnv("MACRO_POLL_ENABLED") === "false") return;
+  // O conjunto em memória zera num redeploy. Persistir os comandos esgotados evita
+  // que a reinicialização faça seis novas tentativas de preço ou vídeo.
+  let restoredGivenUp = false;
+  const restoreGivenUp = async () => {
+    if (restoredGivenUp) return;
+    const { data, error } = await admin().from("events")
+      .select("payload")
+      .eq("event_type", "macro_command_stuck")
+      .gte("received_at", new Date(Date.now() - 30 * 24 * 60 * 60_000).toISOString())
+      .order("received_at", { ascending: false })
+      .limit(1000);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      const payload = row.payload as Record<string, unknown> | null;
+      const id = Number(payload?.chatwoot_conversation_id);
+      const label = payload?.label;
+      if (Number.isInteger(id) && id > 0 && typeof label === "string" &&
+        Object.hasOwn(CMD_LABELS, label)) {
+        macroGivenUp.add(`${id}:${label}`);
+      }
+    }
+    restoredGivenUp = true;
+    console.log("macro-poll: comandos esgotados restaurados", macroGivenUp.size);
+  };
   const secret = env("CHATWOOT_WEBHOOK_SECRET");
   const acct = envAcct();
   const baseUrl = acct.url.replace(/\/+$/, "");
@@ -909,6 +933,7 @@ function startMacroCommandLoop() {
 
   const tick = async () => {
     try {
+      await restoreGivenUp();
       const res = await fetch(filterUrl, {
         method: "POST",
         headers: {

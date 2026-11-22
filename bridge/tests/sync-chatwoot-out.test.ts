@@ -37,7 +37,7 @@ Deno.test("recentOutgoingCandidates seleciona somente saidas recentes e publicas
   ]);
 });
 
-Deno.test("recentOutgoingCandidates preserva midia e marca retry de falha", () => {
+Deno.test("recentOutgoingCandidates não reenvia falha ambígua", () => {
   const candidates = recentOutgoingCandidates([
     {
       id: "20",
@@ -49,10 +49,7 @@ Deno.test("recentOutgoingCandidates preserva midia e marca retry de falha", () =
     },
   ], Date.parse("2026-08-29T12:00:00Z"));
 
-  assertEquals(candidates.length, 1);
-  assertEquals(candidates[0].chatwootMessageId, 20);
-  assertEquals(candidates[0].retryingFailedMessage, true);
-  assertEquals(candidates[0].message.content, "");
+  assertEquals(candidates, []);
 });
 
 Deno.test("syncOutSinceMinutes usa sobreposicao curta e recupera intervalo apos parada", () => {
