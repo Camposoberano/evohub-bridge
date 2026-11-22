@@ -76,3 +76,42 @@ Deno.test("duplicata real NÃO devolve o claim", async () => {
     false,
   );
 });
+
+Deno.test("entrada simultânea Meta e UAZAPI com IDs diferentes trava por texto", async () => {
+  const claimed = new Set<string>();
+  const db = {
+    from(tabela: string) {
+      if (tabela !== "deliveries") throw new Error("não deve criar mensagem");
+      return {
+        insert(row: { delivery_id: string }) {
+          const exists = claimed.has(row.delivery_id);
+          if (!exists) claimed.add(row.delivery_id);
+          return Promise.resolve({ error: exists ? { code: "23505" } : null });
+        },
+        delete() {
+          return {
+            eq(_column: string, id: string) {
+              return {
+                lt() { return Promise.resolve({ error: null }); },
+                then(resolve: (value: unknown) => unknown) {
+                  claimed.delete(id);
+                  return Promise.resolve({ error: null }).then(resolve);
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+  };
+  // O primeiro provedor já reservou o texto; o segundo tem ID próprio.
+  const message = { ...MSG, msgType: "text", content: "Olá", metaMessageId: "wamid.segundo" };
+  const raw = [CANAL.id, message.from, message.msgType, message.content].join("|");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  const hash = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  claimed.add(`wa-in-text-${hash}`);
+  const result = await ingestInbound(db as never, CANAL, message);
+  assertEquals(result, { inserted: false, reason: "duplicate-recent-text" });
+  assertEquals(claimed.has("wa-canal-1-wamid.segundo"), true);
+  assertEquals(claimed.has(`wa-in-text-${hash}`), true);
+});

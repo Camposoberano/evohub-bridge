@@ -118,9 +118,38 @@ export async function ingestInbound(
       reason: msg.metaMessageId ? "duplicate" : "duplicate-fallback",
     };
   }
+  // Na coexistência, a mesma entrada chega quase simultaneamente pela UAZAPI e
+  // pela Meta com IDs diferentes. A busca por texto recente abaixo não é atômica:
+  // ambos os webhooks podem passar antes de qualquer INSERT e gerar duas respostas.
+  // O claim por conteúdo fecha essa corrida, com a mesma janela de 30s já usada
+  // pela busca de duplicatas. A chave é hash para não guardar telefone/texto.
+  const contentClaim = !msg.outgoing && !msg.attachments?.length &&
+      msg.content.trim()
+    ? `wa-in-text-${await sha256Hex([
+      channel.id ?? "",
+      msg.from,
+      normalizeMsgType(msg.msgType),
+      msg.content,
+    ].join("|"))}`
+    : null;
+  let contentClaimAcquired = false;
   try {
+    if (contentClaim) {
+      contentClaimAcquired = await claimDeliveryWithTtl(
+        db,
+        contentClaim,
+        "wa-in-text",
+        30_000,
+      );
+      if (!contentClaimAcquired) {
+        return { inserted: false, reason: "duplicate-recent-text" };
+      }
+    }
     return await ingestInboundClaimed(db, channel, msg);
   } catch (error) {
+    if (contentClaimAcquired) {
+      await releaseDelivery(db, contentClaim).catch(() => {});
+    }
     await releaseDelivery(db, claimKey).catch((e) =>
       console.error("inbound: falha ao liberar claim", claimKey, e)
     );
