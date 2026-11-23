@@ -103,18 +103,25 @@ async function due(): Promise<Response> {
   // Buscar todas as pendentes por step impede que a etapa posterior ocupe a
   // única vaga da conversa e bloqueie a cadeia com previous-step-not-sent.
   if (isSevenDaySendHour()) {
-    const sevenDay = await db.from("scheduled_messages")
-      .select("id,conversation_id,send_at,funnel,step")
-      .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
-      .order("step", { ascending: true }).limit(5000);
-    if (sevenDay.error) return json({ ok: false, error: "falha ao consultar fila 7d" }, 503);
+    // PostgREST limita cada resposta a 1000 linhas, independentemente do limit.
+    const sevenDayRows: Json[] = [];
+    for (let offset = 0; offset < 5000; offset += 1000) {
+      const page = await db.from("scheduled_messages")
+        .select("id,conversation_id,send_at,funnel,step")
+        .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
+        .order("step", { ascending: true }).order("id", { ascending: true })
+        .range(offset, offset + 999);
+      if (page.error) return json({ ok: false, error: "falha ao consultar fila 7d" }, 503);
+      sevenDayRows.push(...(page.data ?? []) as Json[]);
+      if ((page.data ?? []).length < 1000) break;
+    }
     const firstByConversation = new Map<string, Json>();
-    for (const row of (sevenDay.data ?? []) as Json[]) {
+    for (const row of sevenDayRows) {
       const key = String(row.conversation_id);
       if (!firstByConversation.has(key)) firstByConversation.set(key, row);
     }
-    results.push({ ...sevenDay, data: [...firstByConversation.values()]
-      .filter((row) => Date.parse(String(row.send_at)) <= Date.now()) });
+    results.push({ data: [...firstByConversation.values()]
+      .filter((row) => Date.parse(String(row.send_at)) <= Date.now()), error: null });
   }
   const unique = new Map<string, Json>();
   for (const result of results) {
