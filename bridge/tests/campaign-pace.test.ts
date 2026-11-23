@@ -84,3 +84,20 @@ Deno.test("teto maior encurta o intervalo, e o dia cabe na janela", () => {
     }
   }
 });
+
+Deno.test("rampa até 6 de dezembro para às 19h de Fortaleza", () => {
+  const start = Date.parse("2026-11-24T10:00:00Z");
+  const cfg = {
+    capInicial: 50, capIncremento: 0, capMaximo: 81,
+    horaInicio: 7, horaFim: 19,
+    dailyCaps: [50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 75, 78, 81],
+    endAt: "2026-12-06T22:00:00Z",
+  };
+  assertEquals(capDoDia(cfg, start, start), 50);
+  assertEquals(capDoDia(cfg, start, start + 6 * DIA), 63);
+  assertEquals(capDoDia(cfg, start, start + 12 * DIA), 81);
+  assertEquals(capDoDia(cfg, start, Date.parse(cfg.endAt)), 0);
+  assertEquals(dentroDaJanela(cfg, Date.parse(cfg.endAt) - 60_000), true);
+  assertEquals(dentroDaJanela(cfg, Date.parse(cfg.endAt)), false);
+  assertEquals(dentroDaJanela(cfg, Date.parse(cfg.endAt) + DIA - 12 * 60 * 60_000), false);
+});

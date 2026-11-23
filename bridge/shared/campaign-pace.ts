@@ -11,6 +11,10 @@ export type PaceConfig = {
   capIncremento: number;
   /** teto que não se ultrapassa */
   capMaximo: number;
+  /** Limites específicos por dia, contando o dia inicial como índice zero. */
+  dailyCaps?: number[];
+  /** Instante UTC após o qual a campanha não pode enviar mais. */
+  endAt?: string;
   /** janela de disparo em hora BRT */
   horaInicio: number;
   horaFim: number;
@@ -41,12 +45,18 @@ export function capDoDia(
   inicioCampanha: number,
   now: number,
 ): number {
+  if (cfg.endAt && now >= Date.parse(cfg.endAt)) return 0;
   const dias = Math.floor((now - inicioCampanha) / DIA_MS);
   if (dias < 0) return 0;
+  if (cfg.dailyCaps?.length) {
+    const cap = cfg.dailyCaps[Math.min(dias, cfg.dailyCaps.length - 1)];
+    return Number.isFinite(cap) && cap >= 0 ? Math.min(cfg.capMaximo, Math.floor(cap)) : 0;
+  }
   return Math.min(cfg.capMaximo, cfg.capInicial + dias * cfg.capIncremento);
 }
 
 export function dentroDaJanela(cfg: PaceConfig, now: number): boolean {
+  if (cfg.endAt && now >= Date.parse(cfg.endAt)) return false;
   const h = new Date(now - BRT_OFFSET_MS).getUTCHours();
   return h >= cfg.horaInicio && h < cfg.horaFim;
 }
