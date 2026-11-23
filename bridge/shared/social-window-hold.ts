@@ -40,15 +40,21 @@ export function rebaseWindowHeldRows(
   }));
 }
 
-/** Pausa todas as peças sociais ainda pendentes; uma falha parcial fica em failed. */
+/**
+ * Pausa todas as peças sociais ainda pendentes; uma falha parcial fica em failed.
+ * `funnelPrefix` escolhe qual funil segurar (social n8n antigo por padrão; o 7d passa
+ * MEGA_SORGO_7D_VERSION). O resume (`resumeWindowHeldMessages`) é agnóstico de funil — solta
+ * qualquer peça marcada com WINDOW_HOLD_FLAG quando a janela reabre.
+ */
 export async function holdSocialWindowMessages(
   db: DbClient,
   conversationId: string,
+  funnelPrefix: string = SOCIAL_N8N_FUNNEL,
 ): Promise<number> {
   const { data, error } = await db.from("scheduled_messages")
     .select("id,payload")
     .eq("conversation_id", conversationId).eq("status", "pending")
-    .like("funnel", `${SOCIAL_N8N_FUNNEL}%`).limit(500);
+    .like("funnel", `${funnelPrefix}%`).limit(500);
   if (error) throw error;
   let held = 0;
   for (const row of (data ?? []) as Json[]) {

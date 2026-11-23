@@ -52,7 +52,7 @@ import { socialLeadEntry, type SocialLeadEntry } from "../shared/social-lead-ent
 import { isLogisticaIntent } from "../shared/intent.ts";
 import { dispatchSoberanoAction } from "../shared/n8n-action-router.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDaySocialChannel, isSevenDayWhatsAppChannel, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
 
 type Json = Record<string, unknown>;
 const FUNNEL_LEGACY = LEGACY_MAIN_FUNNEL;
@@ -979,6 +979,51 @@ export async function autoEnrollFunil(
     sourceMessageId?: string | null;
   } = {},
 ): Promise<AutoEnrollResult> {
+  // Cobertura IG/FB do funil 7d (bridge-native, mesmo roteiro do WhatsApp). Canal social
+  // habilitado em MEGA_SORGO_7D_SOCIAL_CHANNEL_IDS roteia pro 7d AQUI — `funnelVersionForChannel`
+  // retorna null pra esses canais (SOBERANO_SOCIAL_CHANNEL_IDS vazia), então o caminho
+  // social-n8n abaixo nunca os veria e o lead ficaria descoberto. Branch ISOLADO e só ativo
+  // sob a flag (`sevenDayLiveMode()` + `isSevenDaySocialChannel`); nunca toca os ramos
+  // SOCIAL_N8N_FUNNEL. Este é o caminho de inbound ao vivo — manter mínimo.
+  if (sevenDayLiveMode() && isSevenDaySocialChannel(channel)) {
+    const conversation = await activeConversationForContact(db, channel, from);
+    if (!conversation?.id) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
+    // Só na ABERTURA. Se já há sequência 7d (running/pending/paused), nada a fazer aqui — a
+    // cadência cuida e a pergunta é tratada no handleMenuClick. Idempotente de qualquer forma:
+    // enrollIfNew/enqueue recusam conversa que já tem funil ativo.
+    const { data: existing7d, error: seqError } = await db
+      .from("sales_sequences").select("id")
+      .eq("conversation_id", conversation.id)
+      .eq("funnel", MEGA_SORGO_7D_VERSION).limit(1);
+    if (seqError) throw seqError;
+    if (existing7d?.length) {
+      return { adOrigin: true, humanHandoff: false, deferIntent: false };
+    }
+    // Critério mínimo de abertura social: IG/FB não mandam referral no clique do anúncio, então
+    // o sinal é primeira entrada / mensagem padrão de anúncio / intenção comercial clara.
+    const { count: inboundCount, error: inboundError } = await db.from("messages")
+      .select("id", { count: "exact", head: true })
+      .eq("conversation_id", conversation.id).eq("direction", "in");
+    if (inboundError) throw inboundError;
+    const abertura = fromAd || (inboundCount ?? 0) <= 1 ||
+      isDefaultAdMessage(content) || classificarIntencaoComercial(content);
+    if (!abertura) {
+      return { adOrigin: false, humanHandoff: false, deferIntent: false };
+    }
+    let outcome: EnrollOutcome;
+    try {
+      // enrollIfNew cai no bloco 7d (isSevenDaySocialChannel liberado acima).
+      outcome = await enrollIfNew(db, channel, from, { conversation });
+    } catch (error) {
+      console.error("autoEnrollFunil 7d social inscrição falhou:", error);
+      outcome = "in_progress";
+    }
+    console.log("autoEnrollFunil 7d social:", String(conversation.id), outcome);
+    return { adOrigin: true, humanHandoff: false, deferIntent: false };
+  }
+
   const funnelId = funnelVersionForChannel(channel);
   if (!funnelId) {
     return { adOrigin: false, humanHandoff: false, deferIntent: false };
@@ -1258,7 +1303,8 @@ export async function enrollIfNew(
   // catálogo interno (41 peças) e recusa a conversa que já tem outro funil ativo — então
   // leads que já estão no funil antigo seguem nele até terminar. Import dinâmico porque
   // n8n-action-enqueue importa deste módulo (evita ciclo estático).
-  if (sevenDayLiveMode() && isSevenDayWhatsAppChannel(channel)) {
+  if (sevenDayLiveMode() &&
+    (isSevenDayWhatsAppChannel(channel) || isSevenDaySocialChannel(channel))) {
     const secret = optionalEnv("N8N_ACTION_SECRET");
     if (!secret) throw new Error("N8N_ACTION_SECRET ausente para enroll do 7d");
     const { handle: enqueueSevenDay } = await import("./n8n-action-enqueue.ts");

@@ -50,7 +50,7 @@ import {
 } from "../shared/funnel-identity.ts";
 import type { RecoveryDispatchResult } from "../shared/recovery-chain.ts";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
-import { isSevenDayWhatsAppChannel, sevenDayConversationAllowed, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
+import { isSevenDaySocialChannel, isSevenDayWhatsAppChannel, sevenDayConversationAllowed, sevenDayLiveMode } from "../shared/mega-sorgo-7d-gate.ts";
 import { resumeSevenDaySequence } from "../shared/mega-sorgo-7d-state.ts";
 
 /**
@@ -151,7 +151,8 @@ export async function handle(req: Request): Promise<Response> {
   // workflows n8n). Em modo live, qualquer ação de macro nesses canais usa o 7d — NÃO o
   // `mainFunnelForChannel` (= antigo), que dispararia o n8n morto e dava 404 (ex.: "Iniciar Funil" na
   // 485). Ver CLAUDE.md "macros apontam pro 7d".
-  const sevenDayLive = sevenDayLiveMode() && isSevenDayWhatsAppChannel(controlChannel);
+  const sevenDayLive = sevenDayLiveMode() &&
+    (isSevenDayWhatsAppChannel(controlChannel) || isSevenDaySocialChannel(controlChannel));
   const funnelId = (sevenDayTest || sevenDayLive)
     ? MEGA_SORGO_7D_VERSION
     : mainFunnelForChannel(controlChannel);
