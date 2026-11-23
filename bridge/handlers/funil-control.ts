@@ -661,14 +661,6 @@ export async function handle(req: Request): Promise<Response> {
         menuId,
         acct,
       );
-      if (!dispatch.sent && dispatch.reason === "price-paused") {
-        await nota(
-          cwConvId,
-          "⚠️ *Preço do 6836 suspenso temporariamente:* conteúdo em revisão. Confirmar a cotação com o cliente antes de enviar valores.",
-          acct,
-        );
-        return json({ ok: false, terminal: true, blocked: "price-content-review" }, 409);
-      }
       if (!dispatch.sent && dispatch.reason === "already-sent-today") {
         await nota(
           cwConvId,

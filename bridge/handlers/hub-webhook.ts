@@ -1255,16 +1255,15 @@ function tamanhoLabel(id: string): string {
 
 const PRECO_MEDIA_POR_PACOTE: Record<
   string,
-  { slot: string; arquivo: string }
+  { slot: string; caminho: string }
 > = {
-  // 2 kg continua sendo uma opção de teste; não aparece no seletor padrão.
   tam_2kg: {
     slot: "preco_2kg",
-    arquivo: "v2-teste-meio-hectare-2kg.jpg",
+    caminho: "funil-comercial-2026-10-11/v3-meio-hectare-2kg.png",
   },
-  tam_4kg: { slot: "preco_4kg", arquivo: "v2-ate-1ha-4kg.jpg" },
-  tam_10kg: { slot: "preco_10kg", arquivo: "v2-2ha-10kg.jpg" },
-  tam_20kg: { slot: "preco_20kg", arquivo: "v2-4ha-20kg.jpg" },
+  tam_4kg: { slot: "preco_4kg", caminho: "funil-comercial-2026-10-06/v2-ate-1ha-4kg.jpg" },
+  tam_10kg: { slot: "preco_10kg", caminho: "funil-comercial-2026-10-06/v2-2ha-10kg.jpg" },
+  tam_20kg: { slot: "preco_20kg", caminho: "funil-comercial-2026-10-06/v2-4ha-20kg.jpg" },
 };
 
 async function imagemDoPacotePreco(db: Db, id: string): Promise<string | null> {
@@ -1290,7 +1289,7 @@ async function imagemDoPacotePreco(db: Db, id: string): Promise<string | null> {
     const parsed = new URL(url);
     const storageOrigin = new URL(env("SUPABASE_URL")).origin;
     const expectedPath =
-      `/storage/v1/object/public/soberano-out/mega-sorgo/imagens/funil-comercial-2026-10-06/${asset.arquivo}`;
+      `/storage/v1/object/public/soberano-out/mega-sorgo/imagens/${asset.caminho}`;
     if (
       parsed.protocol !== "https:" || parsed.origin !== storageOrigin ||
       !parsed.pathname.endsWith(expectedPath)
@@ -1306,9 +1305,22 @@ async function handlePrecoSequence(
   channel: Json,
   from: string,
   acct?: CwAcct,
+  dailyClaimed = false,
 ): Promise<void> {
   if (channel.name === "6836") {
-    throw new Error("preço do 6836 suspenso: conteúdo em revisão");
+    const daily = dailyClaimed
+      ? null
+      : await claimDailyIntent(db, String(channel.id), from, "preco");
+    if (daily && !daily.claimed) return;
+    try {
+      await enviarPreco6836(db, channel, from, acct);
+    } catch (error) {
+      if (daily && !(error instanceof UncertainDeliveryError)) {
+        await releaseDailyIntent(db, daily.key);
+      }
+      throw error;
+    }
+    return;
   }
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialPrecoSequence(db, channel, from);
@@ -1691,6 +1703,7 @@ async function sendWhatsAppPiece(
     direction: "out",
     msg_type: msgType,
     content,
+    media_url: msgType === "image" ? String((body.image as Json)?.link ?? "") || null : null,
     meta_message_id: metaId,
     chatwoot_message_id: chatwootMessageId,
     status: "sent",
@@ -3778,6 +3791,60 @@ const TABELA_PRECO_7D = [
   "📐 Acima de 4 hectares, me diga sua área e cidade/UF que calculamos o volume certo pra você.",
 ].join("\n");
 
+// Conteúdo fornecido pelo dono em 22/11. No 6836 cada pacote sai como imagem
+// neutra aprovada + legenda; as artes antigas anexadas pelo usuário tinham
+// validade vencida e, na de 2 kg, área incorreta.
+export const PRECO_6836_PACOTES = [
+  {
+    id: "tam_20kg",
+    legenda: "🌱 Pacote de 20 kg\n\n📐 Cobre até 4 hectares\n💰 R$ 1.437,90\n\n💸 20% de desconto + Frete grátis para todo o Brasil via Correios ou transportadora",
+  },
+  {
+    id: "tam_10kg",
+    legenda: "🌱 Pacote de 10 kg\n\n📐 Cobre 2 hectares\n💰 De R$ 899,00 → Por R$ 764,15\n\n💸 15% de desconto + Frete grátis para todo o Brasil via Correios ou transportadora",
+  },
+  {
+    id: "tam_4kg",
+    legenda: "🌱 Pacote de 4 kg – Mega Sorgo Santa Elisa®\n\n📐 Cobre até 1 hectare\n💰 R$ 341,62\n\nDesconto + Frete grátis para todo o Brasil",
+  },
+  {
+    id: "tam_2kg",
+    legenda: "🌱 Embalagem de 02 KG\n\n📐 Cobre até 0,5 hectare (meio hectare de plantio)\n\n💰 Apenas R$ 179,90 o pacote\n🚚 Frete grátis para todo o Brasil",
+  },
+] as const;
+
+async function enviarPreco6836(
+  db: Db,
+  channel: Json,
+  from: string,
+  acct?: CwAcct,
+): Promise<boolean> {
+  const prepared = [] as { url: string; legenda: string }[];
+  for (const pacote of PRECO_6836_PACOTES) {
+    const url = await imagemDoPacotePreco(db, pacote.id);
+    if (!url) throw new Error(`arte de preço indisponível: ${pacote.id}`);
+    prepared.push({ url, legenda: pacote.legenda });
+  }
+  for (const [index, pacote] of prepared.entries()) {
+    const sent = await sendWhatsAppPiece(
+      db,
+      channel,
+      from,
+      { type: "image", image: { link: pacote.url, caption: pacote.legenda } },
+      pacote.legenda,
+      "image",
+      acct,
+    );
+    if (!sent) {
+      throw new UncertainDeliveryError(`pacote ${PRECO_6836_PACOTES[index].id} não confirmado; conferir peças anteriores`);
+    }
+    if (index < prepared.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+  return true;
+}
+
 // BLACK FRIDAY (2026-11-19, decisão do dono): lead que veio do opener de Black Friday, ao pedir preço,
 // recebe a oferta BF (imagem + este texto, 30% no 20kg) em vez da tabela normal, e ganha a etiqueta
 // BF_LABEL (pra equipe saber quem teve interesse na Black). Só pra lead BF; os demais seguem normal.
@@ -3834,18 +3901,7 @@ export async function handleMenuClick(
   menuId: string,
   acct?: CwAcct,
   inboundMessageId?: string,
-): Promise<{ sent: boolean; reason?: "already-sent-today" | "price-paused" }> {
-  // Conteúdo/valor da tabela do 6836 foi contestado em 22/11. Segura novos
-  // disparos até a referência comercial ser corrigida; preserva o funil 7d.
-  if (channel.name === "6836" && menuId === "menu_preco") {
-    await db.from("events").insert({
-      source: "funil",
-      event_type: "price_6836_paused",
-      channel_id: channel.id,
-      payload: { reason: "price_content_under_review" },
-    }).then(() => {}, () => {});
-    return { sent: false, reason: "price-paused" };
-  }
+): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
   const consentChoice = marketingConsentChoice(menuId);
   if (consentChoice) {
     await recordMarketingConsent({ db, channelId: String(channel.id), phone: from,
@@ -3934,7 +3990,7 @@ export async function handleMenuClick(
     // (imagem + texto, 30% no 20kg) em vez da tabela normal, e ganha a etiqueta de interesse pra a
     // equipe saber quem se interessou na Black. Vale esteja ou não em 7d; respiro só se em 7d.
     // Ver CLAUDE.md "preço black friday".
-    if (menuId === "menu_preco") {
+    if (menuId === "menu_preco" && channel.name !== "6836") {
       const bfConv = await resolveSocialConversation(db, channel, from);
       const bfConvId = bfConv?.id as string | undefined;
       const bfCwId = Number(bfConv?.chatwoot_conversation_id) || undefined;
@@ -3981,8 +4037,21 @@ export async function handleMenuClick(
           // NÃO pausa, NÃO cancela, NÃO faz handoff que mate a cadência. Ver CLAUDE.md "pergunta 7d".
           let sent = false;
           if (menuId === "menu_preco") {
-            sent = await sendWhatsAppPiece(db, channel, from,
-              { type: "text", text: { body: TABELA_PRECO_7D } }, TABELA_PRECO_7D, "text", acct);
+            if (channel.name === "6836") {
+              const daily = await claimDailyIntent(db, String(channel.id), from, "preco");
+              if (!daily.claimed) return { sent: false, reason: "already-sent-today" };
+              try {
+                sent = await enviarPreco6836(db, channel, from, acct);
+              } catch (error) {
+                if (!(error instanceof UncertainDeliveryError)) {
+                  await releaseDailyIntent(db, daily.key);
+                }
+                throw error;
+              }
+            } else {
+              sent = await sendWhatsAppPiece(db, channel, from,
+                { type: "text", text: { body: TABELA_PRECO_7D } }, TABELA_PRECO_7D, "text", acct);
+            }
           } else if (menuId === "menu_depoimento") {
             await handleVideoSequence(db, channel, from, acct);
             sent = true;
@@ -4070,7 +4139,7 @@ export async function handleMenuClick(
         return { sent: true };
       }
       if (menuId === "menu_preco") {
-        await handlePrecoSequence(db, channel, from, acct);
+        await handlePrecoSequence(db, channel, from, acct, true);
       } else if (menuId === "menu_depoimento") {
         await handleVideoSequence(db, channel, from, acct);
       } else if (menuId === "menu_plantio") {
