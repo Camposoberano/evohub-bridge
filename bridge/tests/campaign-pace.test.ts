@@ -85,17 +85,17 @@ Deno.test("teto maior encurta o intervalo, e o dia cabe na janela", () => {
   }
 });
 
-Deno.test("rampa até 6 de dezembro para às 19h de Fortaleza", () => {
-  const start = Date.parse("2026-11-24T10:00:00Z");
+Deno.test("rampa de 23 a 30 de novembro para às 20h de Fortaleza", () => {
+  const start = Date.parse("2026-11-23T09:00:00Z");
   const cfg = {
-    capInicial: 50, capIncremento: 0, capMaximo: 81,
-    horaInicio: 7, horaFim: 19,
-    dailyCaps: [50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 75, 78, 81],
-    endAt: "2026-12-06T22:00:00Z",
+    capInicial: 50, capIncremento: 0, capMaximo: 125,
+    horaInicio: 6, horaFim: 20,
+    dailyCaps: [50, 80, 100, 110, 115, 120, 120, 125],
+    endAt: "2026-11-30T23:00:00Z",
   };
   assertEquals(capDoDia(cfg, start, start), 50);
-  assertEquals(capDoDia(cfg, start, start + 6 * DIA), 63);
-  assertEquals(capDoDia(cfg, start, start + 12 * DIA), 81);
+  assertEquals(capDoDia(cfg, start, start + 1 * DIA), 80);
+  assertEquals(capDoDia(cfg, start, start + 7 * DIA), 125);
   assertEquals(capDoDia(cfg, start, Date.parse(cfg.endAt)), 0);
   assertEquals(dentroDaJanela(cfg, Date.parse(cfg.endAt) - 60_000), true);
   assertEquals(dentroDaJanela(cfg, Date.parse(cfg.endAt)), false);

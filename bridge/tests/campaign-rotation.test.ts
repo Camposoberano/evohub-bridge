@@ -87,8 +87,8 @@ Deno.test("fora de 08h a 18h nenhum número dispara", () => {
   assertEquals(chooseCampaignRotation(snapshots(), at(18)), null);
 });
 
-Deno.test("nova campanha 5895 cresce até 6/12 e para antes de 7/12", () => {
-  const start = Date.parse("2026-11-24T10:00:00Z");
+Deno.test("nova campanha 5895 cresce até 30/11 e para antes de 1/12", () => {
+  const start = Date.parse("2026-11-23T09:00:00Z");
   const row: CampaignRotationSnapshot = {
     campaignId: "mega-sorgo-5895-120d-2026-11-24",
     pending: 811,
@@ -96,16 +96,16 @@ Deno.test("nova campanha 5895 cresce até 6/12 e para antes de 7/12", () => {
     lastSentAt: null,
     createdAt: start,
     pace: {
-      capInicial: 50, capIncremento: 0, capMaximo: 81, horaInicio: 7, horaFim: 19,
-      dailyCaps: [50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 75, 78, 81],
-      endAt: "2026-12-06T22:00:00Z",
+      capInicial: 50, capIncremento: 0, capMaximo: 125, horaInicio: 6, horaFim: 20,
+      dailyCaps: [50, 80, 100, 110, 115, 120, 120, 125],
+      endAt: "2026-11-30T23:00:00Z",
     },
   };
   assertEquals(chooseCampaignRotation([row], start - 60_000), null);
   assertEquals(chooseCampaignRotation([row], start)?.campaignId, row.campaignId);
   assertEquals(chooseCampaignRotation([{ ...row, sentToday: 50 }], start), null);
-  assertEquals(chooseCampaignRotation([{ ...row, sentToday: 51 }], start + 86_400_000)?.cap, 52);
-  assertEquals(chooseCampaignRotation([{ ...row, sentToday: 52 }], start + 86_400_000), null);
-  assertEquals(chooseCampaignRotation([row], start + 12 * 86_400_000)?.cap, 81);
-  assertEquals(chooseCampaignRotation([row], start + 13 * 86_400_000), null);
+  assertEquals(chooseCampaignRotation([{ ...row, sentToday: 79 }], start + 86_400_000)?.cap, 80);
+  assertEquals(chooseCampaignRotation([{ ...row, sentToday: 80 }], start + 86_400_000), null);
+  assertEquals(chooseCampaignRotation([row], start + 7 * 86_400_000)?.cap, 125);
+  assertEquals(chooseCampaignRotation([row], start + 8 * 86_400_000), null);
 });

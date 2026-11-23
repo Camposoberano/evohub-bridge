@@ -7,7 +7,7 @@ const ID = "mega-sorgo-5895-120d-2026-11-24";
 const PRIOR = "black-friday-mega-sorgo-5895-2026-11-12";
 const CHANNEL = "cf316d59-f6da-4683-adcc-29095a805dde";
 const AUDIENCE = "E:/Projetos_Novos/evohub/ops/audience-5895-120d-2026-11-24.private.json";
-const START = "2026-11-24T10:00:00.000Z"; // 07:00 Fortaleza
+const START = "2026-11-23T09:00:00.000Z"; // 06:00 Fortaleza
 const apply = process.argv.includes("--apply");
 const env = await loadEnv("E:/Projetos_Novos/evohub");
 const base = String(env.SUPABASE_URL ?? "").replace(/\/+$/, "");
@@ -52,9 +52,9 @@ const campaign = {
   createdAt: new Date().toISOString(),
   paceStartAt: START,
   pace: {
-    capInicial: 50, capIncremento: 0, capMaximo: 81, horaInicio: 7, horaFim: 19,
-    dailyCaps: [50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 75, 78, 81],
-    endAt: "2026-12-06T22:00:00Z",
+    capInicial: 50, capIncremento: 0, capMaximo: 125, horaInicio: 6, horaFim: 20,
+    dailyCaps: [50, 80, 100, 110, 115, 120, 120, 125],
+    endAt: "2026-11-30T23:00:00Z",
   },
   flow: {
     ...prior.flow,
@@ -72,7 +72,7 @@ if (opening?.kind !== "buttons" || opening.imageUrls?.length !== 3 ||
   throw new Error("Oferta Black Friday incompleta; não preparar a fila");
 }
 console.log(JSON.stringify({ apply, campaignId: ID, channel: "5895", audience: numbers.length,
-  startFortaleza: "2026-11-24 07:00", pace: campaign.pace,
+  startFortaleza: "2026-11-23 06:00", pace: campaign.pace,
   openingText: opening.text, imageCount: opening.imageUrls.length,
   buttons: opening.buttons.map((button) => button.title) }));
 if (!apply) process.exit(0);
