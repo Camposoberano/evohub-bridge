@@ -1307,6 +1307,9 @@ async function handlePrecoSequence(
   from: string,
   acct?: CwAcct,
 ): Promise<void> {
+  if (channel.name === "6836") {
+    throw new Error("preço do 6836 suspenso: conteúdo em revisão");
+  }
   if (channel.type === "facebook" || channel.type === "instagram") {
     await handleSocialPrecoSequence(db, channel, from);
     return;
@@ -3831,7 +3834,18 @@ export async function handleMenuClick(
   menuId: string,
   acct?: CwAcct,
   inboundMessageId?: string,
-): Promise<{ sent: boolean; reason?: "already-sent-today" }> {
+): Promise<{ sent: boolean; reason?: "already-sent-today" | "price-paused" }> {
+  // Conteúdo/valor da tabela do 6836 foi contestado em 22/11. Segura novos
+  // disparos até a referência comercial ser corrigida; preserva o funil 7d.
+  if (channel.name === "6836" && menuId === "menu_preco") {
+    await db.from("events").insert({
+      source: "funil",
+      event_type: "price_6836_paused",
+      channel_id: channel.id,
+      payload: { reason: "price_content_under_review" },
+    }).then(() => {}, () => {});
+    return { sent: false, reason: "price-paused" };
+  }
   const consentChoice = marketingConsentChoice(menuId);
   if (consentChoice) {
     await recordMarketingConsent({ db, channelId: String(channel.id), phone: from,
