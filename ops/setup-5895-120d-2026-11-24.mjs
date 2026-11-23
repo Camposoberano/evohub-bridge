@@ -51,7 +51,7 @@ const campaign = {
   name: "Mega Sorgo Santa Elisa — contatos 120 dias — 5895",
   createdAt: new Date().toISOString(),
   paceStartAt: START,
-  pace: { capInicial: 50, capIncremento: 10, capMaximo: 811, horaInicio: 7, horaFim: 19 },
+  pace: { capInicial: 50, capIncremento: 0, capMaximo: 50, horaInicio: 7, horaFim: 19 },
   flow: {
     ...prior.flow,
     steps: prior.flow.steps.map((step) => ({
