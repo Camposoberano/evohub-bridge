@@ -1542,6 +1542,9 @@ async function runRecoveryChain() {
 // Kill-switch: CAMPAIGN_QUEUE_ENABLED=false.
 const CAMPAIGN_QUEUE_INTERVAL_MS = 60_000;
 const BLACK_FRIDAY_5895_CAMPAIGN_ID = "black-friday-mega-sorgo-5895-2026-11-12";
+const AUDIENCE_120D_5895_CAMPAIGN_ID = "mega-sorgo-5895-120d-2026-11-24";
+const isRecentAudienceCampaign = (id: string): boolean =>
+  id === BLACK_FRIDAY_5895_CAMPAIGN_ID || id === AUDIENCE_120D_5895_CAMPAIGN_ID;
 
 function startCampaignQueueLoop() {
   if (optionalEnv("CAMPAIGN_QUEUE_ENABLED") === "false") return;
@@ -1586,7 +1589,7 @@ function startCampaignQueueLoop() {
         const camp = state.campaigns.find((c) => c.id === campaignId);
         if (!camp?.flow) continue;
 
-        const item = campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID
+        const item = isRecentAudienceCampaign(campaignId)
           ? await reservarProximoItem(db, campaignId)
           : await reservarProximoItemRotacao(db, campaignId);
         if (!item) continue;
@@ -1624,7 +1627,7 @@ function startCampaignQueueLoop() {
           // 224 conversas em 12/09, 6 delas com venda ganha.
           let bloqueioComercial;
           try {
-            if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+            if (isRecentAudienceCampaign(campaignId)) {
               const exclusao = await etiquetaBlackFridayPorContato(
                 db,
                 String(canal.id),
@@ -1658,7 +1661,7 @@ function startCampaignQueueLoop() {
           }
 
           const ch = await flowChannelFor(db, canal as Record<string, unknown>);
-          if (campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID) {
+          if (isRecentAudienceCampaign(campaignId)) {
             ch.uazapiOnly = true;
           }
           let preflight;
@@ -1669,7 +1672,7 @@ function startCampaignQueueLoop() {
               channelName: String(canal.name ?? ""),
               phone: item.contact_key,
               route: ch.route,
-              allowOpenAndRecent: campaignId === BLACK_FRIDAY_5895_CAMPAIGN_ID,
+              allowOpenAndRecent: isRecentAudienceCampaign(campaignId),
             });
           } catch (error) {
             const motivo = error instanceof Error
