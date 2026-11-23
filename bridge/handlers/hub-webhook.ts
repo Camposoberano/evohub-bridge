@@ -3874,21 +3874,28 @@ async function isBlackFridayLead(db: Db, conversationId: string): Promise<boolea
   }
 }
 
-// Empurra a PRÓXIMA peça pendente do 7d da conversa pra frente (respiro), pra a resposta à pergunta
-// não colar na peça agendada. O funil segue — só ganha fôlego. Nunca cancela nem pausa a sequência.
+// Dá respiro à próxima peça e preserva a ordem das seguintes.
 async function darRespiro7d(db: Db, cwConvId: number, horas: number): Promise<void> {
   try {
-    const { data: next } = await db.from("scheduled_messages")
-      .select("id,send_at").eq("chatwoot_conversation_id", cwConvId)
+    const { data: pending, error: readError } = await db.from("scheduled_messages")
+      .select("id,step,send_at").eq("chatwoot_conversation_id", cwConvId)
       .eq("funnel", MEGA_SORGO_7D_VERSION).eq("status", "pending")
-      .order("send_at", { ascending: true }).limit(1).maybeSingle();
-    if (!next) return;
-    const atual = new Date(String(next.send_at)).getTime();
+      .order("step", { ascending: true }).limit(100);
+    if (readError || !pending?.length) return;
+    const atual = new Date(String(pending[0].send_at)).getTime();
     const base = Math.max(Date.now(), atual);
-    const novo = new Date(base + horas * 3_600_000).toISOString();
-    const { error } = await db.from("scheduled_messages").update({ send_at: novo })
-      .eq("id", next.id).eq("status", "pending");
-    if (error) console.warn("darRespiro7d:", error.message);
+    let previous = base + horas * 3_600_000;
+    for (const [index, row] of pending.entries()) {
+      const original = Date.parse(String(row.send_at));
+      const target = index === 0 ? previous : Math.max(original, previous + 5 * 60_000);
+      if (target !== original) {
+        const { error } = await db.from("scheduled_messages")
+          .update({ send_at: new Date(target).toISOString() })
+          .eq("id", row.id).eq("status", "pending");
+        if (error) { console.warn("darRespiro7d:", error.message); return; }
+      }
+      previous = target;
+    }
   } catch (e) {
     console.warn("darRespiro7d err:", (e as Error).message);
   }

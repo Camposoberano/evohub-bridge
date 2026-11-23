@@ -516,6 +516,19 @@ export async function handle(req: Request): Promise<Response> {
   const hybrid = hybridCandidate && isHybridRecipient(to)
     ? hybridCandidate
     : null;
+  // O token oficial do 6836 está inválido. Não tentar essa rota para peças
+  // automáticas do 7d; uma resposta 401 marcaria a peça como failed e
+  // bloquearia todas as etapas seguintes da conversa.
+  const hybridOnly6836 = scheduledRow?.funnel === "mega-sorgo-7d-v1" &&
+    String(channel.name ?? "") === "6836";
+  if (hybridOnly6836 && !hybrid) {
+    const retryAt = nextFunnelRetryAt(1);
+    await writeDeliveryOutcome("blocked", "pending", {
+      failure_stage: "hybrid_route_unavailable",
+      retryable: true,
+    }, retryAt);
+    return json({ ok: false, sent: false, blocked: "rota-6836-indisponivel", next_send_at: retryAt }, 409);
+  }
 
   const { data: secret } = await db.from("channel_secrets").select(
     "channel_token",
@@ -1118,6 +1131,14 @@ export async function handle(req: Request): Promise<Response> {
     // Se a rota híbrida falhou, a Meta só pode ser usada como fallback enquanto a
     // janela oficial estiver aberta. Fora dela, devolve bloqueio para liberar o
     // claim da macro e permitir uma nova tentativa depois.
+    if (!res && hybridOnly6836) {
+      const retryAt = nextFunnelRetryAt(Math.max(1, attemptNumber));
+      await writeDeliveryOutcome("blocked", "pending", {
+        failure_stage: "hybrid_6836_rejected",
+        retryable: true,
+      }, retryAt);
+      return json({ ok: false, sent: false, blocked: "rota-6836-rejeitada", next_send_at: retryAt }, 409);
+    }
     if (!res && isWhatsapp && hybrid) {
       const win = await windowState(db, conv as Json, channel as Json);
       if (!win.aberta) {

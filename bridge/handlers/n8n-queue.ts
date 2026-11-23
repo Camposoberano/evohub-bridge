@@ -85,8 +85,7 @@ async function due(): Promise<Response> {
   }
   const db = admin();
   const now = new Date().toISOString();
-  const versions = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL,
-    ...(isSevenDaySendHour() ? [MEGA_SORGO_7D_VERSION] : [])];
+  const versions = [RESTORED_5895_FUNNEL, SOCIAL_N8N_FUNNEL];
   const results = [];
   // A VPS tem 2 vCPU; uma versão adicional não deve dobrar a rajada de consultas.
   for (const version of versions) {
@@ -99,6 +98,23 @@ async function due(): Promise<Response> {
   }
   if (results.some((result) => result.error)) {
     return json({ ok: false, error: "falha ao consultar fila" }, 503);
+  }
+  // No 7d, o respiro pode deixar uma etapa posterior com send_at anterior.
+  // Buscar todas as pendentes por step impede que a etapa posterior ocupe a
+  // única vaga da conversa e bloqueie a cadeia com previous-step-not-sent.
+  if (isSevenDaySendHour()) {
+    const sevenDay = await db.from("scheduled_messages")
+      .select("id,conversation_id,send_at,funnel,step")
+      .eq("status", "pending").eq("funnel", MEGA_SORGO_7D_VERSION)
+      .order("step", { ascending: true }).limit(5000);
+    if (sevenDay.error) return json({ ok: false, error: "falha ao consultar fila 7d" }, 503);
+    const firstByConversation = new Map<string, Json>();
+    for (const row of (sevenDay.data ?? []) as Json[]) {
+      const key = String(row.conversation_id);
+      if (!firstByConversation.has(key)) firstByConversation.set(key, row);
+    }
+    results.push({ ...sevenDay, data: [...firstByConversation.values()]
+      .filter((row) => Date.parse(String(row.send_at)) <= Date.now()) });
   }
   const unique = new Map<string, Json>();
   for (const result of results) {
