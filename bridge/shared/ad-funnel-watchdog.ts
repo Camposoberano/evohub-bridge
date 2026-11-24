@@ -1,6 +1,7 @@
 import { autoEnrollFunil } from "../handlers/funil-enroll.ts";
 import { sendFirstAdFunnelPieceNow } from "./ad-opening.ts";
 import { funnelVersionForChannel, RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
+import { MEGA_SORGO_7D_VERSION } from "./mega-sorgo-7d-content.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "./lead-block.ts";
 import { admin } from "./supabase.ts";
 
@@ -48,7 +49,10 @@ async function reconcileAdChannel(
   const ids = candidates.map((item) => String(item.id));
   const [sequenceResult, contactResult] = await Promise.all([
     db.from("sales_sequences").select("conversation_id")
-      .in("conversation_id", ids).eq("funnel", RESTORED_5895_FUNNEL)
+      // Inscrita no funil de 7 dias também conta como inscrita: sem isso, toda conversa de
+      // anúncio no 7d parecia "faltando" e era reprocessada a cada tick (~6 GET messages/s
+      // no Supabase, medido 24/11).
+      .in("conversation_id", ids).in("funnel", [RESTORED_5895_FUNNEL, MEGA_SORGO_7D_VERSION])
       .limit(200),
     db.from("contacts").select("id,external_contact_id,attributes")
       .in("id", candidates.map((item) => String(item.contact_id)))
