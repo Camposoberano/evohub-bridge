@@ -849,7 +849,9 @@ function startDataCleanupLoop() {
 // webhook. Loop poll a cada 15s usa filter API do Chatwoot pra buscar conversas com
 // qualquer cmd-* label, executa funil-control e remove a label.
 // Kill-switch: MACRO_POLL_ENABLED=false.
-const MACRO_POLL_INTERVAL_MS = 15_000;
+// 45s (era 15s): cada `conversations/filter` custa ~3,4s de CPU no Chatwoot (medido 24/11);
+// os 3 pollers de filtro + sync-out eram ~98% da carga do web do Chatwoot numa VPS de 2 vCPU.
+const MACRO_POLL_INTERVAL_MS = boundedEnvInt("MACRO_POLL_INTERVAL_MS", 45_000, 10_000, 5 * 60_000);
 // Trava do laço: quando o destino responde "não-terminal" (ex.: n8n devolve HTTP 200 fora
 // do contrato), a etiqueta ficava e o loop retentava a cada 15s PARA SEMPRE — em 23/10 a
 // conv 3509 (já paga) ficou presa em `cmd-enviar-plantio`, 4 chamadas por tick sem fim,
@@ -1123,7 +1125,7 @@ function startMacroCommandLoop() {
 // Destravar reprograma o funil (resumeSequenceRebased): as peças pausadas ficaram com
 // send_at no passado e voltariam todas de uma vez.
 // Kill-switch: BOT_MUTE_POLL_ENABLED=false.
-const BOT_MUTE_POLL_INTERVAL_MS = 20_000;
+const BOT_MUTE_POLL_INTERVAL_MS = boundedEnvInt("BOT_MUTE_POLL_INTERVAL_MS", 60_000, 10_000, 5 * 60_000);
 const BOT_MUTE_FILTER_PAYLOAD = JSON.stringify({
   payload: [{
     attribute_key: "labels",
@@ -1202,7 +1204,7 @@ function startBotMuteLoop() {
 // não removemos a etiqueta depois de rodar; a idempotência vem de um claim em `deliveries`
 // (mesmo primitivo usado em toda dedup do bridge) -- ação roda 1x por conversa/etiqueta,
 // não a cada tick de 20s. Falha na chamada libera o claim pro próximo tick tentar de novo.
-const OUTCOME_LABEL_POLL_INTERVAL_MS = 20_000;
+const OUTCOME_LABEL_POLL_INTERVAL_MS = boundedEnvInt("OUTCOME_LABEL_POLL_INTERVAL_MS", 120_000, 10_000, 10 * 60_000);
 const OUTCOME_LABELS: Record<string, string> = {
   "pago": "marcar-pago",
   "nao-compra": "marcar-nao-compra",
