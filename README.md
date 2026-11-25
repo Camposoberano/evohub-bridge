@@ -1,160 +1,60 @@
-# Evo Hub ↔ Chatwoot Bridge + Dashboard
+# EVO Hub Bridge
 
-> **Comece pelo [guia atualizado da documentação](docs/README.md).** Este README conserva a visão inicial do projeto; o guia contém a arquitetura, as rotas, os comandos, a linha do tempo e o status das fontes até 22/10/2026.
+Ponte entre o **EVO Hub** (proxy da Meta: WhatsApp oficial, Facebook, Instagram), a **uazapi**
+(WhatsApp não-oficial) e o **Chatwoot**, com um painel próprio e o Supabase como base de dados.
 
-Ponte entre o **EVO Hub** (gateway proxy da Meta Graph API — WhatsApp/Facebook/Instagram) e o **Chatwoot** (camada de conversa), com um **dashboard próprio** que é o system of record + analisador (operacional e comercial).
+## Comece por aqui
 
-Plano completo: `C:\Users\User\.claude\plans\analise-esta-documenta-o-api-peppy-token.md`
+| Preciso de… | Leia |
+|---|---|
+| Regras que não podem ser quebradas, deploy, Coolify, segurança | [`CLAUDE.md`](CLAUDE.md) |
+| Regras de produto/funil decididas pelo dono | [`AGENTS.md`](AGENTS.md) |
+| O que está em produção agora e o que ficou pendente | topo do [`HANDOFF.md`](HANDOFF.md) |
+| Arquitetura, rotas, ciclos automáticos, linha do tempo | [`docs/README.md`](docs/README.md) |
+| Registros antigos (julho a setembro) | [`docs/historico/`](docs/historico/) |
 
-## Camadas
+Quando dois documentos discordarem, vale nesta ordem: código no `main` → `CLAUDE.md`/`AGENTS.md`
+→ topo do `HANDOFF.md` → `docs/` → `docs/historico/`.
 
-```
-GATEWAY    EVO Hub   → proxy Meta (canais, channel_token, /meta/*)
-CONVERSA   Chatwoot  → inbox do atendente (canal "API"; só conversa)
-CÉREBRO    DASHBOARD → Supabase (Postgres + Edge Functions) + Next.js
-```
+## Branches e deploy
+
+- **Produção builda do `main`.** O `master` (padrão do GitHub) ficou para trás; abra branch e PR a
+  partir do `main`.
+- O push no `main` não faz deploy sozinho. O deploy é pedido no Coolify (detalhes no `CLAUDE.md`).
+- **Não reiniciar nem deployar o bridge entre 8h e 20h (horário de Brasília)** com campanha
+  disparando: o envio em andamento fica "incerto" e a campanha da instância se auto-pausa.
 
 ## Estrutura
 
 ```
-bridge/                         # serviço HTTP único (container Deno, deploy via Coolify)
-  server.ts                     #   router: /hub-webhook /chatwoot-webhook /connect-channel /metrics-rollup
-  Dockerfile                    #   Coolify builda isto
-  handlers/
-    hub-webhook.ts              #   Meta -> Chatwoot + Postgres  (entrada + lifecycle)
-    chatwoot-webhook.ts         #   Chatwoot outgoing -> /meta/*  (saída)
-    connect-channel.ts          #   botão "Conectar" -> cria canal Hub + inbox Chatwoot
-    metrics-rollup.ts           #   rollup diário (operacional + comercial)
-  shared/                       #   helpers (hmac, supabase, hub, chatwoot, env)
-supabase/migrations/0001_init.sql   # schema
-scripts/apply-migration.mjs         # aplica migrations sem psql (npm run db:apply)
-web/                                # dashboard Next.js (Fase 2+)
+bridge/              servidor Deno (Coolify "SERVIDOR", cofre.camposoberano.com.br)
+  server.ts          roteador + ciclos automáticos
+  handlers/          uma rota por arquivo (webhooks, funil, campanhas, relatórios)
+  shared/            regras de negócio e clientes (Supabase, Chatwoot, uazapi, Meta)
+  tests/             deno test
+web/                 painel Next.js (Coolify "PAINEL", painel.camposoberano.com.br)
+supabase/migrations/ schema versionado (ver README da pasta)
+supabase/manual/     SQL aplicado à mão no VPS (índices CONCURRENTLY etc.)
+ops/                 auditorias, roteiros de operação, workflows n8n
+scripts/             utilitários locais (npm run db:apply, npm run ai:bundle)
+docs/                documentação viva; docs/historico/ = registros antigos
 ```
 
-## Deploy da ponte (Coolify)
+## Segurança
 
-1. Subir este repo num git (GitHub/GitLab) acessível ao Coolify.
-2. Coolify → New Resource → **Dockerfile**, apontando para `bridge/` (build context = `bridge`).
-3. Setar as variáveis de ambiente (do `.env`) no serviço Coolify.
-4. Atribuir domínio público `cofre.camposoberano.com.br` → vira `BRIDGE_PUBLIC_BASE`.
-5. Healthcheck: `GET /health` → `ok`.
+- Este repositório é **público**. Nunca commitar `.env`, token, senha, telefone ou nome de cliente.
+  O modelo de variáveis é o [`.env.example`](.env.example).
+- O cadastro público do Supabase precisa ficar **fechado** (`DISABLE_SIGNUP=true`), porque o painel
+  e várias rotas aceitam qualquer usuário logado. Detalhes no `CLAUDE.md`, seção Segurança.
 
-## Sync Facebook Messenger (fallback)
-
-O webhook de lifecycle do EVO Hub funciona, mas o evento de mensagem do Messenger pode não ser entregue pela Meta/EVO Hub. Para fechar a entrada de mensagens, a ponte expõe um fallback por pull:
+## Rodar localmente
 
 ```bash
-GET /sync-facebook?token=<SYNC_SECRET>&since_minutes=10
+cp .env.example .env          # preencher com valores reais (nunca commitar)
+cd bridge && deno task dev    # servidor na porta 8000
+deno test -A bridge/tests     # testes
+npm run db:apply              # aplica migrations via SUPABASE_DB_URL (Postgres não abre pra fora: rodar no VPS)
 ```
 
-No Coolify, crie um cron a cada 30-60 segundos apontando para:
-
-```text
-https://cofre.camposoberano.com.br/sync-facebook?token=<SYNC_SECRET>&since_minutes=10
-```
-
-`SYNC_SECRET` é opcional; se não for definido, o endpoint usa `CHATWOOT_WEBHOOK_SECRET`.
-
-## Pré-requisitos de infra (self-host) — destravar antes de aplicar
-
-Alvo: **Supabase self-host `https://bancortovital.soberano.pro`**.
-
-1. **Credenciais** do `bancortovital`: `SUPABASE_DB_URL` (com senha), `service_role` e `anon` keys → preencher `.env`.
-2. **MCP / acesso**: o MCP Supabase conectado hoje aponta para `bancodedados.soberano.pro` e a auth falha. Reapontar para `bancortovital` com credencial válida, **ou** aplicar migrations via `supabase` CLI / `psql` usando `SUPABASE_DB_URL`.
-3. **Edge runtime**: confirmar container `edge-runtime` ativo e Kong expondo `/functions/v1`. Se não houver, a ponte roda como micro-serviço Deno/Node containerizado (mesma lógica).
-4. **pg_cron**: habilitar para o `metrics-rollup` agendado.
-5. **Reachability/TLS**: `bancortovital.soberano.pro` precisa ser alcançável pela internet (Hub e Chatwoot entregam webhook nele).
-
-## Aplicar o schema
-
-Via CLI (com `SUPABASE_DB_URL` no `.env`):
-
-```bash
-psql "$SUPABASE_DB_URL" -f supabase/migrations/0001_init.sql
-# ou: supabase db push  (com supabase/ linkado ao projeto self-host)
-```
-
-## Aplicar migration (sem psql/supabase CLI)
-
-Node 22 já basta:
-
-```bash
-npm install                       # instala 'pg'
-# preencha .env (SUPABASE_DB_URL) primeiro
-npm run db:apply                  # aplica supabase/migrations/*.sql
-npm run db:apply -- 0002_llm_orchestration.sql  # aplica somente a 0002
-```
-
-Se o projeto Supabase já tiver tabelas `public.conversations` ou
-`public.messages` de outro sistema, não aplique a `0001` em `public`. Use o SQL
-manual `supabase/manual/0001_0002_evohub_schema.sql`, que cria a base da ponte no
-schema dedicado `evohub`. Depois exponha `evohub` em Project Settings -> API ->
-Data API -> Exposed schemas.
-
-## Projeto 1: rotacao de multiagentes (3+ LLMs)
-
-Base inicial ja versionada para evoluir a orquestracao:
-
-- Contrato tecnico: `docs/projeto-1-multiagentes-contrato.md`
-- Roteador e handoff (TS): `bridge/shared/llm-orchestrator.ts`
-- Persistencia e auditoria (SQL): `supabase/migrations/0002_llm_orchestration.sql`
-
-Objetivo operacional:
-
-1. Rotear tarefas pelo melhor modelo por especialidade.
-2. Trocar automaticamente quando houver quota/timeout.
-3. Registrar handoff obrigatorio para nao perder contexto.
-4. Aplicar revisao cruzada para tarefas de maior risco.
-
-## Prompt caching
-
-O repositorio agora traz uma base para prompt caching mais correta:
-
-- documento reutilizavel: `docs/protocolo-contexto-persistente-e-prompt-caching.md`
-- prefixo estavel do projeto: `.ai-context/PROMPT_CACHE_PREFIX.md`
-- bundle consolidado: `npm run ai:bundle`
-- helper TS para chamadas OpenAI compativeis: `bridge/shared/prompt-cache.ts`
-- auditoria de cache em `llm_runs` (`cached_tokens`, `cache_write_tokens`, `cache_hit`)
-
-Regra pratica: use contexto estavel no inicio da chamada, marque o breakpoint de cache e deixe pedido dinamico, logs e detalhes da tarefa depois disso.
-
-Exemplo de uso no endpoint:
-
-```json
-{
-  "mode": "execute",
-  "area": "backend",
-  "risk": "medium",
-  "title": "Auditar fluxo",
-  "objective": "analisar impacto de uma mudanca no webhook",
-  "payload": {
-    "context_prefix": "conteudo de .ai-context/PROMPT_CACHE_BUNDLE.md",
-    "files": ["bridge/handlers/hub-webhook.ts"]
-  },
-  "instructions": "Responda com plano tecnico curto."
-}
-```
-
-Smoke test local depois de configurar `OPENAI_API_KEY`:
-
-```bash
-deno run --allow-env --allow-net --allow-read bridge/scripts/test-llm-execute.ts
-```
-## Status
-
-- [x] Schema `0001_init.sql`
-- [x] Scaffold + `.env.example` + script de migration (`npm run db:apply`)
-- [x] Código da ponte (`bridge/`): hub-webhook, chatwoot-webhook, connect-channel, metrics-rollup
-- [x] Repo GitHub privado `Camposoberano/evohub-bridge` (push feito)
-- [x] Credencial EVO Hub validada (api.evohub.ai, plano Pro Lançamento)
-- [x] Credencial Chatwoot validada (gerenciador.soberano.pro, account 2)
-- [ ] Supabase `SERVICE_ROLE_KEY` + `ANON_KEY` no `.env`  ← falta
-- [ ] Aplicar `0001_init.sql` (Studio SQL Editor do bancortovital)  ← falta
-- [ ] Deploy da ponte no Coolify (GitHub App, base dir `/bridge`, port 8000)
-- [ ] Testar loop WhatsApp texto ponta a ponta (Fase 1)
-- [ ] Página Conexões + FB/IG (Fase 2)
-- [ ] Mídia/templates (Fase 3)
-- [ ] Analytics + rollups (Fase 4)
-- [ ] Hardening (Fase 5)
-```
-
+Contexto estável para LLM (prompt caching): `.ai-context/PROMPT_CACHE_PREFIX.md`,
+`.ai-context/REGRAS_DO_PROJETO.md` e `npm run ai:bundle`.

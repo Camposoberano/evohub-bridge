@@ -3,7 +3,8 @@
 Padrão lido pela maioria dos agentes (Claude Code, Codex, Cursor, Gemini). A **fonte
 compartilhada de estado entre qualquer LLM é este repositório git** — nunca só a memória
 de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAUDE.md`,
-`HANDOFF.md`, e os docs tópicos em `docs/`.
+`HANDOFF.md`, e os docs tópicos em `docs/`. Infra, deploy e segurança ficam no `CLAUDE.md`;
+regras de produto/funil, aqui. Produção builda do `main` (o `master` ficou para trás).
 
 ---
 
