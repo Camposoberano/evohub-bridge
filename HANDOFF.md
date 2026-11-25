@@ -2,19 +2,26 @@
 
 ## ESTADO ATUAL — 2026-11-24, Black Friday 5895 / espelhamento Chatwoot
 
-O histórico da conversa estava recebendo o passo inicial antigo como mensagem `interactive` e
-uma segunda linha `[unsupported]`; as saídas tinham IDs válidos do Chatwoot, então não era uma
-falha de conexão. A configuração ativa ainda usava menu e artes antigas. Corrigir o passo inicial
-para uma única imagem com legenda, sem botões, e manter a campanha UAZAPI-only. A arte aprovada
-remove “Quilo: R$ 89,90” e substitui “só esta semana” por “Oferta válida até 03/12”. A regra da
-oferta é 30% de desconto + frete grátis a partir de 20 kg (inclui 20 kg; pacote atende até 4 ha).
-Se o cliente responder, explicar essa condição.
+Em 24/11 às 23h17 Fortaleza foi publicado o commit `cbb3830` e implantado o build
+`2026-11-24-bf-chatwoot-image-mirror`. `/health` respondeu `ok`; `/version` confirmou as duas
+features novas e uptime baixo. A arte foi salva no repo em `ops/black-friday-5895-2026-11-24.png`
+e no bucket público em `funil/black-friday-2026-11-24/bf-5895-cbb3830.png` (HTTP 200, PNG, 1.802.448
+bytes).
 
-O bridge precisa anexar ao Chatwoot a imagem já enviada pela UAZAPI usando bytes do bucket público
-aprovado e `bridge_already_sent`; isso só registra a mensagem existente e não causa novo envio ao
-WhatsApp. A mudança preserva a fila, a cadência, os destinatários e o histórico. Não reenviar nem
-reprocessar mensagens antigas. Confirmar após deploy por `/health`, `/version`, configuração ativa,
-fila inalterada e um espelhamento futuro natural (sem disparo de teste).
+Diagnóstico: as saídas de 14h32 estavam no Chatwoot com IDs válidos, mas o conteúdo gravado era o
+menu antigo (`interactive`) e uma linha `[unsupported]`; não era uma falha de conexão. A
+configuração ativa ainda usava as artes antigas. Os dois fluxos Black Friday do 5895 agora mandam
+uma única imagem com legenda, sem menu/botões, e aguardam resposta em silêncio. A arte aprovada
+remove “Quilo: R$ 89,90” e mostra “Oferta válida até 03/12”. A condição é 30% de desconto + frete
+grátis a partir de 20 kg (inclui 20 kg; pacote atende até 4 ha). A rota segue UAZAPI-only; a
+resposta do cliente explica a condição. O Chatwoot recebe a imagem já enviada com
+`bridge_already_sent`, sem reenviá-la ao WhatsApp.
+
+A fila ativa permaneceu inalterada: 524 `pending`, 110 `sent`, 177 `skipped`; `endAt` continua
+30/11 às 20h Fortaleza e os limites diários/janela 06h–20h foram preservados. Não houve mensagem
+de saída nem reprocessamento desde o deploy. A primeira execução natural após 06h Fortaleza é a
+confirmação restante de que o anexo aparece visualmente no Chatwoot; não enviar teste nem fazer
+backfill do histórico sem instrução expressa.
 
 > **Leia primeiro a atualização de 2026-11-09 abaixo.** Depois os blocos anteriores conforme o tema.
 

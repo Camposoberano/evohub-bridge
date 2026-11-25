@@ -19,7 +19,9 @@
 
 ## Verificação
 
-- Executar `deno check bridge/server.ts` e `git diff --check`; não disparar mensagens de teste.
-- Publicar fora da janela de campanha (06h–20h Fortaleza), confirmar `/health` e `/version`.
-- Reconsultar os totais da fila e conferir a configuração final sem listar contatos.
-- Confirmar a imagem no Chatwoot apenas quando ocorrer um envio natural da fila.
+- [x] `deno check --node-modules-dir=none bridge/server.ts` e `git diff --check` passaram; nenhum disparo de teste.
+- [x] Publicado fora da janela (23h17 Fortaleza); `/health` = `ok`; `/version` confirmou o build e as features.
+- [x] Fila reconsultada: 524 `pending`, 110 `sent`, 177 `skipped`; cadência e `endAt` preservados.
+- [x] Fluxo ativo e fluxo antigo revisados: UAZAPI-only, imagem → espera silenciosa → explicação quando o cliente responder.
+- [x] Arte no Storage respondeu HTTP 200, `image/png`, 1.802.448 bytes.
+- [ ] Conferir visualmente o anexo no Chatwoot após o próximo envio natural; sem teste ou reenvio.
