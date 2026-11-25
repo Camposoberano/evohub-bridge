@@ -1568,7 +1568,7 @@ function startCampaignQueueLoop() {
       const abandonadas = await marcarProcessamentosAbandonados(db);
       for (const idAbandonada of abandonadas) {
         console.error(
-          "campaign-queue: campanha pausada; resultado de envio incerto após worker interrompido",
+          "campaign-queue: item com resultado incerto após worker interrompido fechado como failed (campanha segue)",
           idAbandonada,
         );
       }

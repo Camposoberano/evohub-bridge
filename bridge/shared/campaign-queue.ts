@@ -184,26 +184,63 @@ export async function devolverReserva(
   }
 }
 
-/** Marca um envio cujo resultado ficou incerto como terminal para evitar duplicá-lo. */
+/**
+ * Fecha como `failed` um item em processamento cujo resultado ficou incerto (o provedor pode ou
+ * não ter aceitado a mensagem). O item nunca volta a `pending`, então o contato não recebe o
+ * fluxo duas vezes — e SÓ ele sai da fila: os demais contatos da campanha seguem.
+ *
+ * Antes (RPC `pause_campaign_after_uncertain_send`) a incerteza de UM contato pausava a campanha
+ * inteira da instância e ela não voltava sozinha (travou `reativacao-6836-uz` e
+ * `reativacao-5895-of` em out/2026, e todo restart no meio de envio fazia o mesmo). A RPC continua
+ * no banco, mas o bridge não a chama mais.
+ */
+export async function fecharItemIncerto(
+  db: DbClient,
+  id: string,
+  motivo: string,
+  antesDe: string | null = null,
+): Promise<boolean> {
+  const agora = new Date().toISOString();
+  let q = publicTable(db, "campaign_queue")
+    .update({
+      status: "failed",
+      last_error: ("resultado de envio incerto: " + (motivo || "sem detalhe")).slice(0, 300),
+      updated_at: agora,
+    })
+    .eq("id", id)
+    .eq("status", "processing");
+  if (antesDe) q = q.lt("updated_at", antesDe);
+  const { data, error } = await q.select("id");
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+/** Registra um envio cujo resultado ficou incerto, sem pausar o resto da campanha. */
 export async function marcarResultadoIncerto(
   db: DbClient,
   id: string,
   motivo: string,
 ): Promise<void> {
-  const { data, error } = await publicRpc(db, "pause_campaign_after_uncertain_send", {
-    p_item_id: id,
-    p_reason: motivo,
-    p_before: null,
-  });
+  if (await fecharItemIncerto(db, id, motivo)) return;
+  // Já marcado como enviado (ex.: o erro veio depois do marcarEnviado): só anota para conferência.
+  const { data, error } = await publicTable(db, "campaign_queue")
+    .update({
+      last_error: ("confirme o registro do envio: " + (motivo || "sem detalhe")).slice(0, 300),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", id)
+    .eq("status", "sent")
+    .select("id");
   if (error) throw error;
-  if (data !== true) {
+  if (!data?.length) {
     throw new Error(`item ${id} não pôde ser associado a um resultado incerto`);
   }
 }
 
 /**
  * Processamentos abandonados pelo encerramento de um worker nunca voltam a pendente:
- * não é possível saber se o provedor aceitou a mensagem antes da queda.
+ * não é possível saber se o provedor aceitou a mensagem antes da queda. Fecha só esses itens
+ * (a campanha segue) e devolve as campanhas afetadas, para log.
  */
 export async function marcarProcessamentosAbandonados(
   db: DbClient,
@@ -220,17 +257,13 @@ export async function marcarProcessamentosAbandonados(
 
   const affected = new Set<string>();
   for (const row of (data ?? []) as Json[]) {
-    const { data: changed, error: updateError } = await publicRpc(
+    const changed = await fecharItemIncerto(
       db,
-      "pause_campaign_after_uncertain_send",
-      {
-        p_item_id: String(row.id),
-        p_reason: "worker interrompido durante processamento",
-        p_before: cutoff,
-      },
+      String(row.id),
+      "worker interrompido durante processamento",
+      cutoff,
     );
-    if (updateError) throw updateError;
-    if (changed === true) affected.add(String(row.campaign_id));
+    if (changed) affected.add(String(row.campaign_id));
   }
   return [...affected];
 }
