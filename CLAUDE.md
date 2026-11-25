@@ -8,9 +8,12 @@
 - **WhatsApp não-oficial**: uazapi (disparo em massa e canais espelhados)
 
 ## Deploy
-- Trabalha em `master`, deploya com `git push origin master:main` (Coolify observa `main`)
-- Dois serviços Coolify: **SERVIDOR** (bridge Deno) e **PAINEL** (Next.js dashboard)
-- Sempre dizer qual ao pedir redeploy
+- **Produção builda do `main`.** O `master` (padrão do GitHub) ficou para trás e não é a referência:
+  ler código, abrir branch e mirar PR sempre a partir de `origin/main`.
+- O push no `main` NÃO dispara deploy sozinho: precisa `POST /deploy?uuid=<app>` (ver Coolify API).
+- Dois serviços Coolify: **SERVIDOR** (bridge Deno) e **PAINEL** (Next.js dashboard).
+  Sempre dizer qual ao pedir redeploy.
+- **Nunca reiniciar/deployar o SERVIDOR entre 8–20h BRT** com disparo ativo (ver decisões abaixo).
 
 ## Coolify API
 - **URL**: `https://painelgeral.camposoberano.com.br/api/v1`
@@ -29,6 +32,17 @@
 - Toda mensagem registrada no Chatwoot DEVE capturar `chatwoot_message_id` do response e gravar na tabela `messages` (previne duplicação pelo pull-loop)
 - Canal não-oficial (uazapi) = sem janela Meta
 - Lógica de negócio SEMPRE no bridge (n8n é só cron de despacho)
+
+## Segurança
+- **O repositório é público.** Nunca commitar token, senha, `.env`, telefone ou nome de cliente.
+  Telefones de exemplo em teste/doc devem ser fictícios.
+- **Auth do painel e de várias rotas do bridge = "qualquer usuário logado no Supabase".** Por isso
+  o cadastro público do Supabase TEM que ficar fechado: `DISABLE_SIGNUP=true` no serviço
+  `supabase-ORTOVITAL-migrado` (fechado em 25/11/2026; antes estava aberto com autoconfirmação
+  por telefone). Conferir com `GET https://bancortovital.soberano.pro/auth/v1/settings`
+  (header `apikey` = anon) → `"disable_signup": true`. Usuário novo só pelo admin/Studio.
+- **`minio/mc` saiu do Docker Hub:** o serviço auxiliar `minio-createbucket` foi removido do
+  compose do Supabase em 25/11/2026 porque travava todo restart. O bucket já existe.
 
 ## Decisões travadas (correções que NÃO se repetem)
 
@@ -179,7 +193,7 @@
   confiar no número. Um "0" numa métrica de funil ativo é suspeito — conferir no banco.
 - **Deploy é do `main`, não `master` (ver memória [[deploy-main-divergencia]]).** Os 2 apps Coolify
   buildam do `main`; `master` divergiu. Deploy = cherry-pick pro `main` + `POST /deploy?uuid=<app>`
-  (a seção Deploy acima ainda diz "master" — está desatualizada).
+  (seção Deploy acima corrigida em 25/11/2026).
 - **REVERTIDO 2026-11-19 → preço AGORA é automático (tabela de pacotes) pra lead em 7d. A regra
   abaixo "bot não manda R$" vale só FORA do 7d.** Decisão do dono: no funil 7d, pedido de preço (botão
   ou texto) responde com tabela fixa de pacotes COM valor (`TABELA_PRECO_7D` em `hub-webhook.ts`):
@@ -237,7 +251,7 @@
 
 ---
 
-## Decisões travadas (correções que NÃO se repetem)
+## Decisões travadas — bloco de out/2026 (infra, Meta, Coolify)
 
 - **Campanha fria OFICIAL precisa de template como abridor.** O pump da `campaign_queue` abre a
   conversa com `runFlow` pela rota híbrida (uazapi-first) — NÃO manda template oficial. Fora da
@@ -255,9 +269,9 @@
 - **Imagem de template/anúncio oficial: sem "140 t/ha", sem preço.** O acervo é quase todo IA e
   muitas artes trazem esse claim/preço — risco de reprovação na Meta e claim sem laudo. Usar só as
   limpas (D:\sementes\SORGO\Imagens\selecao-header). `video_3` é reportagem SBT SD, ruim pra still.
-- **Deploy do SERVIDOR:** código entra via PR → merge no `master` → `git push origin master:main`
-  (Coolify observa `main`) → o push NÃO dispara deploy sozinho, precisa `POST /deploy` (ou restart)
-  no Coolify. Em worktree, sincronizar o master antes do PR.
+- **Deploy do SERVIDOR:** código entra via PR no `main` (Coolify observa `main`) → o push NÃO
+  dispara deploy sozinho, precisa `POST /deploy` (ou restart) no Coolify. O fluxo antigo
+  "merge no `master` → `git push origin master:main`" está aposentado: o `master` ficou para trás.
 - **Coolify API é POST p/ deploy e restart** (24/10/2026): `GET /deploy` e `GET /restart`
   respondem `405 · This endpoint has changed to a POST request`. Usar `POST /deploy?uuid={uuid}&force=false`
   (devolve `deployment_uuid`; acompanhar em `GET /deployments/{uuid}` até `status=finished`) e
@@ -356,7 +370,8 @@
 ## Protocolo Handoff
 
 ### Quando escrever handoff
-O agente DEVE atualizar `handoff.md` (no diretório de memória do projeto) nos seguintes momentos:
+O agente DEVE atualizar o `HANDOFF.md` da raiz do repositório (fonte canônica, ver `AGENTS.md`; a memória
+local de cada ferramenta não é compartilhada) nos seguintes momentos:
 1. Usuário diz "handoff", "salva estado", "guarda contexto", "encerra sessão"
 2. Antes de qualquer operação que pode estourar contexto (muitas edições seguidas)
 3. Ao final de uma tarefa grande concluída (pra próxima sessão saber o estado limpo)
@@ -391,6 +406,6 @@ O agente DEVE atualizar `handoff.md` (no diretório de memória do projeto) nos 
 
 ### Quando ler handoff
 Quando usuário diz "continue", "continua", "retoma", "onde parou", "sequência", "handoff":
-1. Lê `handoff.md` do diretório de memória
+1. Lê o topo do `HANDOFF.md` da raiz (bloco "ESTADO ATUAL" mais recente)
 2. Mostra resumo compacto: estado + pendências
 3. Pergunta o que atacar primeiro

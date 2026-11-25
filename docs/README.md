@@ -2,6 +2,13 @@
 
 Este é o ponto de entrada para entender o sistema e planejar mudanças. O recorte desta organização é a branch `main` no commit `08c6e5c` (22/10/2026, horário de Fortaleza). O código e os arquivos históricos foram preservados; este guia não declara que uma proposta antiga esteja ativa em produção.
 
+> **Atualização 25/11/2026:** as regras vivas (deploy, segurança, decisões travadas) estão no
+> [`CLAUDE.md`](../CLAUDE.md) e no [`AGENTS.md`](../AGENTS.md); o estado de produção mais recente
+> está no topo do [`HANDOFF.md`](../HANDOFF.md). Este guia e os documentos abaixo descrevem a
+> arquitetura até 22/10 e não cobrem o funil de 7 dias nem a Black Friday. Registros antigos
+> foram movidos para [`historico/`](historico/). Atenção: o `.gitignore` só versiona doc novo em
+> `docs/` se ele ganhar uma linha `!docs/<arquivo>`.
+
 ## Ordem de leitura
 
 1. [Arquitetura e fluxos](arquitetura-e-fluxos.md): componentes, entrada e saída de mensagens, campanhas, recuperação e monitoramento.

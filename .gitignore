@@ -44,6 +44,9 @@ docs/*
 !docs/contact-auth.md
 !docs/plano-migracao-n8n.md
 !docs/kit-atendimento-manual.md
+!docs/README.md
+!docs/historico/
+# ATENÇÃO: doc novo em docs/ só entra no git com uma linha `!docs/<arquivo>` aqui.
 !docs/superpowers/
 docs/superpowers/*
 !docs/superpowers/specs/
