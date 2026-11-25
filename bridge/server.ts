@@ -409,8 +409,10 @@ const version = {
     "funil-5895-resposta-logistica-adiada",
     "funnel-queue-stale-head-of-line-fix",
     "stop-price-sequence",
+    "flow-passive-reply-wait",
+    "flow-image-chatwoot-mirror",
   ],
-  build: "2026-11-12-bf-rotating-images",
+  build: "2026-11-24-bf-chatwoot-image-mirror",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

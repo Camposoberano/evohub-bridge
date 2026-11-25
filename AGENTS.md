@@ -32,6 +32,11 @@ de um tool específico. Arquivos canônicos versionados: este `AGENTS.md`, `CLAU
   exclusivo `Sem vídeos agora` para não colidir com `Agora não` da isca PDF.
   Sem isso, o aceite era interpretado como `menu_depoimento` e os vídeos oficiais
   não entravam na fila.
+- **Black Friday 5895 (2026-11-24):** a primeira mensagem é somente a segunda arte aprovada,
+  com legenda; 30% de desconto + frete grátis a partir de 20 kg (inclui 20 kg), válida até
+  03/12. Não exibir preço por quilo nem enviar menu/botões. Ao receber resposta, informar a
+  condição. A rota permanece UAZAPI-only. Ao registrar mídia de saída no Chatwoot, anexar a
+  imagem já enviada e marcar `bridge_already_sent` para impedir qualquer reenvio.
 - **Retomada do Mega Sorgo preserva a cadência original.** Sequência real pausada
   volta com os dias restantes espaçados pelo número do dia; somente uma inscrição
   explicitamente `test_accelerated=true` retoma em intervalos de cinco minutos.

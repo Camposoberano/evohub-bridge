@@ -27,6 +27,7 @@ export type FlowStepKind =
   | "goto"
   | "template"
   | "wait"
+  | "reply_wait"
   | "end";
 
 /**
@@ -201,7 +202,8 @@ export type Flow = {
 /** Steps que param o fluxo aguardando o lead. `wait` pausa por tempo, não por resposta. */
 export function esperaResposta(step: FlowStep): boolean {
   return step.kind === "buttons" || step.kind === "list" ||
-    step.kind === "ai" || step.kind === "input" || step.kind === "template";
+    step.kind === "ai" || step.kind === "input" || step.kind === "template" ||
+    step.kind === "reply_wait";
 }
 
 export function stepById(flow: Flow, id: string): FlowStep | undefined {
@@ -347,6 +349,10 @@ export function stepsUntilWait(
 
     if (atual.kind === "end") return { enviar, pararEm: atual, fim: true };
     if (atual.kind === "wait") return { enviar, pararEm: atual, fim: false };
+    // Espera passiva: não envia bolha nem aparece como falha no histórico.
+    if (atual.kind === "reply_wait") {
+      return { enviar, pararEm: atual, fim: false };
+    }
     // Nós de lógica que não enviam mensagem: param aqui e o runner age (avalia/executa) e
     // depois segue. Condição ramifica; Ação mexe no contato; Chamada API chama HTTP; Ir-para
     // salta pra outro fluxo. Nenhum deles empilha peça em `enviar`.
@@ -567,6 +573,12 @@ export function validateFlow(flow: Flow): FlowProblema[] {
     }
     if (s.kind === "text" && (s.text?.length ?? 0) > 4096) {
       problemas.push({ stepId: s.id, problema: `texto com ${s.text!.length} caracteres; o limite do WhatsApp é 4096` });
+    }
+    if (s.kind === "reply_wait" && !s.fallbackNext) {
+      problemas.push({
+        stepId: s.id,
+        problema: "reply_wait sem fallbackNext — a resposta não teria destino",
+      });
     }
     if (s.timeoutMin !== undefined && !s.onTimeout) {
       problemas.push({

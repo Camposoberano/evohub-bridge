@@ -1,5 +1,21 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+## ESTADO ATUAL — 2026-11-24, Black Friday 5895 / espelhamento Chatwoot
+
+O histórico da conversa estava recebendo o passo inicial antigo como mensagem `interactive` e
+uma segunda linha `[unsupported]`; as saídas tinham IDs válidos do Chatwoot, então não era uma
+falha de conexão. A configuração ativa ainda usava menu e artes antigas. Corrigir o passo inicial
+para uma única imagem com legenda, sem botões, e manter a campanha UAZAPI-only. A arte aprovada
+remove “Quilo: R$ 89,90” e substitui “só esta semana” por “Oferta válida até 03/12”. A regra da
+oferta é 30% de desconto + frete grátis a partir de 20 kg (inclui 20 kg; pacote atende até 4 ha).
+Se o cliente responder, explicar essa condição.
+
+O bridge precisa anexar ao Chatwoot a imagem já enviada pela UAZAPI usando bytes do bucket público
+aprovado e `bridge_already_sent`; isso só registra a mensagem existente e não causa novo envio ao
+WhatsApp. A mudança preserva a fila, a cadência, os destinatários e o histórico. Não reenviar nem
+reprocessar mensagens antigas. Confirmar após deploy por `/health`, `/version`, configuração ativa,
+fila inalterada e um espelhamento futuro natural (sem disparo de teste).
+
 > **Leia primeiro a atualização de 2026-11-09 abaixo.** Depois os blocos anteriores conforme o tema.
 
 ## ESTADO ATUAL — 2026-11-09, reparos do Mega Sorgo preparados localmente
