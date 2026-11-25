@@ -17,7 +17,7 @@
 //
 // O casamento é por NOME DE ARQUIVO, recursivo na pasta indicada: a origem pode estar
 // organizada de qualquer jeito, o destino é sempre o caminho registrado em `funnel_media`.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 const BUCKET = "soberano-out";
 

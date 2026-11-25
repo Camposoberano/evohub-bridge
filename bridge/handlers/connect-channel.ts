@@ -6,7 +6,7 @@ import { env } from "../shared/env.ts";
 import { createApiInbox } from "../shared/chatwoot.ts";
 import { createChannel, publicConnectUrl } from "../shared/hub.ts";
 import { acctByKey, setAccountForChannel } from "../shared/accounts.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type ChannelType = "whatsapp" | "facebook" | "instagram";
 

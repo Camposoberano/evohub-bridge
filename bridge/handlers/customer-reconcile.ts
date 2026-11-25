@@ -7,7 +7,7 @@
 //
 // Casa conversa/contato por IDs EXATOS do Chatwoot (nunca por sufixo de telefone): cria/vincula
 // contato+cliente local e a conversa. Idempotente — repetir a mesma página não duplica.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { envAcct } from "../shared/chatwoot.ts";

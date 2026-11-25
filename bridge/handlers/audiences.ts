@@ -11,7 +11,7 @@
 //   POST {action:"set-contact"|"remove-contact"|"add-contacts", id, ...}
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { type AudienceColumn, hasCorruptedAudienceText, makeAudienceColumn, validAudienceColumns } from "../shared/audience-columns.ts";
 import { assertEligibleCampaignChannel } from "../shared/campaign-channel-availability.ts";
 import { getUazapiRouteByExternalId } from "../shared/hybrid.ts";

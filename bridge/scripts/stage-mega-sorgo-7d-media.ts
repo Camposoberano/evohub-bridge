@@ -1,6 +1,6 @@
 // Cadastra somente mídias da versão 7d, sem sobrescrever o funil vigente.
 // deno run -A --env-file=<env-local> bridge/scripts/stage-mega-sorgo-7d-media.ts [--apply]
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { MEGA_SORGO_7D_VERSION, SEVEN_DAY_CONTENT,
   SEVEN_DAY_CONDITIONAL_VIDEOS } from "../shared/mega-sorgo-7d-content.ts";
 

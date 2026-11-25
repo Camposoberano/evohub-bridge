@@ -1,6 +1,6 @@
 // Fase 1: /chat/check em lote pra todos os clientes pending (on_whatsapp null).
 // Marca on_whatsapp, jid, lid, verified_name. enrich_status -> checked (ou no_wa).
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 const BASE = (Deno.env.get("UAZAPI_URL") ?? "https://camposoberano.uazapi.com").replace(/\/+$/, "");
 const ADMIN = Deno.env.get("UAZAPI_ADMIN_TOKEN")!;

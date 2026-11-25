@@ -10,7 +10,7 @@
 //
 // --inspect: mostra contagens e o mapeamento categoria->grupo resolvido, sem gravar nada.
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type Row = Record<string, unknown>;
 

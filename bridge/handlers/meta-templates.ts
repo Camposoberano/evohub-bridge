@@ -3,7 +3,7 @@
 // Auth: JWT do dashboard.
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type Json = Record<string, unknown>;
 const GRAPH = optionalEnv("META_GRAPH_VERSION") ?? "v21.0";

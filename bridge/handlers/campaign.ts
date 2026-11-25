@@ -33,7 +33,7 @@ import {
   resumoDaFila,
   retomarCampanha,
 } from "../shared/campaign-queue.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import {
   type Campaign,
   numKey,

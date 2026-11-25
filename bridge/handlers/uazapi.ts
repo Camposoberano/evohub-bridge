@@ -3,7 +3,7 @@
 // instância e chama a uazapi. Tokens nunca vão pro browser.
 // Auth: JWT do usuário do dashboard.
 import { env, optionalEnv } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { adminPost, instDelete, instGet, instPost, instPut, listInstances, tokenForInstance, uazapiConfigured } from "../shared/uazapi.ts";
 import { addInboxMembers, createApiInbox, type CwAcct, envAcct, profileId, setInboxWebhook } from "../shared/chatwoot.ts";
 import { acctByKey } from "../shared/accounts.ts";
