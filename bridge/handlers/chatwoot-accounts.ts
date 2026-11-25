@@ -4,7 +4,7 @@
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { getChannelMap, setAccountForChannel } from "../shared/accounts.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type Json = Record<string, unknown>;
 type Conta = { id: string; label: string; accountId: string; url: string; token?: string; ativa: boolean };

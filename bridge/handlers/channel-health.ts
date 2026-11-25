@@ -6,7 +6,7 @@
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { getChannelDetail, getMeta } from "../shared/hub.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type Json = Record<string, unknown>;
 

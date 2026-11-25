@@ -7,7 +7,7 @@ import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 // Dois buckets crescem, e o que guardam NÃO tem o mesmo valor:
 //

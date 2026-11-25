@@ -8,7 +8,7 @@
 import { confereSegredo } from "./segredo-bridge.ts";
 import { env, optionalEnv } from "./env.ts";
 import { timingSafeEqual } from "./hmac.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 export function cronToken(): string {
   return optionalEnv("SYNC_SECRET") ?? env("CHATWOOT_WEBHOOK_SECRET");

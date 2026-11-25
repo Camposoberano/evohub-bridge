@@ -4,7 +4,7 @@
 import { confereSegredo } from "../shared/segredo-bridge.ts";
 import { env } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { getHybridRoute } from "../shared/hybrid.ts";
 import { listInstances, uazapiConfigured } from "../shared/uazapi.ts";
 import { admin } from "../shared/supabase.ts";

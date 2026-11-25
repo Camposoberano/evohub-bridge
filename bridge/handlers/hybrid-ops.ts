@@ -1,4 +1,4 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { env } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { getHybridRoute } from "../shared/hybrid.ts";

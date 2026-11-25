@@ -1,6 +1,6 @@
 // Cliente Supabase com service_role (bypassa RLS) — uso exclusivo server-side.
 // Conecta via REST (PostgREST) no SUPABASE_URL — funciona de qualquer container.
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { env } from "./env.ts";
 
 // supabase-js narrows clients to the literal schema type. The bridge schema is

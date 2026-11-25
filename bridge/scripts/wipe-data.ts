@@ -2,7 +2,7 @@
 // NÃO toca no banco do próprio Chatwoot (sistema separado).
 // IRREVERSÍVEL. Rodar só com --confirm:
 //   deno run --allow-net --allow-env --env-file=.env bridge/scripts/wipe-data.ts --confirm
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 if (!Deno.args.includes("--confirm")) {
   console.log("DRY-RUN. Pra apagar de verdade, rode com --confirm");

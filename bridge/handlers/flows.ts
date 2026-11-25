@@ -10,7 +10,7 @@
 //   POST {action:"archive"|"unarchive", id}                -> muda status
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { type Flow, validateFlow } from "../shared/flow.ts";
 
 type Json = Record<string, unknown>;

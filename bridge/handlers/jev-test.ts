@@ -3,7 +3,7 @@
 // (chave ausente/ruim). Não expõe a chave. Auth: JWT do painel. Portado do hub CECAPE.
 //   POST /jev-test  { texto?, opcoes?, instrucao? }  -> roda uma classificação de amostra
 import { env, optionalEnv } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { classificarComJev, type JevOpcao } from "../shared/jev.ts";
 
 function json(body: unknown, status = 200): Response {

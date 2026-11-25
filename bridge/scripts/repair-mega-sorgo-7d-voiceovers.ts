@@ -1,6 +1,6 @@
 // Substitui somente os cinco ganchos mudos da versão isolada por cópias narradas.
 // deno run -A --env-file=<env-local> bridge/scripts/repair-mega-sorgo-7d-voiceovers.ts [--apply]
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { MEGA_SORGO_7D_VERSION } from "../shared/mega-sorgo-7d-content.ts";
 
 const apply = Deno.args.includes("--apply");

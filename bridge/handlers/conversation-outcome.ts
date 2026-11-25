@@ -3,7 +3,7 @@
 // Body: { conversation_id: uuid, outcome: "won"|"lost"|"open", value_cents?: number }
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 type Outcome = "won" | "lost" | "open";
 

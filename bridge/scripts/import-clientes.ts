@@ -1,7 +1,7 @@
 // Importa as 2 listas (xlsx) na tabela clientes, dedup por número, preferência LISTA 1.
 // Uso: deno run --allow-read --allow-net --env-file=.env import-clientes.ts <l1.xlsx> <l2.xlsx>
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 
 const L1_NUM = "5519971596836"; // lista 1 (preferência)
 const L2_NUM = "5519999715895"; // lista 2
