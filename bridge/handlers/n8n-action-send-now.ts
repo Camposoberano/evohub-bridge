@@ -7,8 +7,8 @@ import {
 } from "../shared/funnel-identity.ts";
 import { isWithinFunnelSendHours } from "../shared/business-hours.ts";
 import { admin, claimDeliveryWithTtl } from "../shared/supabase.ts";
-import { env, optionalEnv } from "../shared/env.ts";
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+import { optionalEnv } from "../shared/env.ts";
+import { confereSegredo, segredoDaFamilia } from "../shared/segredo-bridge.ts";
 import { isContactBlocked, isContactExcludedFromAutomation } from "../shared/lead-block.ts";
 import { bloqueioDaConversa, motivoDoBloqueio } from "../shared/gate-comercial.ts";
 import { handle as sendOutbound } from "./send-outbound.ts";
@@ -127,7 +127,7 @@ export async function handle(req: Request): Promise<Response> {
   let sent = false;
   try {
     const result = await sendOutbound(new Request(
-      `http://internal/send-outbound?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,
+      `http://internal/send-outbound?token=${encodeURIComponent(segredoDaFamilia("envio"))}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

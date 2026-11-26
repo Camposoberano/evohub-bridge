@@ -16,15 +16,18 @@
 //   list          -> { text, button_label?, sections:[{title?, rows:[{id,title,description?}]}] }
 //                     FB/IG não suportam list -> cai pra texto simples (fallback automático).
 // Compat: { chatwoot_conversation_id, content } sem type vira text.
-// Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+// Auth: senha da família "envio" (BRIDGE_SEND_SECRET; reserva: CHATWOOT_WEBHOOK_SECRET),
+// em ?token= ou no cabeçalho x-bridge-token.
+import {
+  confereSegredoDaFamilia,
+  tokenInformado,
+} from "../shared/segredo-bridge.ts";
 import {
   admin,
   claimDelivery,
   claimDeliveryWithTtl,
 } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { env } from "../shared/env.ts";
 import { isSevenDayNightTest } from "../shared/mega-sorgo-7d-night-test.ts";
 import { windowState } from "../shared/window.ts";
 import { sendMeta, uploadMetaMedia } from "../shared/hub.ts";
@@ -81,10 +84,8 @@ type Json = Record<string, unknown>;
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
-  const url = new URL(req.url);
-  const token = url.searchParams.get("token") ?? "";
   if (
-    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "send-outbound")
+    !confereSegredoDaFamilia(tokenInformado(req), "envio", "send-outbound")
   ) {
     return json({ error: "unauthorized" }, 401);
   }

@@ -1,5 +1,7 @@
 // Repara o vinculo do WhatsApp oficial 5895 sem criar canal ou inbox duplicados.
-// Uso interno: GET/POST /repair-official-5895?token=<CHATWOOT_WEBHOOK_SECRET>
+// Uso interno: GET/POST /repair-official-5895 com a senha da família "manutencao"
+// (BRIDGE_OPS_SECRET; reserva: CHATWOOT_WEBHOOK_SECRET).
+import { confereSegredoDaFamilia, tokenInformado } from "../shared/segredo-bridge.ts";
 import { env, optionalEnv } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
 import { getChannelDetail } from "../shared/hub.ts";
@@ -15,8 +17,9 @@ const DEFAULT_PHONE = "+55 19 99971-5895";
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "GET" && req.method !== "POST") return json({ error: "method not allowed" }, 405);
-  const token = new URL(req.url).searchParams.get("token") ?? "";
-  if (token !== env("CHATWOOT_WEBHOOK_SECRET")) return json({ error: "unauthorized" }, 401);
+  if (!confereSegredoDaFamilia(tokenInformado(req), "manutencao", "repair-official-5895")) {
+    return json({ error: "unauthorized" }, 401);
+  }
 
   const db = admin();
   const hubChannelId = optionalEnv("OFFICIAL_5895_HUB_CHANNEL_ID") ?? DEFAULT_HUB_CHANNEL_ID;

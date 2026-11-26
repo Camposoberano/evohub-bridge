@@ -80,3 +80,99 @@ export function segredoParaChamadaInterna(): string {
   // que existe para dizer qual chamador EXTERNO ainda falta migrar.
   return optionalEnv("SYNC_SECRET") ?? optionalEnv("CHATWOOT_WEBHOOK_SECRET") ?? "";
 }
+
+// ---------------------------------------------------------------------------------------
+// Senha por família de rota (separação do segredo único, nov/2026).
+//
+// O CHATWOOT_WEBHOOK_SECRET vai no endereço dos webhooks das inboxes (o Chatwoot não manda
+// cabeçalho), então aparece em log. Rotas que DISPARAM mensagem ou mexem no funil, e as de
+// manutenção, ganham senha própria:
+//   envio      -> BRIDGE_SEND_SECRET  (/send-outbound, /funil-enroll, /funil-control, /funil-queue-pump)
+//   manutencao -> BRIDGE_OPS_SECRET   (/channel-sync, /hybrid-routes, /repair-official-5895)
+//
+// Transição sem derrubar nada:
+//   1. (este código) a senha do Chatwoot continua valendo como RESERVA nessas rotas;
+//   2. com a env da família definida, o bridge passa a usar a senha nova nas próprias
+//      chamadas internas, e todo chamador EXTERNO que ainda chegar com a senha do Chatwoot
+//      aparece no log ("senha do Chatwoot usada em ...") — é a lista do que falta migrar;
+//   3. log limpo por alguns dias -> BRIDGE_SECRET_FALLBACK=false corta a reserva.
+// A senha pode vir em `?token=` ou no cabeçalho `x-bridge-token` (preferível: não vai pra log).
+// ---------------------------------------------------------------------------------------
+
+export type FamiliaSegredo = "envio" | "manutencao";
+
+const ENV_DA_FAMILIA: Record<FamiliaSegredo, string> = {
+  envio: "BRIDGE_SEND_SECRET",
+  manutencao: "BRIDGE_OPS_SECRET",
+};
+
+function senhaPropria(familia: FamiliaSegredo): string | undefined {
+  const v = optionalEnv(ENV_DA_FAMILIA[familia]);
+  return v && v.trim() ? v.trim() : undefined;
+}
+
+/** Token informado pelo chamador: cabeçalho `x-bridge-token` ou `?token=`. */
+export function tokenInformado(req: Request): string {
+  const header = req.headers.get("x-bridge-token");
+  if (header && header.trim()) return header.trim();
+  return new URL(req.url).searchParams.get("token") ?? "";
+}
+
+/**
+ * Senha que o PRÓPRIO bridge usa ao chamar uma rota da família (chamadas `http://internal/`
+ * e `http://localhost/`). Usa a senha própria quando existe, para o log de "reserva usada"
+ * mostrar só chamador externo.
+ */
+export function segredoDaFamilia(familia: FamiliaSegredo): string {
+  return senhaPropria(familia) ?? optionalEnv("CHATWOOT_WEBHOOK_SECRET") ?? "";
+}
+
+/** A reserva (senha do Chatwoot) vale até alguém desligar com BRIDGE_SECRET_FALLBACK=false. */
+export function reservaChatwootLiberada(): boolean {
+  return (optionalEnv("BRIDGE_SECRET_FALLBACK") ?? "").trim().toLowerCase() !== "false";
+}
+
+const ultimoAvisoReserva = new Map<string, number>();
+const AVISO_RESERVA_A_CADA_MS = 10 * 60_000;
+
+/**
+ * Confere a senha de uma rota da família. Aceita a senha própria; a do Chatwoot só como
+ * reserva (e avisa no log, no máximo 1x a cada 10 min por rota, quando a própria já existe).
+ */
+export function confereSegredoDaFamilia(
+  informado: string | null | undefined,
+  familia: FamiliaSegredo,
+  origem: string,
+  agora = Date.now(),
+): boolean {
+  const token = informado ?? "";
+  if (!token) return false;
+  const propria = senhaPropria(familia);
+  // as duas comparações sempre rodam, em tempo constante, antes de decidir
+  const casouPropria = propria ? timingSafeEqual(token, propria) : false;
+  const casouChatwoot = confereSegredo(
+    token,
+    [optionalEnv("CHATWOOT_WEBHOOK_SECRET")],
+    origem,
+  );
+  if (casouPropria) return true;
+  if (!casouChatwoot) return false;
+  if (!reservaChatwootLiberada()) {
+    console.warn(
+      `senha do Chatwoot RECUSADA em ${origem}: reserva desligada, use ${ENV_DA_FAMILIA[familia]}`,
+    );
+    return false;
+  }
+  if (propria) {
+    const ultimo = ultimoAvisoReserva.get(origem) ?? 0;
+    if (agora - ultimo >= AVISO_RESERVA_A_CADA_MS) {
+      ultimoAvisoReserva.set(origem, agora);
+      console.warn(
+        `senha do Chatwoot usada em ${origem} — falta migrar este chamador para ${
+          ENV_DA_FAMILIA[familia]
+        }`,
+      );
+    }
+  }
+  return true;
+}

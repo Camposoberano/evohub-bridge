@@ -1,3 +1,4 @@
+import { segredoDaFamilia } from "../shared/segredo-bridge.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { env } from "../shared/env.ts";
 import { admin } from "../shared/supabase.ts";
@@ -96,7 +97,7 @@ export async function handle(req: Request): Promise<Response> {
     const response = await funnelControl(
       new Request(
         `http://internal/funil-control?token=${
-          encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+          encodeURIComponent(segredoDaFamilia("envio"))
         }`,
         {
           method: "POST",

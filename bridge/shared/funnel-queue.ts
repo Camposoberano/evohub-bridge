@@ -1,7 +1,7 @@
 // Consumidor de contingencia da fila do funil.
 // O claim em deliveries evita duplicacao se o n8n e este loop enxergarem a mesma linha.
+import { segredoDaFamilia } from "./segredo-bridge.ts";
 import { admin, claimDeliveryWithTtl } from "./supabase.ts";
-import { env } from "./env.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
 import { mutedConversationIds } from "./bot-mute.ts";
 import { canSendSilentFollowup } from "./funnel-recovery.ts";
@@ -477,7 +477,7 @@ export async function pumpFunnelQueue(
         res = await sendOutbound(
           new Request(
             `http://internal/send-outbound?token=${
-              encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+              encodeURIComponent(segredoDaFamilia("envio"))
             }`,
             {
               method: "POST",

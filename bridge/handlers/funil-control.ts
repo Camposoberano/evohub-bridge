@@ -1,7 +1,12 @@
 // funil-control — controle manual do funil (pause/stop/resume/status/dispatch).
 // Chamado por macros do Chatwoot ou API direta.
-// Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+// Auth: senha da família "envio" (BRIDGE_SEND_SECRET; reserva: CHATWOOT_WEBHOOK_SECRET),
+// em ?token= ou no cabeçalho x-bridge-token.
+import {
+  confereSegredoDaFamilia,
+  segredoDaFamilia,
+  tokenInformado,
+} from "../shared/segredo-bridge.ts";
 import {
   admin,
   claimDelivery,
@@ -9,7 +14,6 @@ import {
   releaseDelivery,
 } from "../shared/supabase.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { env } from "../shared/env.ts";
 import {
   createConversationMessage,
   type CwAcct,
@@ -104,9 +108,8 @@ type Db = ReturnType<typeof admin>;
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
   const url = new URL(req.url);
-  const token = url.searchParams.get("token") ?? "";
   if (
-    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-control")
+    !confereSegredoDaFamilia(tokenInformado(req), "envio", "funil-control")
   ) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -932,7 +935,7 @@ export async function dispatchRecovery(
       const response = await sendOutbound(
         new Request(
           `http://internal/send-outbound?token=${
-            encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+            encodeURIComponent(segredoDaFamilia("envio"))
           }`,
           {
             method: "POST",
