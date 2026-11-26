@@ -1,6 +1,6 @@
 import { admin } from "../shared/supabase.ts";
-import { optionalEnv, env } from "../shared/env.ts";
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+import { optionalEnv } from "../shared/env.ts";
+import { confereSegredo, segredoDaFamilia } from "../shared/segredo-bridge.ts";
 import {
   RESTORED_5895_FUNNEL,
   SOCIAL_N8N_FUNNEL,
@@ -244,7 +244,7 @@ async function send(req: Request): Promise<Response> {
   }
   if (blocked) return json({ ok: true, sent: false, blocked });
   const result = await sendOutbound(new Request(
-    `http://internal/send-outbound?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,
+    `http://internal/send-outbound?token=${encodeURIComponent(segredoDaFamilia("envio"))}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

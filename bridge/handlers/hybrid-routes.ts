@@ -1,7 +1,7 @@
 // hybrid-routes — visualiza as rotas híbridas auto-descobertas (canal oficial ↔ uazapi).
 // GET retorna canais oficiais, instâncias uazapi e quais casaram por número.
-// Auth: JWT do dashboard OU ?token=CHATWOOT_WEBHOOK_SECRET.
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+// Auth: JWT do dashboard OU senha da família "manutencao" (BRIDGE_OPS_SECRET; reserva: CHATWOOT_WEBHOOK_SECRET).
+import { confereSegredoDaFamilia, tokenInformado } from "../shared/segredo-bridge.ts";
 import { env } from "../shared/env.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
@@ -12,9 +12,7 @@ import { admin } from "../shared/supabase.ts";
 type Json = Record<string, unknown>;
 
 export async function handle(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const tokenParam = url.searchParams.get("token") ?? "";
-  const internal = confereSegredo(tokenParam, [env("CHATWOOT_WEBHOOK_SECRET")], "hybrid-routes");
+  const internal = confereSegredoDaFamilia(tokenInformado(req), "manutencao", "hybrid-routes");
   if (!internal) {
     const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

@@ -13,8 +13,8 @@ import { FIM_ACESSO, GAPS, iniciosDosAcessos } from "./funil-enroll.ts";
 import { isWithinFunnelSendHours, nextFunnelSendAt } from "../shared/business-hours.ts";
 import { addBusinessSeconds, clampBusinessTime } from "../shared/business-time.ts";
 import { admin, claimDelivery } from "../shared/supabase.ts";
-import { optionalEnv, env } from "../shared/env.ts";
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+import { optionalEnv } from "../shared/env.ts";
+import { confereSegredo, segredoDaFamilia } from "../shared/segredo-bridge.ts";
 import { hasFunnelDeliveryEvidence } from "../shared/funnel-state.ts";
 import {
   isContactBlocked,
@@ -323,7 +323,7 @@ export async function handle(req: Request): Promise<Response> {
   }
   if (CONTROL_ACTIONS.has(body.request.action)) {
     const controlResult = await funilControl(new Request(
-      `http://internal/funil-control?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,
+      `http://internal/funil-control?token=${encodeURIComponent(segredoDaFamilia("envio"))}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },

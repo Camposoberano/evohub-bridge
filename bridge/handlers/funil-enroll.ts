@@ -1,8 +1,13 @@
 // funil-enroll — coloca um lead no funil de apresentação Mega Sorgo: gera a fila
 // (scheduled_messages) com as cinco fases multimídia recuperadas de 30/09/2026.
 // Textos, botões e slots usam a faixa histórica `mega-sorgo`.
-// Auth: ?token=<CHATWOOT_WEBHOOK_SECRET>.
-import { confereSegredo } from "../shared/segredo-bridge.ts";
+// Auth: senha da família "envio" (BRIDGE_SEND_SECRET; reserva: CHATWOOT_WEBHOOK_SECRET),
+// em ?token= ou no cabeçalho x-bridge-token.
+import {
+  confereSegredoDaFamilia,
+  segredoDaFamilia,
+  tokenInformado,
+} from "../shared/segredo-bridge.ts";
 import { consultaEmLotes } from "../shared/lotes.ts";
 import {
   admin,
@@ -17,7 +22,7 @@ import {
   openingMessagesComplete,
 } from "../shared/funnel-state.ts";
 import { timingSafeEqual } from "../shared/hmac.ts";
-import { env, optionalEnv } from "../shared/env.ts";
+import { optionalEnv } from "../shared/env.ts";
 import {
   deferredAdRoute,
   foldText,
@@ -421,10 +426,8 @@ export function iniciosDosAcessos(
 
 export async function handle(req: Request): Promise<Response> {
   if (req.method !== "POST") return json({ error: "method not allowed" }, 405);
-  const url = new URL(req.url);
-  const token = url.searchParams.get("token") ?? "";
   if (
-    !confereSegredo(token, [env("CHATWOOT_WEBHOOK_SECRET")], "funil-enroll")
+    !confereSegredoDaFamilia(tokenInformado(req), "envio", "funil-enroll")
   ) {
     return json({ error: "unauthorized" }, 401);
   }
@@ -1332,7 +1335,7 @@ export async function enrollIfNew(
     const repairRequested = options.repairMissingOpening === true;
     if (existing && !forceEligible && !repairRequested) return "already";
 
-    const token = encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"));
+    const token = encodeURIComponent(segredoDaFamilia("envio"));
     const response = await handle(
       new Request(`http://internal/funil-enroll?token=${token}`, {
         method: "POST",

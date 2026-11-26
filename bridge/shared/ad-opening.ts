@@ -1,5 +1,5 @@
+import { segredoDaFamilia } from "./segredo-bridge.ts";
 import { handle as sendOutbound } from "../handlers/send-outbound.ts";
-import { env } from "./env.ts";
 import { RESTORED_5895_FUNNEL } from "./funnel-identity.ts";
 import { admin } from "./supabase.ts";
 
@@ -19,7 +19,7 @@ export async function sendFirstAdFunnelPieceNow(
     if (row) {
       if (Date.parse(String(row.send_at)) > Date.now()) return false;
       const response = await sendOutbound(new Request(
-        `http://internal/send-outbound?token=${encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))}`,
+        `http://internal/send-outbound?token=${encodeURIComponent(segredoDaFamilia("envio"))}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -1,6 +1,7 @@
 // channel-sync — consulta o EVO Hub e ATUALIZA status/phone_number_id/waba dos canais
 // na nossa base (pending->active quando conecta, e detecta queda). Pro botão "Atualizar"
 // do painel + loop periódico. Auth: JWT do dashboard (no handler) ou interno (loop).
+import { confereSegredoDaFamilia, tokenInformado } from "../shared/segredo-bridge.ts";
 import { admin } from "../shared/supabase.ts";
 import { env } from "../shared/env.ts";
 import { getChannelDetail } from "../shared/hub.ts";
@@ -82,7 +83,7 @@ export async function syncChannels(db: Db, type?: string): Promise<Json> {
 export async function handle(req: Request): Promise<Response> {
   // interno (loop) passa ?token=; dashboard passa JWT.
   const url = new URL(req.url);
-  const internal = url.searchParams.get("token") === env("CHATWOOT_WEBHOOK_SECRET");
+  const internal = confereSegredoDaFamilia(tokenInformado(req), "manutencao", "channel-sync");
   if (!internal) {
     const uc = createClient(env("SUPABASE_URL"), env("SUPABASE_ANON_KEY"), {
       global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } },

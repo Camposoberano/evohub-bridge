@@ -9,6 +9,7 @@
 //   GET  /health             health-check
 import {
   confereSegredo,
+  segredoDaFamilia,
   segredoParaChamadaInterna,
 } from "./shared/segredo-bridge.ts";
 import {
@@ -83,7 +84,7 @@ import {
   handle as operationalHealth,
   runOperationalAudit,
 } from "./handlers/operational-health.ts";
-import { env, optionalEnv } from "./shared/env.ts";
+import { optionalEnv } from "./shared/env.ts";
 import {
   clearMacroRequestId,
   currentMacroRequestId,
@@ -929,7 +930,7 @@ function startMacroCommandLoop() {
     restoredGivenUp = true;
     console.log("macro-poll: comandos esgotados restaurados", macroGivenUp.size);
   };
-  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+  const secret = segredoDaFamilia("envio");
   const acct = envAcct();
   const baseUrl = acct.url.replace(/\/+$/, "");
   const filterUrl =
@@ -1224,7 +1225,7 @@ const OUTCOME_FILTER_PAYLOAD = JSON.stringify({
 
 function startOutcomeLabelLoop() {
   if (optionalEnv("MACRO_POLL_ENABLED") === "false") return;
-  const secret = env("CHATWOOT_WEBHOOK_SECRET");
+  const secret = segredoDaFamilia("envio");
   const acct = envAcct();
   const baseUrl = acct.url.replace(/\/+$/, "");
   const filterUrl =

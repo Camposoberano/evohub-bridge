@@ -4,6 +4,7 @@
 //
 // Fase 1: WhatsApp TEXTO ponta a ponta (Meta -> Chatwoot + Postgres).
 // FB/IG e mídia: evento é persistido; tradução fica para Fase 2/3 (TODO marcados).
+import { segredoDaFamilia } from "../shared/segredo-bridge.ts";
 import { admin, claimDelivery, releaseDelivery } from "../shared/supabase.ts";
 import { redactSecrets, sufixoContato } from "../shared/redact.ts";
 import { verifyHubSignature } from "../shared/hmac.ts";
@@ -1942,7 +1943,7 @@ async function sendSocialPieces(
     const response = await sendOutbound(
       new Request(
         `http://internal/send-outbound?token=${
-          encodeURIComponent(env("CHATWOOT_WEBHOOK_SECRET"))
+          encodeURIComponent(segredoDaFamilia("envio"))
         }`,
         {
           method: "POST",
