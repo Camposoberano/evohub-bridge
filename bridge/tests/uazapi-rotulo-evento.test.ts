@@ -9,10 +9,10 @@ Deno.test("payload de recibo usa o tipo, não o objeto do evento", () => {
   const recibo = {
     type: "ReadReceipt",
     event: {
-      Chat: "553488413727@s.whatsapp.net",
+      Chat: "553499990001@s.whatsapp.net",
       Sender: "5519999715895@s.whatsapp.net",
       Type: "Delivered",
-      sender_pn: "553488413727@s.whatsapp.net",
+      sender_pn: "553499990001@s.whatsapp.net",
     },
   };
   assertEquals(rotuloDeEvento(recibo), "ReadReceipt");
@@ -40,9 +40,9 @@ Deno.test("sem rótulo utilizável cai no genérico", () => {
 Deno.test("nenhum telefone sobrevive no rótulo", () => {
   const r = rotuloDeEvento({
     type: "ReadReceipt",
-    event: { sender_pn: "553488413727@s.whatsapp.net" },
+    event: { sender_pn: "553499990001@s.whatsapp.net" },
   });
-  assertEquals(r.includes("553488413727"), false);
+  assertEquals(r.includes("553499990001"), false);
 });
 
 Deno.test("clique e texto não aguardam /instance/all; mídia precisa do token", () => {

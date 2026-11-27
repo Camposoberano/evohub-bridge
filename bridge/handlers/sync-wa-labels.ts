@@ -225,7 +225,7 @@ async function listChats(token: string): Promise<Chat[]> {
   return Array.isArray(chats) ? chats as Chat[] : [];
 }
 
-/** "556792656351@s.whatsapp.net" -> "556792656351" (formato de contacts.external_contact_id). */
+/** "556799990002@s.whatsapp.net" -> "556799990002" (formato de contacts.external_contact_id). */
 function phoneOf(chatId: string | undefined): string | null {
   if (!chatId) return null;
   const digits = chatId.split("@")[0].replace(/\D/g, "");

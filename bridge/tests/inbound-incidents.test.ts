@@ -11,7 +11,7 @@ Deno.test("o clique do 5895 é identificado sem expor telefone inteiro", () => {
         id: "5519999715895:3A64FFFABF87780AC9C5",
         fromMe: false,
         isGroup: false,
-        sender_pn: "5516997671151@s.whatsapp.net",
+        sender_pn: "5516999990004@s.whatsapp.net",
         mediaType: "list_response",
         buttonOrListid: "menu_nutricao",
         content: { title: "🧪 Info nutricional" },
@@ -19,7 +19,7 @@ Deno.test("o clique do 5895 é identificado sem expor telefone inteiro", () => {
     },
   });
   assertEquals(candidate?.choice, "menu_nutricao");
-  assertEquals(candidate?.contactSuffix, "••••1151");
+  assertEquals(candidate?.contactSuffix, "••••0004");
   assertEquals(candidate?.instance, "5895");
   assertEquals(
     inboundState(120_000, true, candidate!.choice, false, false),
