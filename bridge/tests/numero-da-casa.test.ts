@@ -27,6 +27,6 @@ Deno.test("número de canal próprio é reconhecido, em qualquer formatação", 
 
 Deno.test("número de cliente não é confundido com número da casa", async () => {
   const db = dbComCanais(["+55 11 91036-3320"]);
-  assertEquals(await isNumeroDaCasa(db as never, "5566993617230"), false);
+  assertEquals(await isNumeroDaCasa(db as never, "5566999990003"), false);
   assertEquals(await isNumeroDaCasa(db as never, ""), false);
 });
