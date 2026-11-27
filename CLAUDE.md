@@ -41,6 +41,17 @@
   `supabase-ORTOVITAL-migrado` (fechado em 25/11/2026; antes estava aberto com autoconfirmação
   por telefone). Conferir com `GET https://bancortovital.soberano.pro/auth/v1/settings`
   (header `apikey` = anon) → `"disable_signup": true`. Usuário novo só pelo admin/Studio.
+- **Senha das rotas do bridge (estrutura pronta, NÃO ativada — decisão do dono em 26/11/2026: não trocar
+  senha agora).** Hoje tudo segue no `CHATWOOT_WEBHOOK_SECRET` (vai em `?token=` porque o webhook de inbox
+  do Chatwoot só aceita URL). O código (PR 53 `95122c5`, `shared/segredo-bridge.ts`) já separa por família:
+  - envio → `BRIDGE_SEND_SECRET`: `/send-outbound`, `/funil-enroll`, `/funil-control`, `/funil-queue-pump`
+  - manutenção → `BRIDGE_OPS_SECRET`: `/channel-sync`, `/hybrid-routes`, `/repair-official-5895`
+  - já tinham senha própria: `/n8n-action-*` (`N8N_ACTION_SECRET`), `/uazapi-webhook`
+    (`UAZAPI_WEBHOOK_TOKEN`), sync/relatório (`SYNC_SECRET`).
+  Sem essas envs o comportamento é o de sempre. Se um dia ativar: cadastrar as 2 envs no Coolify (o dono
+  cria; Claude não digita segredo) + restart fora de 8–20h → o log mostra `senha do Chatwoot usada em
+  <rota>` para cada chamador externo a migrar (n8n) → com 1 dia útil de log limpo, `BRIDGE_SECRET_FALLBACK=false`
+  corta a reserva. Aceita também cabeçalho `x-bridge-token` (não vai pra log). NÃO ativar sem o dono pedir.
 - **`minio/mc` saiu do Docker Hub:** o serviço auxiliar `minio-createbucket` foi removido do
   compose do Supabase em 25/11/2026 porque travava todo restart. O bucket já existe.
 
@@ -224,14 +235,18 @@
   travou em 6 conversas velhas não-mutadas). **Regra:** todo ramo que não envia/cancela/pausa DEVE
   empurrar o `send_at` pra frente (deferir) pra peça sair da cabeça da fila. E log de hold diz o motivo
   real — NUNCA rotular tudo como "bot travado". Ver [[pump-head-of-line-defer]].
-- **Campanha auto-pausa a INSTÂNCIA INTEIRA a cada envio incerto (2026-10-26).** `marcarResultadoIncerto`
-  → RPC `pause_campaign_after_uncertain_send` pausa TODA a campanha da instância (centenas/milhares de
-  contatos) quando 1 envio fica "incerto" (provedor não confirma / erro de rede no oficial EVO Hub /
-  **worker interrompido por restart do container**) e NÃO retoma sozinha (precisa `reabrirCampanha`:
-  paused→pending). Travou `reativacao-6836-uz` (24/10) e `reativacao-5895-of`. **Regra operacional:
-  NÃO deployar/reiniciar o SERVIDOR entre 8–20h BRT (horário de disparo)** — restart no meio do envio
-  vira incerto e re-pausa. Retomar = flip paused→pending no `campaign_queue` das campanhas afetadas.
-  Follow-up de código: pausar só o item, não a campanha. Ver [[campanha-auto-pause-incerto]].
+- **Envio incerto de campanha fecha SÓ aquele contato; a campanha segue (2026-11-26, PR 52 `395bc3c`).**
+  Antes (desde 2026-10-26) `marcarResultadoIncerto` chamava a RPC `pause_campaign_after_uncertain_send`,
+  que pausava TODA a campanha da instância quando 1 envio ficava "incerto" (provedor não confirma, erro
+  de rede no oficial, **worker interrompido por restart**) e não retomava sozinha — travou
+  `reativacao-6836-uz` (24/10) e `reativacao-5895-of`. Agora o item incerto vira `failed` (terminal,
+  nunca reenviado → sem duplicar; motivo em `last_error` "resultado de envio incerto: …") e os demais
+  contatos seguem. Vale também pra item abandonado em `processing` >4h (`marcarProcessamentosAbandonados`).
+  A RPC continua no banco, só não é chamada. **Contrapartida:** se o número cair de verdade no meio da
+  campanha, a fila não para sozinha — os contatos vão virando `failed` incerto no ritmo normal; dá pra
+  devolvê-los a `pending` depois de conferir. **A regra de NÃO deployar/reiniciar o SERVIDOR entre 8–20h
+  continua** (restart no meio de envio ainda gera incerto e pode repetir histórico). Ver
+  [[campanha-auto-pause-incerto]].
 - **Canal oficial morto (6836) mata PREÇO/VÍDEO, não o funil (2026-11-20).** O 6836 ficou `status=inactive`
   no EVO Hub (token 401 "Invalid channel token" desde recriação 12/11) → reativar exige RECONECTAR a conta
   WhatsApp Business na Meta pelo painel `app.evohub.evolutionfoundation.com.br` (login do dono); flipar

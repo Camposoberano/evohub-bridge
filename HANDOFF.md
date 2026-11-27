@@ -1,5 +1,26 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+## ESTADO ATUAL — 2026-11-27, organização e segurança (25–26/11)
+
+Build no ar: SERVIDOR no `main` `95122c5` (deploy 26/11 00h29 Fortaleza); PAINEL no `77d1e35`
+(Next 14.2.35). Tudo fora da janela 8h–20h.
+
+Concluído:
+- **Supabase:** cadastro público fechado (`DISABLE_SIGNUP=true`); 7 contas de teste apagadas (ficam só
+  as 2 reais); `minio-createbucket` removido do compose (travava o restart).
+- **Docs (PR 50):** README de entrada, `docs/historico/`, README de migrations com números duplicados.
+- **PR 51:** Next 14.2.18 → 14.2.35 no painel; `supabase-js` fixada em `@2.119.2` no bridge.
+- **PR 52:** envio incerto de campanha fecha só o contato (`failed`), a campanha segue.
+- **PR 53:** estrutura de senha por família de rota pronta no código, **não ativada** (dono decidiu
+  não trocar senha agora). Detalhe em `CLAUDE.md`, seção Segurança.
+
+Pendente / decidido adiar:
+- [ ] Repo segue **público** por decisão do dono. Para privar: trocar o Git source dos 2 apps no
+      Coolify de "Public GitHub" para o GitHub App, deploy de teste, depois privar.
+- [ ] Ativar as senhas por família só se o dono pedir (passos no `CLAUDE.md`).
+- [ ] Telefones de clientes ainda aparecem em código/testes/HANDOFF antigos (repo público).
+- [ ] Campanha `mega-sorgo-5895-120d-2026-11-24` rodando 06h–20h (524 pendentes em 25/11).
+
 ## ESTADO ATUAL — 2026-11-24, Black Friday 5895 / espelhamento Chatwoot
 
 Em 24/11 às 23h17 Fortaleza foi publicado o commit `cbb3830` e implantado o build
