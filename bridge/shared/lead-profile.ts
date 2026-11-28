@@ -43,6 +43,11 @@ export function normalizeLeadAttribution(referral?: Json | null): Json {
     ),
     campaign_id: first(source.campaign_id, referral.campaign_id),
     campaign_name: first(source.campaign_name, referral.campaign_name),
+    adset_id: first(source.adset_id, source.adsetId, referral.adset_id, referral.adsetId),
+    landing_session_id: first(referral.landing_session_id),
+    landing_route: first(referral.landing_route),
+    landing_source: first(referral.landing_source),
+    utm_source: first(referral.utm_source),
     creative_id: first(
       source.creative_id,
       source.creativeId,

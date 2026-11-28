@@ -7,6 +7,7 @@ import {
   sourceSnapshot,
   syncInboundCliente,
 } from "./lead-profile.ts";
+import { parseLandingWhatsAppAttribution } from "./landing-attribution.ts";
 import {
   isUnmappedMsgType,
   type MsgType,
@@ -165,6 +166,20 @@ async function ingestInboundClaimed(
   const direction = msg.outgoing ? "out" : "in";
   const skip = msg.skipChatwoot === true;
   const echoKey = msg.outgoing ? providerEchoKey(msg.metaMessageId) : null;
+  const landingReferral = !msg.outgoing
+    ? parseLandingWhatsAppAttribution(msg.content)
+    : null;
+  const effectiveMessageReferral = landingReferral
+    ? {
+      ...landingReferral,
+      ...(msg.referral ?? {}),
+      landing_source: landingReferral.landing_source,
+      landing_route: landingReferral.landing_route,
+      landing_session_id: landingReferral.landing_session_id,
+      adset_id: landingReferral.adset_id,
+      utm_source: landingReferral.utm_source,
+    }
+    : msg.referral;
 
   const acct = msg.acct; // undefined -> funções do Chatwoot usam o default (env)
   const inboxId = await resolveInboxIdentifier(
@@ -207,7 +222,7 @@ async function ingestInboundClaimed(
     (existing?.attributes as Json | undefined) ?? {},
     channel,
     msg.from,
-    msg.referral,
+    effectiveMessageReferral,
     msg.avatarUrl,
   );
   const customerId = await ensureCustomer(db, {
@@ -228,7 +243,7 @@ async function ingestInboundClaimed(
       externalId: msg.from,
       customerId,
       name: msg.name,
-      referral: msg.referral,
+      referral: effectiveMessageReferral,
     });
   }
 
@@ -313,7 +328,8 @@ async function ingestInboundClaimed(
     conv = winner as Json | null;
   }
   const previouslyMarkedAsAd = conv?.origem === "anuncio";
-  const effectiveReferral = msg.referral ?? (conv?.referral as Json | null) ?? null;
+  const effectiveReferral = effectiveMessageReferral ??
+    (conv?.referral as Json | null) ?? null;
   const source = sourceSnapshot(channel, msg.from, effectiveReferral);
   try {
   if (!conv) {
@@ -353,8 +369,8 @@ async function ingestInboundClaimed(
       contact_id: contact.id,
       chatwoot_conversation_id: cwConv?.id ?? null,
       status: "open",
-      origem: msg.referral ? "anuncio" : null,
-      referral: msg.referral ?? null,
+      origem: effectiveMessageReferral ? "anuncio" : null,
+      referral: effectiveMessageReferral ?? null,
       ...source,
     }).select().single();
     if (convInsertError) throw convInsertError;
@@ -362,8 +378,8 @@ async function ingestInboundClaimed(
   } else {
     const sourceUpdate: Json = {
       ...source,
-      origem: msg.referral ? "anuncio" : conv.origem,
-      referral: msg.referral ?? conv.referral ?? null,
+      origem: effectiveMessageReferral ? "anuncio" : conv.origem,
+      referral: effectiveMessageReferral ?? conv.referral ?? null,
     };
     if (!effectiveReferral) {
       for (const key of [
@@ -402,6 +418,38 @@ async function ingestInboundClaimed(
     });
     if (attributionEventError) {
       console.warn("ad_origin_detected: auditoria falhou", attributionEventError.message);
+    }
+  }
+
+  if (!msg.outgoing && landingReferral) {
+    const conversationKey = String(
+      conv.chatwoot_conversation_id ?? conv.id ?? "unknown",
+    );
+    const deliveryId = `landing-chat-${channel.id}-${conversationKey}`;
+    let claimed = false;
+    try {
+      claimed = await claimDelivery(db, deliveryId, "landing-funnel-chat");
+      if (claimed) {
+        const attribution = sourceSnapshot(channel, msg.from, effectiveReferral)
+          .attribution as Json;
+        const { error } = await db.from("events").insert({
+          source: "landing-funnel",
+          event_type: "landing_chat_received",
+          channel_id: channel.id,
+          payload: {
+            session_id: attribution.landing_session_id ?? null,
+            route: attribution.landing_route ?? null,
+            source: attribution.utm_source ?? null,
+            campaign_id: attribution.campaign_id ?? null,
+            ad_id: attribution.ad_id ?? null,
+            adset_id: attribution.adset_id ?? null,
+          },
+        });
+        if (error) throw error;
+      }
+    } catch (error) {
+      if (claimed) await releaseDelivery(db, deliveryId).catch(() => {});
+      console.warn("landing_chat_received: auditoria falhou", error instanceof Error ? error.message : "unknown");
     }
   }
 

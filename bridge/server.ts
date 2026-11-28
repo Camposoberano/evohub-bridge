@@ -20,6 +20,8 @@ import { handle as chatwootWebhook } from "./handlers/chatwoot-webhook.ts";
 import { handle as connectChannel } from "./handlers/connect-channel.ts";
 import { handle as connectUazapi } from "./handlers/connect-uazapi.ts";
 import { handle as conversationOutcome } from "./handlers/conversation-outcome.ts";
+import { handle as conversationClassification } from "./handlers/conversation-classification.ts";
+import { handle as landingAnalytics } from "./handlers/landing-analytics.ts";
 import { handle as channelHealth } from "./handlers/channel-health.ts";
 import { handle as mediaRetention } from "./handlers/media-retention.ts";
 import { handle as uazapi } from "./handlers/uazapi.ts";
@@ -168,6 +170,8 @@ const routes: Record<string, (req: Request) => Promise<Response>> = {
   "/connect-channel": connectChannel,
   "/connect-uazapi": connectUazapi,
   "/conversation-outcome": conversationOutcome,
+  "/conversation-classification": conversationClassification,
+  "/landing-analytics": landingAnalytics,
   "/channel-health": channelHealth,
   "/media-retention": mediaRetention,
   "/uazapi": uazapi,
@@ -222,6 +226,8 @@ const version = {
     "wa-media-graph-direct",
     "llm-orchestrate-v1",
     "conversation-outcome",
+    "conversation-classification",
+    "landing-analytics",
     "channel-health",
     "wa-status-capture",
     "media-retention",
@@ -352,6 +358,7 @@ const version = {
     "instagram-audio-mp3-fallback",
     "audio-transcription-provider-fallback",
     "lead-source-attribution",
+    "landing-whatsapp-funnel-events",
     "lead-profile-autocapture",
     "channel-owner-tracking",
     "operational-monitor-7d",
@@ -413,7 +420,7 @@ const version = {
     "flow-passive-reply-wait",
     "flow-image-chatwoot-mirror",
   ],
-  build: "2026-11-24-bf-chatwoot-image-mirror",
+  build: "2026-11-28-landing-chatwoot-measurement",
 };
 
 // Momento em que ESTE processo subiu. `build` e `features` são escritos à mão e não mudam

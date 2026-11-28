@@ -1,5 +1,28 @@
 # HANDOFF — Soberano (EVO Hub + Chatwoot + Bridge + Dashboard)
 
+## ESTADO ATUAL — 2026-11-28, atribuição da landing e classificação comercial
+
+Implementação preparada na branch `codex/landing-crm-20261128`, baseada na `origin/main` atual.
+Bridge passou em `deno check`; a tela EvoHub passou no build Next 14.2.35. Não houve gravação
+em conversas antigas nem alteração de campanha, orçamento ou mensagens.
+
+- Bridge: `POST /landing-analytics` recebe eventos permitidos da página e deduplica por evento;
+  a mensagem de WhatsApp com a referência da landing conserva sessão, rota e IDs UTM na conversa
+  e registra `landing_chat_received`.
+- EvoHub → **Conversas**: a tela permite registrar a UF declarada, filtrar conversas sem UF,
+  consultar objetivo/etapa de qualificação e filtrar resultado. `Ganho` continua aceitando valor
+  opcional em reais; a entrada agora interpreta corretamente o formato brasileiro.
+- O schema existente basta (`leads_qualification.region` e campos comerciais de `conversations`);
+  nenhuma migration/DDL foi criada. Estado não é deduzido pelo DDD. Conversas antigas ficam
+  intocadas até a equipe revisá-las.
+- `E:\Projetos_Novos\sites\anuncio\dist\` e `dist-dashboard\` foram gerados para envio manual.
+  O proprietário ainda precisa subir a landing manualmente em `public_html/captar/`; métricas
+  da página começam após essa publicação e não são retroativas.
+
+Próxima etapa desta execução: enviar o commit para `main`, disparar os deploys Coolify do SERVIDOR
+e PAINEL (fora da janela 08h–20h BRT) e confirmar `/version`. Em seguida, publicar manualmente o
+`dist/` da landing e conferir visitas, vídeo, cliques e conversas rastreadas.
+
 ## ESTADO ATUAL — 2026-11-27, organização e segurança (25–26/11)
 
 Build no ar: SERVIDOR no `main` `95122c5` (deploy 26/11 00h29 Fortaleza); PAINEL no `77d1e35`
