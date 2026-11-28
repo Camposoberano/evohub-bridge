@@ -2,9 +2,14 @@
 
 ## ESTADO ATUAL — 2026-11-28, atribuição da landing e classificação comercial
 
-Implementação preparada na branch `codex/landing-crm-20261128`, baseada na `origin/main` atual.
-Bridge passou em `deno check`; a tela EvoHub passou no build Next 14.2.35. Não houve gravação
-em conversas antigas nem alteração de campanha, orçamento ou mensagens.
+Commit `f0806ad` publicado no `main`. O SERVIDOR (`d0plz48dmc4vifpfhsonvvdx`) e o PAINEL
+(`le5gefbmfbazqtyh0np1zksa`) concluíram o deploy nesse commit. `/version` confirmou as três
+features novas com uptime baixo; `/health` respondeu HTTP 200. A rota publicada `/conversas`
+respondeu HTTP 200, e seu bundle contém o campo de UF e o endpoint de classificação.
+
+Validações locais: `deno check` passou; `npm run build` do painel EvoHub passou; `npm run build:captar`
+e `npm run build:dashboard` passaram. Não houve gravação em conversas antigas nem alteração de
+campanha, orçamento ou mensagens.
 
 - Bridge: `POST /landing-analytics` recebe eventos permitidos da página e deduplica por evento;
   a mensagem de WhatsApp com a referência da landing conserva sessão, rota e IDs UTM na conversa
@@ -19,9 +24,10 @@ em conversas antigas nem alteração de campanha, orçamento ou mensagens.
   O proprietário ainda precisa subir a landing manualmente em `public_html/captar/`; métricas
   da página começam após essa publicação e não são retroativas.
 
-Próxima etapa desta execução: enviar o commit para `main`, disparar os deploys Coolify do SERVIDOR
-e PAINEL (fora da janela 08h–20h BRT) e confirmar `/version`. Em seguida, publicar manualmente o
-`dist/` da landing e conferir visitas, vídeo, cliques e conversas rastreadas.
+Pendente do proprietário: enviar o conteúdo de `E:\Projetos_Novos\sites\anuncio\dist\` para
+`public_html/captar/` e o conteúdo de `dist-dashboard\` para a raiz de `https://painel.soberano.pro/`.
+Depois da publicação da landing, confirmar a primeira visita, o play e o clique; a primeira conversa
+que enviar a mensagem com referência poderá ser ligada à sessão. Nenhum evento é retroativo.
 
 ## ESTADO ATUAL — 2026-11-27, organização e segurança (25–26/11)
 
